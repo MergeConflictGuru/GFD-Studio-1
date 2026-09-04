@@ -261,7 +261,21 @@ namespace GFDLibrary.Animations
 
         public void Retarget( Model originalModel, Model newModel, bool fixArms )
         {
-            Retarget( originalModel.Nodes.ToDictionary( x => x.Name ), newModel.Nodes.ToDictionary( x => x.Name ), fixArms );
+            Retarget( CreateNodeLookup( originalModel.Nodes ), CreateNodeLookup( newModel.Nodes ), fixArms );
+        }
+
+        internal static Dictionary<string, Node> CreateNodeLookup( IEnumerable<Node> nodes )
+        {
+            var lookup = new Dictionary<string, Node>();
+            foreach ( var node in nodes )
+            {
+                // Some models contain duplicate helper nodes. Name-based retargeting
+                // already resolves those to the first node in traversal order.
+                if ( !lookup.ContainsKey( node.Name ) )
+                    lookup.Add( node.Name, node );
+            }
+
+            return lookup;
         }
 
         internal void Retarget( Dictionary<string, Node> originalNodeLookup, Dictionary<string, Node> newNodeLookup, bool fixArms )

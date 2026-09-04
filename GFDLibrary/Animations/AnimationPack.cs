@@ -148,8 +148,8 @@ namespace GFDLibrary.Animations
 
         public void Retarget( Model originalModel, Model newModel, bool fixArms )
         {
-            var originalNodeLookup = originalModel.Nodes.ToDictionary( x => x.Name );
-            var newNodeLookup = newModel.Nodes.ToDictionary( x => x.Name );
+            var originalNodeLookup = Animation.CreateNodeLookup( originalModel.Nodes );
+            var newNodeLookup = Animation.CreateNodeLookup( newModel.Nodes );
 
             foreach ( var animation in Animations )
                 animation.Retarget( originalNodeLookup, newNodeLookup, fixArms );

@@ -95,6 +95,28 @@ namespace GFDLibrary.Tests
             Assert.IsFalse( key.HasScale );
         }
 
+        [TestMethod]
+        public void RetargetIgnoresDuplicateNodeNames()
+        {
+            var sourceRotation = Quaternion.CreateFromAxisAngle( Vector3.UnitX, 0.25f );
+            var targetRotation = Quaternion.CreateFromAxisAngle( Vector3.UnitY, 0.5f );
+            var keyRotation = Quaternion.CreateFromAxisAngle( Vector3.UnitZ, 0.75f );
+            var key = new PRSKey( KeyType.NodeRHalf ) { Rotation = keyRotation };
+            var animation = CreateAnimation( KeyType.NodeRHalf, key );
+
+            var sourceModel = CreateModel( new Vector3( 1, 2, 3 ), sourceRotation );
+            sourceModel.RootNode.AddChildNode( new Node( NodeName ) );
+            var targetModel = CreateModel( new Vector3( 4, 5, 6 ), targetRotation );
+            targetModel.RootNode.AddChildNode( new Node( NodeName ) );
+
+            animation.Retarget(
+                sourceModel,
+                targetModel,
+                false );
+
+            AssertQuaternionEqual( targetRotation * ( Quaternion.Inverse( sourceRotation ) * keyRotation ), key.Rotation );
+        }
+
         private static Animation CreateAnimation( KeyType keyType, PRSKey key )
         {
             var layer = new AnimationLayer( ResourceVersion.Persona5 )
