@@ -728,39 +728,47 @@ namespace GFDStudio.GUI.Forms
             IReadOnlyList<CharacterAnimationEntry> entries)
         {
             var sourcePacks = new Dictionary<string, AnimationPack>(StringComparer.OrdinalIgnoreCase);
-            var firstSource = LoadCharacterBrowserSourcePack(entries[0], sourcePacks);
-            var output = new AnimationPack(firstSource.Version)
-            {
-                // Bit 2 controls the optional Bit29Data resource. It is intentionally omitted
-                // because that resource cannot be merged safely when entries come from multiple
-                // source packs.
-                Flags = firstSource.Flags & ~AnimationPackFlags.Bit2,
-                METAPHOR_AnimArray3 = ResourceVersion.IsV2(firstSource.Version)
-                    ? new List<Animation>()
-                    : null
-            };
+            var selectedAnimations = new List<(CharacterAnimationEntry Entry, AnimationPack Pack, Animation Animation)>();
 
             foreach (var entry in entries)
             {
                 var source = LoadCharacterBrowserSourcePack(entry, sourcePacks);
-                if (source.Version != output.Version)
-                {
-                    throw new InvalidDataException(
-                        "Selected animations use different resource versions and cannot share a pack.");
-                }
-
                 var animation = GetCharacterBrowserAnimation(source, entry);
                 if (animation == null)
                     throw new InvalidDataException("Animation no longer exists in pack: " + entry.DisplayName);
 
-                switch (entry.Kind)
+                selectedAnimations.Add((entry, source, animation));
+            }
+
+            var targetVersion = selectedAnimations.Max(item => item.Pack.Version);
+            var targetIsV2 = ResourceVersion.IsV2(targetVersion);
+            if (selectedAnimations.Any(item => ResourceVersion.IsV2(item.Pack.Version) != targetIsV2))
+            {
+                throw new InvalidDataException(
+                    "Selected animations use incompatible resource versions and cannot share a pack.");
+            }
+
+            var output = new AnimationPack(targetVersion)
+            {
+                // Bit 2 controls the optional Bit29Data resource. It is intentionally omitted
+                // because that resource cannot be merged safely when entries come from multiple
+                // source packs.
+                Flags = selectedAnimations[0].Pack.Flags & ~AnimationPackFlags.Bit2,
+                METAPHOR_AnimArray3 = targetIsV2
+                    ? new List<Animation>()
+                    : null
+            };
+
+            foreach (var selected in selectedAnimations)
+            {
+                switch (selected.Entry.Kind)
                 {
                     case CharacterAnimationListKind.Animation:
-                        output.Animations.Add(animation);
+                        output.Animations.Add(selected.Animation);
                         break;
 
                     case CharacterAnimationListKind.BlendAnimation:
-                        output.BlendAnimations.Add(animation);
+                        output.BlendAnimations.Add(selected.Animation);
                         break;
 
                     case CharacterAnimationListKind.ExtraAnimation:
@@ -768,7 +776,7 @@ namespace GFDStudio.GUI.Forms
                             throw new InvalidDataException(
                                 "Extra animations require a version 2 animation pack.");
 
-                        output.METAPHOR_AnimArray3.Add(animation);
+                        output.METAPHOR_AnimArray3.Add(selected.Animation);
                         break;
                 }
             }
