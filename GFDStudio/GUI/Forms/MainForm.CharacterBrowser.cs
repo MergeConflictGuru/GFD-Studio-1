@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -36,6 +37,34 @@ namespace GFDStudio.GUI.Forms
             public int Index { get; init; }
             public string DisplayName { get; init; }
             public override string ToString() => DisplayName;
+        }
+
+        private sealed class CharacterAnimationDefinitionSet
+        {
+            private readonly Dictionary<string, List<byte[]>> mSerializedDefinitions =
+                new Dictionary<string, List<byte[]>>(StringComparer.Ordinal);
+
+            public bool Add(Animation animation)
+            {
+                var serialized = SerializeAnimation(animation);
+                var hash = Convert.ToBase64String(SHA256.HashData(serialized));
+
+                if (!mSerializedDefinitions.TryGetValue(hash, out var candidates))
+                {
+                    mSerializedDefinitions.Add(hash, new List<byte[]> { serialized });
+                    return true;
+                }
+
+                // Keep the comparison exact even if two serialized animations ever share a hash.
+                foreach (var candidate in candidates)
+                {
+                    if (serialized.AsSpan().SequenceEqual(candidate))
+                        return false;
+                }
+
+                candidates.Add(serialized);
+                return true;
+            }
         }
 
         private Panel mCharacterBrowserPanel;
@@ -382,6 +411,7 @@ namespace GFDStudio.GUI.Forms
                 await Task.Run(() =>
                 {
                     var batch = new List<CharacterAnimationEntry>(128);
+                    var animationDefinitions = new CharacterAnimationDefinitionSet();
 
                     foreach (var gapPath in files.gaps)
                     {
@@ -390,7 +420,7 @@ namespace GFDStudio.GUI.Forms
                         try
                         {
                             var pack = Resource.Load<AnimationPack>(gapPath);
-                            AddAnimationPackEntries(batch, root, gapPath, pack);
+                            AddAnimationPackEntries(batch, root, gapPath, pack, animationDefinitions);
                         }
                         catch (Exception ex)
                         {
@@ -414,7 +444,7 @@ namespace GFDStudio.GUI.Forms
 
                                 AddCharacterAnimationBatch(toAdd);
                                 SetCharacterBrowserStatus(
-                                    $"{mCharacterModels.Count:N0} models | {mCharacterAnimations.Count:N0} animations | " +
+                                    $"{mCharacterModels.Count:N0} models | {mCharacterAnimations.Count:N0} unique animations | " +
                                     $"GAP {parsedSnapshot:N0}/{files.gaps.Count:N0}" +
                                     (failedSnapshot == 0 ? string.Empty : $" | {failedSnapshot:N0} failed"));
                             }));
@@ -425,7 +455,7 @@ namespace GFDStudio.GUI.Forms
                 if (!token.IsCancellationRequested && generation == mCharacterBrowserScanGeneration)
                 {
                     SetCharacterBrowserStatus(
-                        $"Ready: {mCharacterModels.Count:N0} models, {mCharacterAnimations.Count:N0} animations" +
+                        $"Ready: {mCharacterModels.Count:N0} models, {mCharacterAnimations.Count:N0} unique animations" +
                         (failedCount == 0 ? string.Empty : $" ({failedCount:N0} GAP files failed to parse)"));
                 }
             }
@@ -443,20 +473,25 @@ namespace GFDStudio.GUI.Forms
             List<CharacterAnimationEntry> output,
             string root,
             string gapPath,
-            AnimationPack pack)
+            AnimationPack pack,
+            CharacterAnimationDefinitionSet animationDefinitions)
         {
             var relative = Path.GetRelativePath(root, gapPath);
             var stem = Path.ChangeExtension(relative, null);
 
-            var normalCount = pack.Animations?.Count ?? 0;
-            var blendCount = pack.BlendAnimations?.Count ?? 0;
-            var extraCount = pack.METAPHOR_AnimArray3?.Count ?? 0;
+            var normalCount = pack.Animations?.Count(HasAnimationKeyframes) ?? 0;
+            var blendCount = pack.BlendAnimations?.Count(HasAnimationKeyframes) ?? 0;
+            var extraCount = pack.METAPHOR_AnimArray3?.Count(HasAnimationKeyframes) ?? 0;
             var total = normalCount + blendCount + extraCount;
 
             if (pack.Animations != null)
             {
                 for (var i = 0; i < pack.Animations.Count; i++)
                 {
+                    if (!HasAnimationKeyframes(pack.Animations[i]) ||
+                        !animationDefinitions.Add(pack.Animations[i]))
+                        continue;
+
                     output.Add(new CharacterAnimationEntry
                     {
                         PackPath = gapPath,
@@ -471,6 +506,10 @@ namespace GFDStudio.GUI.Forms
             {
                 for (var i = 0; i < pack.BlendAnimations.Count; i++)
                 {
+                    if (!HasAnimationKeyframes(pack.BlendAnimations[i]) ||
+                        !animationDefinitions.Add(pack.BlendAnimations[i]))
+                        continue;
+
                     output.Add(new CharacterAnimationEntry
                     {
                         PackPath = gapPath,
@@ -485,6 +524,10 @@ namespace GFDStudio.GUI.Forms
             {
                 for (var i = 0; i < pack.METAPHOR_AnimArray3.Count; i++)
                 {
+                    if (!HasAnimationKeyframes(pack.METAPHOR_AnimArray3[i]) ||
+                        !animationDefinitions.Add(pack.METAPHOR_AnimArray3[i]))
+                        continue;
+
                     output.Add(new CharacterAnimationEntry
                     {
                         PackPath = gapPath,
@@ -494,6 +537,19 @@ namespace GFDStudio.GUI.Forms
                     });
                 }
             }
+        }
+
+        private static bool HasAnimationKeyframes(Animation animation)
+        {
+            return animation?.Controllers?.Any(controller =>
+                controller?.Layers?.Any(layer => layer?.Keys?.Count > 0) == true) == true;
+        }
+
+        private static byte[] SerializeAnimation(Animation animation)
+        {
+            using var stream = new MemoryStream();
+            animation.Save(stream, leaveOpen: true);
+            return stream.ToArray();
         }
 
         private void AddCharacterAnimationBatch(IEnumerable<CharacterAnimationEntry> entries)
