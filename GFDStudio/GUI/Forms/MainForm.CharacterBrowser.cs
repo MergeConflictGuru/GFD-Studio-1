@@ -183,6 +183,7 @@ namespace GFDStudio.GUI.Forms
             // A blend slot is applied as one overlay at a time. Normal animations
             // remain multi-selectable for repacking.
             mCharacterBlendAnimationListBox.SelectionMode = SelectionMode.One;
+            mCharacterBlendAnimationListBox.HideSelection = false;
 
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
             // immediately load the newly selected model/animation.
@@ -871,7 +872,7 @@ namespace GFDStudio.GUI.Forms
 
                 // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
                 ModelViewControl.Instance.LoadAnimation(animation, true);
-                mCharacterBlendAnimationListBox.ClearSelected();
+                ApplySelectedCharacterBrowserBlend();
                 SetCharacterBrowserStatus(
                     string.IsNullOrWhiteSpace(retargetNote)
                         ? "Animation: " + entry.DisplayName
