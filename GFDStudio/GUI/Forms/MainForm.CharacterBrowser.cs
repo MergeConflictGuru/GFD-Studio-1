@@ -696,6 +696,13 @@ namespace GFDStudio.GUI.Forms
             if (targetModelPack?.Model == null)
                 return animation;
 
+            var currentModelPath = GetCurrentCharacterBrowserModelPath();
+            if (AreSameCharacter(entry.PackPath, currentModelPath))
+            {
+                retargetNote = "same character";
+                return animation;
+            }
+
             var sourceModelEntry = FindCharacterModelForAnimation(entry.PackPath);
             if (sourceModelEntry == null)
             {
@@ -703,7 +710,7 @@ namespace GFDStudio.GUI.Forms
                 return animation;
             }
 
-            if (AreSamePath(sourceModelEntry.Path, GetCurrentCharacterBrowserModelPath()))
+            if (AreSamePath(sourceModelEntry.Path, currentModelPath))
             {
                 retargetNote = "source model";
                 return animation;
@@ -760,6 +767,14 @@ namespace GFDStudio.GUI.Forms
             {
                 return string.Equals(firstPath, secondPath, StringComparison.OrdinalIgnoreCase);
             }
+        }
+
+        private static bool AreSameCharacter(string firstPath, string secondPath)
+        {
+            var firstCharacterId = ExtractCharacterId(firstPath);
+            var secondCharacterId = ExtractCharacterId(secondPath);
+            return !string.IsNullOrWhiteSpace(firstCharacterId) &&
+                   string.Equals(firstCharacterId, secondCharacterId, StringComparison.OrdinalIgnoreCase);
         }
 
         private CharacterModelEntry FindCharacterModelForAnimation(string gapPath)
