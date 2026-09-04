@@ -287,14 +287,20 @@ namespace GFDLibrary.Animations
                     {
                         var prsKey = ( PRSKey )key;
 
-                        // Make position relative
-                        var position         = prsKey.Position * positionScale;
-                        var relativePosition = position - originalNode.Translation;
-                        var newPosition      = newNode.Translation + relativePosition;
-                        prsKey.Position = newPosition / positionScale;
+                        // Split PRS layers can contain only one or two transform channels.
+                        // Assigning a missing channel marks it as present and makes the
+                        // renderer override that part of the target node's bind pose.
+                        if ( prsKey.HasPosition )
+                        {
+                            // Make position relative
+                            var position         = prsKey.Position * positionScale;
+                            var relativePosition = position - originalNode.Translation;
+                            var newPosition      = newNode.Translation + relativePosition;
+                            prsKey.Position = newPosition / positionScale;
+                        }
 
                         // Don't make rotation relative if we're attempting to fix the arms
-                        if ( !fixArms || !sArmsFixNodeNameBlacklist.Contains( nodeName ) )
+                        if ( prsKey.HasRotation && ( !fixArms || !sArmsFixNodeNameBlacklist.Contains( nodeName ) ) )
                         {
                             // Make rotation relative
                             var relativeRotation = originalNodeInvRotation * prsKey.Rotation;
