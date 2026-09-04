@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Text.RegularExpressions;
 
 using GFDLibrary;
 using GFDLibrary.Animations;
@@ -81,8 +82,7 @@ namespace GFDStudio.GUI.Forms
 
         private CancellationTokenSource mCharacterBrowserScanCancellation;
         private string mCharacterBrowserRoot;
-        private string mCharacterBrowserCachedPackPath;
-        private AnimationPack mCharacterBrowserCachedPack;
+        private string mCharacterBrowserCurrentModelPath;
         private int mCharacterBrowserScanGeneration;
 
         private string CharacterBrowserSettingsPath =>
@@ -365,8 +365,7 @@ namespace GFDStudio.GUI.Forms
 
             mCharacterModels.Clear();
             mCharacterAnimations.Clear();
-            mCharacterBrowserCachedPack = null;
-            mCharacterBrowserCachedPackPath = null;
+            mCharacterBrowserCurrentModelPath = null;
             mCharacterModelListBox.Items.Clear();
             mCharacterAnimationListBox.Items.Clear();
             SetCharacterBrowserStatus("Scanning files...");
@@ -630,7 +629,23 @@ namespace GFDStudio.GUI.Forms
 
             try
             {
+                mCharacterBrowserCurrentModelPath = entry.Path;
                 OpenFile(entry.Path);
+
+                if (mCharacterAnimationListBox.SelectedItem is CharacterAnimationEntry animationEntry)
+                {
+                    var animation = PrepareCharacterBrowserAnimation(animationEntry, out var retargetNote);
+                    if (animation != null)
+                    {
+                        ModelViewControl.Instance.LoadAnimation(animation, true);
+                        SetCharacterBrowserStatus(
+                            string.IsNullOrWhiteSpace(retargetNote)
+                                ? "Model: " + entry.DisplayName
+                                : $"Model: {entry.DisplayName} ({retargetNote})");
+                        return;
+                    }
+                }
+
                 SetCharacterBrowserStatus("Model: " + entry.DisplayName);
             }
             catch (Exception ex)
@@ -646,13 +661,7 @@ namespace GFDStudio.GUI.Forms
 
             try
             {
-                if (!string.Equals(mCharacterBrowserCachedPackPath, entry.PackPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    mCharacterBrowserCachedPack = Resource.Load<AnimationPack>(entry.PackPath);
-                    mCharacterBrowserCachedPackPath = entry.PackPath;
-                }
-
-                var animation = GetCharacterBrowserAnimation(mCharacterBrowserCachedPack, entry);
+                var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
                 if (animation == null)
                 {
                     SetCharacterBrowserStatus("Animation no longer exists in pack: " + entry.DisplayName);
@@ -661,14 +670,131 @@ namespace GFDStudio.GUI.Forms
 
                 // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
                 ModelViewControl.Instance.LoadAnimation(animation, true);
-                SetCharacterBrowserStatus("Animation: " + entry.DisplayName);
+                SetCharacterBrowserStatus(
+                    string.IsNullOrWhiteSpace(retargetNote)
+                        ? "Animation: " + entry.DisplayName
+                        : $"Animation: {entry.DisplayName} ({retargetNote})");
             }
             catch (Exception ex)
             {
-                mCharacterBrowserCachedPack = null;
-                mCharacterBrowserCachedPackPath = null;
                 SetCharacterBrowserStatus("Animation load failed: " + ex.Message);
             }
+        }
+
+        private Animation PrepareCharacterBrowserAnimation(CharacterAnimationEntry entry, out string retargetNote)
+        {
+            retargetNote = null;
+
+            // Always load a fresh pack because retargeting mutates the animation object in memory.
+            // This keeps the cached/showroom source data untouched when switching target models.
+            var pack = Resource.Load<AnimationPack>(entry.PackPath);
+            var animation = GetCharacterBrowserAnimation(pack, entry);
+            if (animation == null)
+                return null;
+
+            var targetModelPack = ModelEditorTreeView?.TopNode?.Data as ModelPack;
+            if (targetModelPack?.Model == null)
+                return animation;
+
+            var sourceModelEntry = FindCharacterModelForAnimation(entry.PackPath);
+            if (sourceModelEntry == null)
+            {
+                retargetNote = "source model not found; preview uses original animation";
+                return animation;
+            }
+
+            if (AreSamePath(sourceModelEntry.Path, GetCurrentCharacterBrowserModelPath()))
+            {
+                retargetNote = "source model";
+                return animation;
+            }
+
+            var sourceModelPack = Resource.Load<ModelPack>(sourceModelEntry.Path);
+            if (sourceModelPack.Model == null)
+            {
+                retargetNote = "source model has no model data; preview uses original animation";
+                return animation;
+            }
+
+            switch (entry.Kind)
+            {
+                case CharacterAnimationListKind.Animation:
+                    animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false);
+                    retargetNote = "retargeted in preview";
+                    break;
+
+                case CharacterAnimationListKind.BlendAnimation:
+                    // Blend animations are already relative; only their node IDs need updating.
+                    animation.FixTargetIds(targetModelPack.Model);
+                    retargetNote = "target IDs fixed in preview";
+                    break;
+
+                default:
+                    retargetNote = "source model differs; preview uses original animation";
+                    break;
+            }
+
+            return animation;
+        }
+
+        private string GetCurrentCharacterBrowserModelPath()
+        {
+            if (!string.IsNullOrWhiteSpace(LastOpenedFilePath) &&
+                string.Equals(Path.GetExtension(LastOpenedFilePath), ".GMD", StringComparison.OrdinalIgnoreCase))
+                return LastOpenedFilePath;
+
+            return mCharacterBrowserCurrentModelPath;
+        }
+
+        private static bool AreSamePath(string firstPath, string secondPath)
+        {
+            if (string.IsNullOrWhiteSpace(firstPath) || string.IsNullOrWhiteSpace(secondPath))
+                return false;
+
+            try
+            {
+                return string.Equals(Path.GetFullPath(firstPath), Path.GetFullPath(secondPath),
+                                     StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(firstPath, secondPath, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        private CharacterModelEntry FindCharacterModelForAnimation(string gapPath)
+        {
+            var animationKey = ExtractCharacterModelKey(gapPath);
+            if (string.IsNullOrWhiteSpace(animationKey))
+                return null;
+
+            var characterDirectory = GetCharacterDirectory(gapPath);
+            return mCharacterModels
+                .Where(model => string.Equals(GetCharacterDirectory(model.Path), characterDirectory,
+                                              StringComparison.OrdinalIgnoreCase))
+                .Where(model => string.Equals(ExtractCharacterModelKey(model.Path), animationKey,
+                                              StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(model => Path.GetFileNameWithoutExtension(model.Path)
+                    .StartsWith("c" + animationKey, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+        }
+
+        private string GetCharacterDirectory(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(mCharacterBrowserRoot))
+                return null;
+
+            var relative = Path.GetRelativePath(mCharacterBrowserRoot, path);
+            var parts = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                                       StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length > 1 ? parts[0] : null;
+        }
+
+        private static string ExtractCharacterModelKey(string path)
+        {
+            var stem = Path.GetFileNameWithoutExtension(path);
+            return Regex.Match(stem ?? string.Empty, @"\d{4}_\d{3}", RegexOptions.CultureInvariant).Value;
         }
 
         private static Animation GetCharacterBrowserAnimation(AnimationPack pack, CharacterAnimationEntry entry)

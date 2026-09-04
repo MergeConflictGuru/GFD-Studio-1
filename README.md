@@ -26,6 +26,7 @@ For a continuously running monitor instead, use `GFD Studio: Watch and auto-fetc
 
 ## Features
 - View a rendered preview of the opened model
+- Showroom previews automatically retarget normal GAP animations to the selected model in memory when the source character can be identified from the GAP/model names; source files are not modified
 - View, export, replace and add **Textures** (automatic conversion to and from PNG/DDS)
 - Export, replace and edit **Materials** and their maps & properties
 - Export and import models using assimp (automatic conversion to and from DAE/FBX)
