@@ -769,13 +769,34 @@ namespace GFDStudio.GUI.Forms
                 return null;
 
             var characterDirectory = GetCharacterDirectory(gapPath);
-            return mCharacterModels
+            var characterModels = mCharacterModels
                 .Where(model => string.Equals(GetCharacterDirectory(model.Path), characterDirectory,
                                               StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // Prefer an exact variant when one exists. Event animations often use a variant
+            // number that has no corresponding model, though, so fall back to any model for
+            // the same character in this directory.
+            var exactMatch = characterModels
                 .Where(model => string.Equals(ExtractCharacterModelKey(model.Path), animationKey,
                                               StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(model => Path.GetFileNameWithoutExtension(model.Path)
                     .StartsWith("c" + animationKey, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
+            if (exactMatch != null)
+                return exactMatch;
+
+            var characterId = ExtractCharacterId(gapPath);
+            if (string.IsNullOrWhiteSpace(characterId))
+                return null;
+
+            return characterModels
+                .Where(model => string.Equals(ExtractCharacterId(model.Path), characterId,
+                                              StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(model => Path.GetFileNameWithoutExtension(model.Path)
+                    .StartsWith("c" + characterId + "_", StringComparison.OrdinalIgnoreCase))
                 .ThenBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
         }
@@ -795,6 +816,12 @@ namespace GFDStudio.GUI.Forms
         {
             var stem = Path.GetFileNameWithoutExtension(path);
             return Regex.Match(stem ?? string.Empty, @"\d{4}_\d{3}", RegexOptions.CultureInvariant).Value;
+        }
+
+        private static string ExtractCharacterId(string path)
+        {
+            var stem = Path.GetFileNameWithoutExtension(path);
+            return Regex.Match(stem ?? string.Empty, @"(?<!\d)\d{4}(?=_)", RegexOptions.CultureInvariant).Value;
         }
 
         private static Animation GetCharacterBrowserAnimation(AnimationPack pack, CharacterAnimationEntry entry)
