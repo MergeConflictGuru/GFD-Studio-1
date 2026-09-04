@@ -183,7 +183,6 @@ namespace GFDStudio.GUI.Forms
             // A blend slot is applied as one overlay at a time. Normal animations
             // remain multi-selectable for repacking.
             mCharacterBlendAnimationListBox.SelectionMode = SelectionMode.One;
-            mCharacterBlendAnimationListBox.HideSelection = false;
 
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
             // immediately load the newly selected model/animation.
@@ -320,14 +319,41 @@ namespace GFDStudio.GUI.Forms
                 IntegralHeight = false,
                 HorizontalScrollbar = true,
                 Font = new Font("Consolas", 9F),
-                HideSelection = false,
+                DrawMode = DrawMode.OwnerDrawFixed,
                 Margin = Padding.Empty
             };
+
+            listBox.DrawItem += CharacterBrowserListBox_DrawItem;
 
             body.Controls.Add(filterTextBox, 0, 0);
             body.Controls.Add(listBox, 0, 1);
             group.Controls.Add(body);
             return group;
+        }
+
+        private static void CharacterBrowserListBox_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0)
+                return;
+
+            var listBox = (ListBox)sender;
+            var selected = listBox.SelectedIndices.Contains(e.Index);
+            var background = selected ? Color.FromArgb(0, 122, 204) : listBox.BackColor;
+            var foreground = selected ? Color.White : listBox.ForeColor;
+
+            using (var backgroundBrush = new SolidBrush(background))
+                e.Graphics.FillRectangle(backgroundBrush, e.Bounds);
+
+            TextRenderer.DrawText(
+                e.Graphics,
+                listBox.GetItemText(listBox.Items[e.Index]),
+                listBox.Font,
+                e.Bounds,
+                foreground,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+            if ((e.State & DrawItemState.Focus) != 0)
+                e.DrawFocusRectangle();
         }
 
         private void SetCharacterBrowserVisible(bool visible)
