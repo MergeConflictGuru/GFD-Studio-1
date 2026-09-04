@@ -72,13 +72,16 @@ namespace GFDStudio.GUI.Forms
         private TextBox mCharacterRootTextBox;
         private TextBox mCharacterModelFilterTextBox;
         private TextBox mCharacterAnimationFilterTextBox;
+        private TextBox mCharacterBlendAnimationFilterTextBox;
         private ListBox mCharacterModelListBox;
         private ListBox mCharacterAnimationListBox;
+        private ListBox mCharacterBlendAnimationListBox;
         private Label mCharacterBrowserStatusLabel;
         private ToolStripMenuItem mCharacterBrowserToolStripMenuItem;
 
         private readonly List<CharacterModelEntry> mCharacterModels = new List<CharacterModelEntry>();
         private readonly List<CharacterAnimationEntry> mCharacterAnimations = new List<CharacterAnimationEntry>();
+        private readonly List<CharacterAnimationEntry> mCharacterBlendAnimations = new List<CharacterAnimationEntry>();
 
         private CancellationTokenSource mCharacterBrowserScanCancellation;
         private string mCharacterBrowserRoot;
@@ -125,14 +128,15 @@ namespace GFDStudio.GUI.Forms
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 4,
+                RowCount = 5,
                 BackColor = Color.FromArgb(30, 30, 30),
                 Margin = Padding.Empty,
                 Padding = Padding.Empty
             };
             rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
-            rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
+            rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 30));
+            rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+            rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
             rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             mCharacterBrowserPanel.Controls.Add(rootLayout);
 
@@ -145,6 +149,10 @@ namespace GFDStudio.GUI.Forms
                 "ANIMATIONS",
                 out mCharacterAnimationFilterTextBox,
                 out mCharacterAnimationListBox), 0, 2);
+            rootLayout.Controls.Add(CreateCharacterBrowserListSection(
+                "BLEND OVERLAYS",
+                out mCharacterBlendAnimationFilterTextBox,
+                out mCharacterBlendAnimationListBox), 0, 3);
 
             mCharacterBrowserStatusLabel = new Label
             {
@@ -154,18 +162,24 @@ namespace GFDStudio.GUI.Forms
                 AutoEllipsis = true,
                 Text = "Choose model\\character root"
             };
-            rootLayout.Controls.Add(mCharacterBrowserStatusLabel, 0, 3);
+            rootLayout.Controls.Add(mCharacterBrowserStatusLabel, 0, 4);
 
             mCharacterModelFilterTextBox.TextChanged += (s, e) => RefreshCharacterModelList();
             mCharacterAnimationFilterTextBox.TextChanged += (s, e) => RefreshCharacterAnimationList();
+            mCharacterBlendAnimationFilterTextBox.TextChanged += (s, e) => RefreshCharacterBlendAnimationList();
             mCharacterModelListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
             mCharacterAnimationListBox.SelectedIndexChanged += CharacterAnimationListBox_SelectedIndexChanged;
+            mCharacterBlendAnimationListBox.SelectedIndexChanged += CharacterBlendAnimationListBox_SelectedIndexChanged;
             mCharacterAnimationListBox.SelectionMode = SelectionMode.MultiExtended;
+            // A blend slot is applied as one overlay at a time. Normal animations
+            // remain multi-selectable for repacking.
+            mCharacterBlendAnimationListBox.SelectionMode = SelectionMode.One;
 
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
             // immediately load the newly selected model/animation.
             mCharacterModelListBox.KeyDown += CharacterBrowserList_KeyDown;
             mCharacterAnimationListBox.KeyDown += CharacterBrowserList_KeyDown;
+            mCharacterBlendAnimationListBox.KeyDown += CharacterBrowserList_KeyDown;
 
             splitContainer_Main.Panel2.Controls.Add(mCharacterBrowserPanel);
             mCharacterBrowserPanel.BringToFront();
@@ -371,9 +385,11 @@ namespace GFDStudio.GUI.Forms
 
             mCharacterModels.Clear();
             mCharacterAnimations.Clear();
+            mCharacterBlendAnimations.Clear();
             mCharacterBrowserCurrentModelPath = null;
             mCharacterModelListBox.Items.Clear();
             mCharacterAnimationListBox.Items.Clear();
+            mCharacterBlendAnimationListBox.Items.Clear();
             SetCharacterBrowserStatus("Scanning files...");
 
             try
@@ -449,7 +465,8 @@ namespace GFDStudio.GUI.Forms
 
                                 AddCharacterAnimationBatch(toAdd);
                                 SetCharacterBrowserStatus(
-                                    $"{mCharacterModels.Count:N0} models | {mCharacterAnimations.Count:N0} unique animations | " +
+                                    $"{mCharacterModels.Count:N0} models | " +
+                                    $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations | " +
                                     $"GAP {parsedSnapshot:N0}/{files.gaps.Count:N0}" +
                                     (failedSnapshot == 0 ? string.Empty : $" | {failedSnapshot:N0} failed"));
                             }));
@@ -460,7 +477,8 @@ namespace GFDStudio.GUI.Forms
                 if (!token.IsCancellationRequested && generation == mCharacterBrowserScanGeneration)
                 {
                     SetCharacterBrowserStatus(
-                        $"Ready: {mCharacterModels.Count:N0} models, {mCharacterAnimations.Count:N0} unique animations" +
+                        $"Ready: {mCharacterModels.Count:N0} models, " +
+                        $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations" +
                         (failedCount == 0 ? string.Empty : $" ({failedCount:N0} GAP files failed to parse)"));
                 }
             }
@@ -485,9 +503,8 @@ namespace GFDStudio.GUI.Forms
             var stem = Path.ChangeExtension(relative, null);
 
             var normalCount = pack.Animations?.Count(HasAnimationKeyframes) ?? 0;
-            var blendCount = pack.BlendAnimations?.Count(HasAnimationKeyframes) ?? 0;
             var extraCount = pack.METAPHOR_AnimArray3?.Count(HasAnimationKeyframes) ?? 0;
-            var total = normalCount + blendCount + extraCount;
+            var normalAndExtraCount = normalCount + extraCount;
 
             if (pack.Animations != null)
             {
@@ -502,7 +519,7 @@ namespace GFDStudio.GUI.Forms
                         PackPath = gapPath,
                         Kind = CharacterAnimationListKind.Animation,
                         Index = i,
-                        DisplayName = total == 1 ? stem : $"{stem}  #{i + 1}"
+                        DisplayName = normalAndExtraCount == 1 ? stem : $"{stem}  #{i + 1}"
                     });
                 }
             }
@@ -560,21 +577,38 @@ namespace GFDStudio.GUI.Forms
         private void AddCharacterAnimationBatch(IEnumerable<CharacterAnimationEntry> entries)
         {
             var filter = mCharacterAnimationFilterTextBox.Text?.Trim();
+            var blendFilter = mCharacterBlendAnimationFilterTextBox.Text?.Trim();
             var addDirectly = string.IsNullOrEmpty(filter);
+            var addBlendDirectly = string.IsNullOrEmpty(blendFilter);
 
             mCharacterAnimationListBox.BeginUpdate();
+            mCharacterBlendAnimationListBox.BeginUpdate();
             try
             {
                 foreach (var entry in entries)
                 {
-                    mCharacterAnimations.Add(entry);
-                    if (addDirectly || CharacterBrowserMatches(entry.DisplayName, filter))
-                        mCharacterAnimationListBox.Items.Add(entry);
+                    var destination = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? mCharacterBlendAnimations
+                        : mCharacterAnimations;
+                    var destinationListBox = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? mCharacterBlendAnimationListBox
+                        : mCharacterAnimationListBox;
+                    var destinationFilter = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? blendFilter
+                        : filter;
+                    var destinationAddDirectly = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? addBlendDirectly
+                        : addDirectly;
+
+                    destination.Add(entry);
+                    if (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter))
+                        destinationListBox.Items.Add(entry);
                 }
             }
             finally
             {
                 mCharacterAnimationListBox.EndUpdate();
+                mCharacterBlendAnimationListBox.EndUpdate();
             }
         }
 
@@ -622,6 +656,28 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
+        private void RefreshCharacterBlendAnimationList()
+        {
+            if (mCharacterBlendAnimationListBox == null)
+                return;
+
+            var filter = mCharacterBlendAnimationFilterTextBox.Text?.Trim();
+            mCharacterBlendAnimationListBox.BeginUpdate();
+            try
+            {
+                mCharacterBlendAnimationListBox.Items.Clear();
+                foreach (var entry in mCharacterBlendAnimations)
+                {
+                    if (CharacterBrowserMatches(entry.DisplayName, filter))
+                        mCharacterBlendAnimationListBox.Items.Add(entry);
+                }
+            }
+            finally
+            {
+                mCharacterBlendAnimationListBox.EndUpdate();
+            }
+        }
+
         private static bool CharacterBrowserMatches(string value, string filter)
         {
             return string.IsNullOrWhiteSpace(filter) ||
@@ -644,6 +700,7 @@ namespace GFDStudio.GUI.Forms
                     if (animation != null)
                     {
                         ModelViewControl.Instance.LoadAnimation(animation, true);
+                        ApplySelectedCharacterBrowserBlend();
                         SetCharacterBrowserStatus(
                             string.IsNullOrWhiteSpace(retargetNote)
                                 ? "Model: " + entry.DisplayName
@@ -657,6 +714,48 @@ namespace GFDStudio.GUI.Forms
             catch (Exception ex)
             {
                 SetCharacterBrowserStatus("Model load failed: " + ex.Message);
+            }
+        }
+
+        private void CharacterBlendAnimationListBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            ApplySelectedCharacterBrowserBlend();
+        }
+
+        private void ApplySelectedCharacterBrowserBlend()
+        {
+            if (mCharacterBlendAnimationListBox.SelectedItem is not CharacterAnimationEntry entry)
+            {
+                ModelViewControl.Instance.UnloadAnimationOverlay();
+                return;
+            }
+
+            if (!ModelViewControl.Instance.IsAnimationLoaded)
+            {
+                ModelViewControl.Instance.UnloadAnimationOverlay();
+                SetCharacterBrowserStatus("Select a base animation before adding a blend overlay");
+                return;
+            }
+
+            try
+            {
+                ModelViewControl.Instance.UnloadAnimationOverlay();
+                var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
+                if (animation == null)
+                {
+                    SetCharacterBrowserStatus("Blend overlay no longer exists in pack: " + entry.DisplayName);
+                    return;
+                }
+
+                ModelViewControl.Instance.LoadAnimationOverlay(animation);
+                SetCharacterBrowserStatus(
+                    string.IsNullOrWhiteSpace(retargetNote)
+                        ? "Blend overlay: " + entry.DisplayName
+                        : $"Blend overlay: {entry.DisplayName} ({retargetNote})");
+            }
+            catch (Exception ex)
+            {
+                SetCharacterBrowserStatus("Blend overlay load failed: " + ex.Message);
             }
         }
 
@@ -676,6 +775,7 @@ namespace GFDStudio.GUI.Forms
 
                 // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
                 ModelViewControl.Instance.LoadAnimation(animation, true);
+                mCharacterBlendAnimationListBox.ClearSelected();
                 SetCharacterBrowserStatus(
                     string.IsNullOrWhiteSpace(retargetNote)
                         ? "Animation: " + entry.DisplayName
@@ -691,6 +791,7 @@ namespace GFDStudio.GUI.Forms
         {
             var entries = mCharacterAnimationListBox.SelectedItems
                 .Cast<CharacterAnimationEntry>()
+                .Concat(mCharacterBlendAnimationListBox.SelectedItems.Cast<CharacterAnimationEntry>())
                 .ToList();
 
             if (entries.Count == 0)

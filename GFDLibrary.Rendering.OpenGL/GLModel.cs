@@ -23,6 +23,8 @@ namespace GFDLibrary.Rendering.OpenGL
 
         public Animation Animation { get; private set; }
 
+        public Animation BlendAnimation { get; private set; }
+
         public GLModel( ModelPack modelPack, MaterialTextureCreator textureCreator )
         {
             ModelPack = modelPack;
@@ -53,21 +55,47 @@ namespace GFDLibrary.Rendering.OpenGL
         public void LoadAnimation( Animation animation )
         {
             Animation = animation;
+            BlendAnimation = null;
 
             foreach ( var glNode in Nodes )
             {
                 glNode.Controllers.Clear();
+                glNode.BlendControllers.Clear();
                 glNode.Controllers.AddRange( animation.Controllers.Where( x => x.TargetKind == TargetKind.Node &&
                                                                                x.TargetName == glNode.Node.Name ) );
             }
         }
 
-        public void UnloadAnimation()
+        public void LoadBlendAnimation( Animation animation )
         {
-            Animation = null;
+            BlendAnimation = animation;
 
             foreach ( var glNode in Nodes )
             {
+                glNode.BlendControllers.Clear();
+                glNode.BlendControllers.AddRange( animation.Controllers.Where( x => x.TargetKind == TargetKind.Node &&
+                                                                                  x.TargetName == glNode.Node.Name ) );
+            }
+        }
+
+        public void UnloadBlendAnimation()
+        {
+            BlendAnimation = null;
+
+            foreach ( var glNode in Nodes )
+                glNode.BlendControllers.Clear();
+        }
+
+        public void UnloadAnimation()
+        {
+            Animation = null;
+            BlendAnimation = null;
+
+            foreach ( var glNode in Nodes )
+            {
+                glNode.Controllers.Clear();
+                glNode.BlendControllers.Clear();
+
                 // Calculate current transform
                 var transform = Matrix4x4.CreateFromQuaternion( glNode.Node.Rotation ) * Matrix4x4.CreateScale( glNode.Node.Scale );
                 transform.Translation   = glNode.Node.Translation;
@@ -205,51 +233,16 @@ namespace GFDLibrary.Rendering.OpenGL
                 var translation = glNode.Node.Translation;
                 var scale       = glNode.Node.Scale;
 
-                foreach ( var controller in glNode.Controllers )
+                ApplyControllers( glNode.Controllers, animationTime, Animation.Duration, ref rotation, ref translation, ref scale, false );
+
+                if ( BlendAnimation != null && BlendAnimation.Duration > 0 )
                 {
-                    foreach ( var layer in controller.Layers )
-                    {
-                        Key curKey = null;
-                        Key nextKey = null;
-
-                        if ( controller != null )
-                        {
-                            (curKey, nextKey) = GetCurrentAndNextKeys( layer, animationTime );
-                        }
-
-                        if ( controller != null && curKey != null )
-                        {
-                            if ( layer.HasPRSKeyFrames )
-                            {
-                                var prsKey = ( PRSKey )curKey;
-                                var nextPrsKey = ( PRSKey )nextKey;
-
-                                if ( nextPrsKey != null )
-                                {
-                                    InterpolateKeys( animationTime, layer, ref rotation, ref translation, ref scale, prsKey, nextPrsKey );
-                                }
-                                else
-                                {
-                                    if ( prsKey.HasRotation )
-                                        rotation = prsKey.Rotation;
-
-                                    if ( prsKey.HasPosition )
-                                        translation = prsKey.Position * layer.PositionScale;
-
-                                    if ( prsKey.HasScale )
-                                        scale = prsKey.Scale * layer.ScaleScale;
-                                }
-                            }
-                            else
-                            {
-                                //Debugger.Break();
-                            }
-                        }
-                    }
+                    var blendTime = animationTime % BlendAnimation.Duration;
+                    ApplyControllers( glNode.BlendControllers, blendTime, BlendAnimation.Duration, ref rotation, ref translation, ref scale, true );
                 }
 
                 // Calculate current transform
-                var transform = Matrix4x4.CreateFromQuaternion( rotation ) * Matrix4x4.CreateScale( glNode.Node.Scale );
+                var transform = Matrix4x4.CreateFromQuaternion( rotation ) * Matrix4x4.CreateScale( scale );
                 transform.Translation   = translation;
                 glNode.CurrentTransform = transform;
 
@@ -259,13 +252,88 @@ namespace GFDLibrary.Rendering.OpenGL
             }
         }
 
-        private void InterpolateKeys( double animationTime, AnimationLayer layer, ref Quaternion rotation, ref Vector3 translation, ref Vector3 scale, PRSKey prsKey, PRSKey nextPrsKey )
+        private void ApplyControllers( IEnumerable<AnimationController> controllers, double animationTime, double animationDuration,
+                                       ref Quaternion rotation, ref Vector3 translation, ref Vector3 scale, bool isBlend )
         {
-            var nextTime = ( nextPrsKey.Time < prsKey.Time
-                ? ( nextPrsKey.Time + Animation.Duration )
-                : nextPrsKey.Time );
+            foreach ( var controller in controllers )
+            {
+                foreach ( var layer in controller.Layers )
+                {
+                    var (curKey, nextKey) = GetCurrentAndNextKeys( layer, animationTime );
+                    if ( curKey == null || !layer.HasPRSKeyFrames )
+                        continue;
 
-            var blend = ( float ) ( animationTime / nextTime );
+                    var prsKey = ( PRSKey )curKey;
+                    var nextPrsKey = ( PRSKey )nextKey;
+
+                    if ( isBlend )
+                    {
+                        if ( nextPrsKey != null )
+                            InterpolateBlendKey( animationTime, layer, animationDuration, ref rotation, ref translation, ref scale, prsKey, nextPrsKey );
+                        else
+                            ApplyBlendKey( prsKey, layer, ref rotation, ref translation, ref scale );
+                    }
+                    else if ( nextPrsKey != null )
+                    {
+                        InterpolateKeys( animationTime, layer, animationDuration, ref rotation, ref translation, ref scale, prsKey, nextPrsKey );
+                    }
+                    else
+                    {
+                        if ( prsKey.HasRotation )
+                            rotation = prsKey.Rotation;
+
+                        if ( prsKey.HasPosition )
+                            translation = prsKey.Position * layer.PositionScale;
+
+                        if ( prsKey.HasScale )
+                            scale = prsKey.Scale * layer.ScaleScale;
+                    }
+                }
+            }
+        }
+
+        private static void ApplyBlendKey( PRSKey prsKey, AnimationLayer layer,
+                                           ref Quaternion rotation, ref Vector3 translation, ref Vector3 scale )
+        {
+            if ( prsKey.HasRotation )
+                rotation = Quaternion.Normalize( rotation * Quaternion.Inverse( prsKey.Rotation ) );
+
+            if ( prsKey.HasPosition )
+                translation += prsKey.Position * layer.PositionScale;
+
+            if ( prsKey.HasScale )
+                scale += prsKey.Scale * layer.ScaleScale;
+        }
+
+        private static void InterpolateBlendKey( double animationTime, AnimationLayer layer, double animationDuration,
+                                                 ref Quaternion rotation, ref Vector3 translation, ref Vector3 scale,
+                                                 PRSKey prsKey, PRSKey nextPrsKey )
+        {
+            var blend = GetInterpolationAmount( animationTime, animationDuration, prsKey, nextPrsKey );
+
+            if ( prsKey.HasRotation )
+                rotation = Quaternion.Normalize( rotation * Quaternion.Inverse( Quaternion.Slerp( prsKey.Rotation, nextPrsKey.Rotation, blend ) ) );
+
+            if ( prsKey.HasPosition )
+            {
+                translation += Vector3.Lerp( prsKey.Position * layer.PositionScale,
+                                             nextPrsKey.Position * layer.PositionScale,
+                                             blend );
+            }
+
+            if ( prsKey.HasScale )
+            {
+                scale += Vector3.Lerp( prsKey.Scale * layer.ScaleScale,
+                                       nextPrsKey.Scale * layer.ScaleScale,
+                                       blend );
+            }
+        }
+
+        private static void InterpolateKeys( double animationTime, AnimationLayer layer, double animationDuration,
+                                             ref Quaternion rotation, ref Vector3 translation, ref Vector3 scale,
+                                             PRSKey prsKey, PRSKey nextPrsKey )
+        {
+            var blend = GetInterpolationAmount( animationTime, animationDuration, prsKey, nextPrsKey );
 
             if ( prsKey.HasRotation )
                 rotation = Quaternion.Slerp( prsKey.Rotation, nextPrsKey.Rotation, blend );
@@ -283,6 +351,27 @@ namespace GFDLibrary.Rendering.OpenGL
                                       nextPrsKey.Scale * layer.ScaleScale,
                                       blend );
             }
+        }
+
+        private static float GetInterpolationAmount( double animationTime, double animationDuration,
+                                                      PRSKey prsKey, PRSKey nextPrsKey )
+        {
+            var currentTime = ( double ) prsKey.Time;
+            var nextTime = ( double ) nextPrsKey.Time;
+            var sampleTime = animationTime;
+
+            if ( nextTime <= currentTime )
+            {
+                nextTime += animationDuration;
+                if ( sampleTime < currentTime )
+                    sampleTime += animationDuration;
+            }
+
+            var interval = nextTime - currentTime;
+            if ( interval <= 0 )
+                return 0;
+
+            return Math.Clamp( ( float ) ( ( sampleTime - currentTime ) / interval ), 0, 1 );
         }
 
         private static (Key curKey, Key nextKey) GetCurrentAndNextKeys( AnimationLayer layer, double animationTime )
