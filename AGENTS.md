@@ -6,3 +6,5 @@ Every feature commit must be numbered sequentially. Commit messages must always 
 
 1. The first line is the commit number.
 2. The second line is a super-short feature name.
+
+Push the commit.
