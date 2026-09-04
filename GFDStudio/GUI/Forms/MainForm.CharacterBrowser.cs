@@ -183,8 +183,6 @@ namespace GFDStudio.GUI.Forms
             // A blend slot is applied as one overlay at a time. Normal animations
             // remain multi-selectable for repacking.
             mCharacterBlendAnimationListBox.SelectionMode = SelectionMode.One;
-            mCharacterBlendAnimationListBox.DrawMode = DrawMode.OwnerDrawFixed;
-            mCharacterBlendAnimationListBox.DrawItem += CharacterBrowserListBox_DrawItem;
 
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
             // immediately load the newly selected model/animation.
@@ -328,31 +326,6 @@ namespace GFDStudio.GUI.Forms
             body.Controls.Add(listBox, 0, 1);
             group.Controls.Add(body);
             return group;
-        }
-
-        private static void CharacterBrowserListBox_DrawItem(object sender, DrawItemEventArgs e)
-        {
-            if (e.Index < 0)
-                return;
-
-            var listBox = (ListBox)sender;
-            var selected = listBox.SelectedIndices.Contains(e.Index);
-            var background = selected ? Color.FromArgb(0, 122, 204) : listBox.BackColor;
-            var foreground = selected ? Color.White : listBox.ForeColor;
-
-            using (var backgroundBrush = new SolidBrush(background))
-                e.Graphics.FillRectangle(backgroundBrush, e.Bounds);
-
-            TextRenderer.DrawText(
-                e.Graphics,
-                listBox.GetItemText(listBox.Items[e.Index]),
-                listBox.Font,
-                e.Bounds,
-                foreground,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-
-            if ((e.State & DrawItemState.Focus) != 0)
-                e.DrawFocusRectangle();
         }
 
         private void SetCharacterBrowserVisible(bool visible)
@@ -823,7 +796,6 @@ namespace GFDStudio.GUI.Forms
             try
             {
                 mCharacterBrowserCurrentModelPath = entry.Path;
-                var selectedBlend = mCharacterBlendAnimationListBox.SelectedItem as CharacterAnimationEntry;
                 SaveCharacterBrowserSelectionSettings();
                 OpenFile(entry.Path);
 
@@ -833,7 +805,7 @@ namespace GFDStudio.GUI.Forms
                     if (animation != null)
                     {
                         ModelViewControl.Instance.LoadAnimation(animation, true);
-                        ApplySelectedCharacterBrowserBlend(selectedBlend);
+                        ApplySelectedCharacterBrowserBlend();
                         SetCharacterBrowserStatus(
                             string.IsNullOrWhiteSpace(retargetNote)
                                 ? "Model: " + entry.DisplayName
@@ -859,10 +831,9 @@ namespace GFDStudio.GUI.Forms
             ApplySelectedCharacterBrowserBlend();
         }
 
-        private void ApplySelectedCharacterBrowserBlend(CharacterAnimationEntry selectedEntry = null)
+        private void ApplySelectedCharacterBrowserBlend()
         {
-            var entry = selectedEntry ?? mCharacterBlendAnimationListBox.SelectedItem as CharacterAnimationEntry;
-            if (entry == null)
+            if (mCharacterBlendAnimationListBox.SelectedItem is not CharacterAnimationEntry entry)
             {
                 ModelViewControl.Instance.UnloadAnimationOverlay();
                 return;
@@ -908,7 +879,6 @@ namespace GFDStudio.GUI.Forms
 
             try
             {
-                var selectedBlend = mCharacterBlendAnimationListBox.SelectedItem as CharacterAnimationEntry;
                 var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
                 if (animation == null)
                 {
@@ -918,7 +888,7 @@ namespace GFDStudio.GUI.Forms
 
                 // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
                 ModelViewControl.Instance.LoadAnimation(animation, true);
-                ApplySelectedCharacterBrowserBlend(selectedBlend);
+                ApplySelectedCharacterBrowserBlend();
                 SetCharacterBrowserStatus(
                     string.IsNullOrWhiteSpace(retargetNote)
                         ? "Animation: " + entry.DisplayName
