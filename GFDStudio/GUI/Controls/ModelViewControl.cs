@@ -398,6 +398,12 @@ namespace GFDStudio.GUI.Controls
             if ( !mCanRender || modelPack.Model == null )
                 return;
 
+            var preserveCamera = mCamera != null;
+            var cameraTranslation = preserveCamera ? mCamera.Translation : Vector3.Zero;
+            var cameraOffset = preserveCamera ? mCamera.Offset : Vector3.Zero;
+            var modelTranslation = preserveCamera ? mCamera.ModelTranslation : Vector3.Zero;
+            var modelRotation = preserveCamera ? mCamera.ModelRotation : Vector3.Zero;
+
             if ( mIsModelLoaded )
             {
                 // Unload previously loaded model to free memory
@@ -456,6 +462,14 @@ namespace GFDStudio.GUI.Controls
 
             // Initialize camera
             InitializeCamera();
+
+            if ( preserveCamera )
+            {
+                mCamera.Translation = cameraTranslation;
+                mCamera.Offset = cameraOffset;
+                mCamera.ModelTranslation = modelTranslation;
+                mCamera.ModelRotation = modelRotation;
+            }
 
             if ( Animation != null )
             {
