@@ -1,7 +1,28 @@
-# GFD Studio [![Build status](https://ci.appveyor.com/api/projects/status/l3p8joj4frjkn753?svg=true)](https://ci.appveyor.com/project/tge/gfd-studio)
+# GFD Studio
 **GFD Studio** is a tool for viewing, editing and converting models in **GMD**/**GFS** format.  
 ## Latest builds
-Latest debug/release builds can be found here: https://ci.appveyor.com/project/tge/gfd-studio/build/artifacts
+
+Every pushed branch is built on GitHub Actions as a self-contained Windows x64 release. The workflow uploads a downloadable `gfdstudio-windows-x64` artifact.
+
+To fetch the latest successful build without compiling locally, run:
+
+```bat
+run-latest-build.bat
+```
+
+To download it without launching the application, run `fetch-latest-build.ps1`. The script reads the GitHub owner/repository and current branch from the local checkout, and places the downloaded files in `GFDStudio-binary`. Use `-Repository owner/repository` or `-Branch branch-name` to override them.
+
+The same fetch operation is available in VS Code through `Terminal > Run Task > GFD Studio: Fetch latest binary`; it is also the default build task (`Ctrl+Shift+B`). Use `GFD Studio: Fetch and run latest binary` to launch the downloaded build.
+
+To have every successful build fetched automatically after `git push`, enable the repository's post-push hook once:
+
+```powershell
+.\install-git-hooks.ps1
+```
+
+After that, a successful push waits for the matching GitHub Actions pipeline to finish and downloads its artifact. Failed pipelines are reported by the push command and are not downloaded. The same setup is available in VS Code through `Terminal > Run Task > GFD Studio: Enable post-push auto-fetch`.
+
+For a continuously running monitor instead, use `GFD Studio: Watch and auto-fetch latest binary`. It checks every 30 seconds and can be started or stopped from `Terminal > Run Task`. If the downloaded binary is currently running, Windows may prevent replacement until GFD Studio is closed.
 
 ## Features
 - View a rendered preview of the opened model
@@ -9,7 +30,7 @@ Latest debug/release builds can be found here: https://ci.appveyor.com/project/t
 - Export, replace and edit **Materials** and their maps & properties
 - Export and import models using assimp (automatic conversion to and from DAE/FBX)
 ## Requirements
-- .NET Framework 6 runtime installed
+- .NET 8 SDK and the FBX SDK 2020.3.7 to build locally
 - A videocard that supports at least OpenGL 3.3 to use the model viewer.
 (This is required for compiling shaders)
 ## Building

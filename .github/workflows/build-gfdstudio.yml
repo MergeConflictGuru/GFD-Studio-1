@@ -1,0 +1,125 @@
+name: Build GFD Studio
+
+on:
+  push:
+    branches: ['**']
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FBX_SDK_ROOT: 'C:\fbxsdk'
+  FBX_SDK_URL: 'https://damassets.autodesk.net/content/dam/autodesk/www/files/fbx202037_fbxsdk_vs2022_win.exe'
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Cache FBX SDK
+        id: fbx-sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\fbxsdk
+          key: windows-2022-fbx-sdk-2020.3.7-vs2022
+
+      - name: Install FBX SDK
+        if: steps.fbx-sdk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'fbxsdk.exe'
+          Invoke-WebRequest -Uri $env:FBX_SDK_URL -OutFile $installer
+
+          # The Autodesk FBX SDK installer is an NSIS installer. /D must be last.
+          $process = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$env:FBX_SDK_ROOT") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "FBX SDK installer failed with exit code $($process.ExitCode)."
+          }
+
+      - name: Verify FBX SDK
+        shell: pwsh
+        run: |
+          $requiredFiles = @(
+            (Join-Path $env:FBX_SDK_ROOT 'include\fbxsdk.h'),
+            (Join-Path $env:FBX_SDK_ROOT 'lib\x64\release\libfbxsdk-md.lib'),
+            (Join-Path $env:FBX_SDK_ROOT 'lib\x64\release\libxml2-md.lib'),
+            (Join-Path $env:FBX_SDK_ROOT 'lib\x64\release\zlib-md.lib')
+          )
+
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Required FBX SDK file was not found: $file"
+            }
+          }
+
+      - name: Publish self-contained x64 binary
+        shell: pwsh
+        run: |
+          $publishDirectory = Join-Path $env:RUNNER_TEMP 'gfdstudio-publish'
+          Remove-Item -LiteralPath $publishDirectory -Recurse -Force -ErrorAction SilentlyContinue
+
+          dotnet restore GFDStudio\GFDStudio.csproj `
+            --runtime win-x64 `
+            /p:Platform=x64 `
+            /p:FBXSDKRoot="$env:FBX_SDK_ROOT" `
+            /verbosity:minimal
+
+          msbuild GFDLibrary.Conversion.FbxSdk\GFDLibrary.Conversion.FbxSdk.vcxproj /t:Restore `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:RuntimeIdentifier=win-x64 `
+            /p:RestoreRuntimeIdentifier=win-x64 `
+            /p:FBXSDKRoot="$env:FBX_SDK_ROOT" `
+            /verbosity:minimal
+
+          $fbxAssetsFile = Join-Path (Get-Location) 'GFDLibrary.Conversion.FbxSdk\obj\project.assets.json'
+          if (-not (Test-Path -LiteralPath $fbxAssetsFile)) {
+            throw "C++/CLI restore did not create the assets file: $fbxAssetsFile"
+          }
+
+          msbuild GFDStudio\GFDStudio.csproj /t:Publish `
+            /p:Configuration=Release `
+            /p:TargetFramework=net8.0-windows `
+            /p:RuntimeIdentifier=win-x64 `
+            /p:SelfContained=true `
+            /p:PublishDir="$publishDirectory\" `
+            /p:Platform=x64 `
+            /p:FBXSDKRoot="$env:FBX_SDK_ROOT" `
+            /p:PublishSingleFile=false `
+            /p:DebugType=None `
+            /p:DebugSymbols=false `
+            /verbosity:minimal
+
+          if (-not (Test-Path -LiteralPath (Join-Path $publishDirectory 'GFDStudio.exe'))) {
+            throw 'Publish completed without producing GFDStudio.exe.'
+          }
+
+          $refName = $env:GITHUB_REF_NAME -replace '[^A-Za-z0-9._-]', '-'
+          $archive = Join-Path $env:RUNNER_TEMP "GFDStudio-$refName-win-x64.zip"
+          Compress-Archive -Path (Join-Path $publishDirectory '*') -DestinationPath $archive -CompressionLevel Optimal
+
+      - name: Upload Windows binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gfdstudio-windows-x64
+          path: ${{ runner.temp }}/GFDStudio-*-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
