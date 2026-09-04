@@ -71,6 +71,8 @@ namespace GFDStudio.GUI.Controls
 
         public Animation Animation { get; private set; }
 
+        public Animation AnimationOverlay { get; private set; }
+
         public bool IsAnimationLoaded => Animation != null;
 
         public AnimationPlaybackState AnimationPlayback
@@ -93,7 +95,11 @@ namespace GFDStudio.GUI.Controls
                         break;
                     case AnimationPlaybackState.Playing:
                         if ( mModel?.Animation == null && IsAnimationLoaded )
+                        {
                             mModel?.LoadAnimation( Animation );
+                            if ( AnimationOverlay != null )
+                                mModel?.LoadBlendAnimation( AnimationOverlay );
+                        }
                         break;
                 }
 
@@ -474,7 +480,10 @@ namespace GFDStudio.GUI.Controls
             if ( Animation != null )
             {
                 // Apply previously loaded animation to new model
+                var animationOverlay = AnimationOverlay;
                 LoadAnimation( Animation, AnimationPlayback != AnimationPlaybackState.Playing );
+                if ( animationOverlay != null )
+                    LoadAnimationOverlay( animationOverlay );
             }
 
             Invalidate();
@@ -483,6 +492,7 @@ namespace GFDStudio.GUI.Controls
         public void LoadAnimation( Animation animation, bool reset = true )
         {
             Animation = animation;
+            AnimationOverlay = null;
             mModel?.LoadAnimation( Animation );
 
             AnimationLoaded?.Invoke( this, animation );
@@ -492,6 +502,18 @@ namespace GFDStudio.GUI.Controls
                 AnimationTime = 0;
                 AnimationPlayback = AnimationPlaybackState.Playing;
             }
+        }
+
+        public void LoadAnimationOverlay( Animation animation )
+        {
+            AnimationOverlay = animation;
+            mModel?.LoadBlendAnimation( animation );
+        }
+
+        public void UnloadAnimationOverlay()
+        {
+            AnimationOverlay = null;
+            mModel?.UnloadBlendAnimation();
         }
 
         /// <summary> 
