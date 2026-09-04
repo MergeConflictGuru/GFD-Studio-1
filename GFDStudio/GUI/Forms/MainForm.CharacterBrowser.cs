@@ -183,6 +183,8 @@ namespace GFDStudio.GUI.Forms
             // A blend slot is applied as one overlay at a time. Normal animations
             // remain multi-selectable for repacking.
             mCharacterBlendAnimationListBox.SelectionMode = SelectionMode.One;
+            mCharacterBlendAnimationListBox.DrawMode = DrawMode.OwnerDrawFixed;
+            mCharacterBlendAnimationListBox.DrawItem += CharacterBrowserListBox_DrawItem;
 
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
             // immediately load the newly selected model/animation.
@@ -319,11 +321,8 @@ namespace GFDStudio.GUI.Forms
                 IntegralHeight = false,
                 HorizontalScrollbar = true,
                 Font = new Font("Consolas", 9F),
-                DrawMode = DrawMode.OwnerDrawFixed,
                 Margin = Padding.Empty
             };
-
-            listBox.DrawItem += CharacterBrowserListBox_DrawItem;
 
             body.Controls.Add(filterTextBox, 0, 0);
             body.Controls.Add(listBox, 0, 1);
