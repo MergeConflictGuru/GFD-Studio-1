@@ -160,6 +160,7 @@ namespace GFDStudio.GUI.Forms
             mCharacterAnimationFilterTextBox.TextChanged += (s, e) => RefreshCharacterAnimationList();
             mCharacterModelListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
             mCharacterAnimationListBox.SelectedIndexChanged += CharacterAnimationListBox_SelectedIndexChanged;
+            mCharacterAnimationListBox.SelectionMode = SelectionMode.MultiExtended;
 
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
             // immediately load the newly selected model/animation.
@@ -188,7 +189,7 @@ namespace GFDStudio.GUI.Forms
             var toolbar = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 4,
+                ColumnCount = 5,
                 RowCount = 1,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
@@ -196,6 +197,7 @@ namespace GFDStudio.GUI.Forms
             };
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
             toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 58));
 
@@ -219,6 +221,9 @@ namespace GFDStudio.GUI.Forms
                     StartCharacterBrowserScan(mCharacterBrowserRoot);
             };
 
+            var repackButton = CreateCharacterBrowserButton("Repack");
+            repackButton.Click += (s, e) => RepackCharacterAnimations();
+
             var editorButton = CreateCharacterBrowserButton("Editor");
             editorButton.Click += (s, e) =>
             {
@@ -228,7 +233,8 @@ namespace GFDStudio.GUI.Forms
             toolbar.Controls.Add(mCharacterRootTextBox, 0, 0);
             toolbar.Controls.Add(browseButton, 1, 0);
             toolbar.Controls.Add(rescanButton, 2, 0);
-            toolbar.Controls.Add(editorButton, 3, 0);
+            toolbar.Controls.Add(repackButton, 3, 0);
+            toolbar.Controls.Add(editorButton, 4, 0);
             return toolbar;
         }
 
@@ -679,6 +685,111 @@ namespace GFDStudio.GUI.Forms
             {
                 SetCharacterBrowserStatus("Animation load failed: " + ex.Message);
             }
+        }
+
+        private void RepackCharacterAnimations()
+        {
+            var entries = mCharacterAnimationListBox.SelectedItems
+                .Cast<CharacterAnimationEntry>()
+                .ToList();
+
+            if (entries.Count == 0)
+            {
+                SetCharacterBrowserStatus("Select one or more animations to repack");
+                return;
+            }
+
+            using var dialog = new SaveFileDialog
+            {
+                Filter = "Animation pack (*.GAP)|*.GAP|All files (*.*)|*.*",
+                DefaultExt = "GAP",
+                AddExtension = true,
+                OverwritePrompt = true,
+                FileName = "repacked.GAP",
+                Title = "Save repacked animation pack"
+            };
+
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                var output = CreateCharacterBrowserAnimationPack(entries);
+                output.Save(dialog.FileName);
+                SetCharacterBrowserStatus($"Repacked {entries.Count:N0} animations: {dialog.FileName}");
+            }
+            catch (Exception ex)
+            {
+                SetCharacterBrowserStatus("Repack failed: " + ex.Message);
+            }
+        }
+
+        private static AnimationPack CreateCharacterBrowserAnimationPack(
+            IReadOnlyList<CharacterAnimationEntry> entries)
+        {
+            var sourcePacks = new Dictionary<string, AnimationPack>(StringComparer.OrdinalIgnoreCase);
+            var firstSource = LoadCharacterBrowserSourcePack(entries[0], sourcePacks);
+            var output = new AnimationPack(firstSource.Version)
+            {
+                // Bit 2 controls the optional Bit29Data resource. It is intentionally omitted
+                // because that resource cannot be merged safely when entries come from multiple
+                // source packs.
+                Flags = firstSource.Flags & ~AnimationPackFlags.Bit2,
+                METAPHOR_AnimArray3 = ResourceVersion.IsV2(firstSource.Version)
+                    ? new List<Animation>()
+                    : null
+            };
+
+            foreach (var entry in entries)
+            {
+                var source = LoadCharacterBrowserSourcePack(entry, sourcePacks);
+                if (source.Version != output.Version)
+                {
+                    throw new InvalidDataException(
+                        "Selected animations use different resource versions and cannot share a pack.");
+                }
+
+                var animation = GetCharacterBrowserAnimation(source, entry);
+                if (animation == null)
+                    throw new InvalidDataException("Animation no longer exists in pack: " + entry.DisplayName);
+
+                switch (entry.Kind)
+                {
+                    case CharacterAnimationListKind.Animation:
+                        output.Animations.Add(animation);
+                        break;
+
+                    case CharacterAnimationListKind.BlendAnimation:
+                        output.BlendAnimations.Add(animation);
+                        break;
+
+                    case CharacterAnimationListKind.ExtraAnimation:
+                        if (output.METAPHOR_AnimArray3 == null)
+                            throw new InvalidDataException(
+                                "Extra animations require a version 2 animation pack.");
+
+                        output.METAPHOR_AnimArray3.Add(animation);
+                        break;
+                }
+            }
+
+            return output;
+        }
+
+        private static AnimationPack LoadCharacterBrowserSourcePack(
+            CharacterAnimationEntry entry,
+            IDictionary<string, AnimationPack> sourcePacks)
+        {
+            if (!sourcePacks.TryGetValue(entry.PackPath, out var pack))
+            {
+                pack = Resource.Load<AnimationPack>(entry.PackPath);
+                if (pack == null || pack.RawData != null)
+                    throw new InvalidDataException("Animation pack cannot be repacked: " + entry.PackPath);
+
+                sourcePacks.Add(entry.PackPath, pack);
+            }
+
+            return pack;
         }
 
         private Animation PrepareCharacterBrowserAnimation(CharacterAnimationEntry entry, out string retargetNote)
