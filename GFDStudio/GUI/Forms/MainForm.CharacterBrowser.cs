@@ -320,6 +320,7 @@ namespace GFDStudio.GUI.Forms
                 IntegralHeight = false,
                 HorizontalScrollbar = true,
                 Font = new Font("Consolas", 9F),
+                HideSelection = false,
                 Margin = Padding.Empty
             };
 
@@ -436,15 +437,23 @@ namespace GFDStudio.GUI.Forms
                 if (token.IsCancellationRequested || generation != mCharacterBrowserScanGeneration)
                     return;
 
-                foreach (var path in files.models)
+                mCharacterBrowserRestoringSelection = true;
+                try
                 {
-                    mCharacterModels.Add(new CharacterModelEntry
+                    foreach (var path in files.models)
                     {
-                        Path = path,
-                        DisplayName = MakeCharacterBrowserRelativePath(path)
-                    });
+                        mCharacterModels.Add(new CharacterModelEntry
+                        {
+                            Path = path,
+                            DisplayName = MakeCharacterBrowserRelativePath(path)
+                        });
+                    }
+                    RefreshCharacterModelList();
                 }
-                RefreshCharacterModelList();
+                finally
+                {
+                    mCharacterBrowserRestoringSelection = false;
+                }
 
                 SetCharacterBrowserStatus($"{files.models.Count:N0} models; indexing {files.gaps.Count:N0} GAP files...");
 
@@ -485,7 +494,15 @@ namespace GFDStudio.GUI.Forms
                                 if (token.IsCancellationRequested || generation != mCharacterBrowserScanGeneration)
                                     return;
 
-                                AddCharacterAnimationBatch(toAdd);
+                                mCharacterBrowserRestoringSelection = true;
+                                try
+                                {
+                                    AddCharacterAnimationBatch(toAdd);
+                                }
+                                finally
+                                {
+                                    mCharacterBrowserRestoringSelection = false;
+                                }
                                 var restored = parsedSnapshot == files.gaps.Count &&
                                                RestoreCharacterBrowserSelection();
                                 if (!restored)
@@ -741,6 +758,7 @@ namespace GFDStudio.GUI.Forms
                 if (modelIndex >= 0)
                     mCharacterModelListBox.SelectedIndex = modelIndex;
 
+                mCharacterAnimationListBox.ClearSelected();
                 foreach (var index in animationIndexes)
                     mCharacterAnimationListBox.SetSelected(index, true);
 
@@ -780,6 +798,7 @@ namespace GFDStudio.GUI.Forms
             try
             {
                 mCharacterBrowserCurrentModelPath = entry.Path;
+                var selectedBlend = mCharacterBlendAnimationListBox.SelectedItem as CharacterAnimationEntry;
                 SaveCharacterBrowserSelectionSettings();
                 OpenFile(entry.Path);
 
@@ -789,7 +808,7 @@ namespace GFDStudio.GUI.Forms
                     if (animation != null)
                     {
                         ModelViewControl.Instance.LoadAnimation(animation, true);
-                        ApplySelectedCharacterBrowserBlend();
+                        ApplySelectedCharacterBrowserBlend(selectedBlend);
                         SetCharacterBrowserStatus(
                             string.IsNullOrWhiteSpace(retargetNote)
                                 ? "Model: " + entry.DisplayName
@@ -815,9 +834,10 @@ namespace GFDStudio.GUI.Forms
             ApplySelectedCharacterBrowserBlend();
         }
 
-        private void ApplySelectedCharacterBrowserBlend()
+        private void ApplySelectedCharacterBrowserBlend(CharacterAnimationEntry selectedEntry = null)
         {
-            if (mCharacterBlendAnimationListBox.SelectedItem is not CharacterAnimationEntry entry)
+            var entry = selectedEntry ?? mCharacterBlendAnimationListBox.SelectedItem as CharacterAnimationEntry;
+            if (entry == null)
             {
                 ModelViewControl.Instance.UnloadAnimationOverlay();
                 return;
@@ -863,6 +883,7 @@ namespace GFDStudio.GUI.Forms
 
             try
             {
+                var selectedBlend = mCharacterBlendAnimationListBox.SelectedItem as CharacterAnimationEntry;
                 var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
                 if (animation == null)
                 {
@@ -872,7 +893,7 @@ namespace GFDStudio.GUI.Forms
 
                 // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
                 ModelViewControl.Instance.LoadAnimation(animation, true);
-                ApplySelectedCharacterBrowserBlend();
+                ApplySelectedCharacterBrowserBlend(selectedBlend);
                 SetCharacterBrowserStatus(
                     string.IsNullOrWhiteSpace(retargetNote)
                         ? "Animation: " + entry.DisplayName
