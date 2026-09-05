@@ -45,11 +45,12 @@ function Get-GfdStudioPathImpact {
     }
 
     if ($normalizedPath -match '^GFDStudio/(?:app_data|Presets)/(?<asset>.+)$') {
+        $assetRoot = $normalizedPath.Substring('GFDStudio/'.Length).Split('/')[0]
         return [pscustomobject]@{
             Full     = $false
             NonBuild = $false
             Asset    = $true
-            Files    = @($Matches.asset)
+            Files    = @("$assetRoot/$($Matches.asset)")
         }
     }
 
