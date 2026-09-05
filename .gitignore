@@ -31,6 +31,7 @@ _ReSharper*/
 AtlusGfdLibTesting/
 /.vs/AtlusGfdEditor/v15
 /packages
+/.nuget-packages/
 /.vs
 /Resources/TestData
 /GFDStudio-binary/

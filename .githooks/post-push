@@ -1,7 +1,8 @@
 #!/bin/sh
 
 # Git invokes post-push after the remote accepts the push. For every pushed
-# branch, wait for that exact commit's Actions run and fetch its artifact.
+# branch that changes build inputs, wait for that exact commit's Actions run
+# and fetch its artifact.
 repo_root=$(git rev-parse --show-toplevel) || exit 1
 fetch_script="$repo_root/fetch-latest-build.ps1"
 
@@ -27,7 +28,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
             powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass \
                 -File "$fetch_script" \
                 -Branch "$branch" \
-                -Commit "$local_sha"
+                -Commit "$local_sha" \
+                -SourceCommit "$remote_sha"
             if [ $? -ne 0 ]; then
                 exit 1
             fi
