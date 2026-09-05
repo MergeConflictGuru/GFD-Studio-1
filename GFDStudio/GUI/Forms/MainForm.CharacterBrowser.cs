@@ -718,31 +718,30 @@ namespace GFDStudio.GUI.Forms
 
         private void FinalizeCharacterBrowserAnimationLists()
         {
-            mCharacterAnimations.Sort((first, second) =>
-            {
-                var result = StringComparer.OrdinalIgnoreCase.Compare(first.PackPath, second.PackPath);
-                if (result != 0)
-                    return result;
+            // Entries are inserted in display order as scan batches arrive, so finalization
+            // should not rebuild the list and cause a visible reset.
+            mCharacterAnimations.Sort(CompareCharacterBrowserAnimationEntries);
+            mCharacterBlendAnimations.Sort(CompareCharacterBrowserBlendAnimationEntries);
+        }
 
-                result = first.Kind.CompareTo(second.Kind);
-                return result != 0 ? result : first.Index.CompareTo(second.Index);
-            });
-            mCharacterBlendAnimations.Sort((first, second) =>
-            {
-                var result = StringComparer.OrdinalIgnoreCase.Compare(first.PackPath, second.PackPath);
-                return result != 0 ? result : first.Index.CompareTo(second.Index);
-            });
+        private static int CompareCharacterBrowserAnimationEntries(
+            CharacterAnimationEntry first,
+            CharacterAnimationEntry second)
+        {
+            var result = StringComparer.OrdinalIgnoreCase.Compare(first.PackPath, second.PackPath);
+            if (result != 0)
+                return result;
 
-            mCharacterBrowserRestoringSelection = true;
-            try
-            {
-                RefreshCharacterAnimationList();
-                RefreshCharacterBlendAnimationList();
-            }
-            finally
-            {
-                mCharacterBrowserRestoringSelection = false;
-            }
+            result = first.Kind.CompareTo(second.Kind);
+            return result != 0 ? result : first.Index.CompareTo(second.Index);
+        }
+
+        private static int CompareCharacterBrowserBlendAnimationEntries(
+            CharacterAnimationEntry first,
+            CharacterAnimationEntry second)
+        {
+            var result = StringComparer.OrdinalIgnoreCase.Compare(first.PackPath, second.PackPath);
+            return result != 0 ? result : first.Index.CompareTo(second.Index);
         }
 
         private List<string> GetCharacterBrowserPriorityPaths(string root, string extension)
@@ -993,11 +992,24 @@ namespace GFDStudio.GUI.Forms
                     var destinationAddDirectly = entry.Kind == CharacterAnimationListKind.BlendAnimation
                         ? addBlendDirectly
                         : addDirectly;
+                    Comparison<CharacterAnimationEntry> comparer = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? CompareCharacterBrowserBlendAnimationEntries
+                        : CompareCharacterBrowserAnimationEntries;
 
-                    destination.Add(entry);
+                    var destinationIndex = FindCharacterBrowserAnimationInsertIndex(
+                        destination,
+                        entry,
+                        comparer);
+                    destination.Insert(destinationIndex, entry);
                     if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
                         (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
-                        destinationListBox.Items.Add(entry);
+                    {
+                        var listBoxIndex = FindCharacterBrowserAnimationInsertIndex(
+                            destinationListBox,
+                            entry,
+                            comparer);
+                        destinationListBox.Items.Insert(listBoxIndex, entry);
+                    }
                 }
             }
             finally
@@ -1005,6 +1017,40 @@ namespace GFDStudio.GUI.Forms
                 mCharacterAnimationListBox.EndUpdate();
                 mCharacterBlendAnimationListBox.EndUpdate();
             }
+        }
+
+        private static int FindCharacterBrowserAnimationInsertIndex(
+            IList<CharacterAnimationEntry> entries,
+            CharacterAnimationEntry entry,
+            Comparison<CharacterAnimationEntry> comparer)
+        {
+            var lower = 0;
+            var upper = entries.Count;
+            while (lower < upper)
+            {
+                var middle = lower + ((upper - lower) / 2);
+                if (comparer(entries[middle], entry) <= 0)
+                    lower = middle + 1;
+                else
+                    upper = middle;
+            }
+
+            return lower;
+        }
+
+        private static int FindCharacterBrowserAnimationInsertIndex(
+            ListBox listBox,
+            CharacterAnimationEntry entry,
+            Comparison<CharacterAnimationEntry> comparer)
+        {
+            for (var index = 0; index < listBox.Items.Count; index++)
+            {
+                if (listBox.Items[index] is CharacterAnimationEntry existing &&
+                    comparer(existing, entry) > 0)
+                    return index;
+            }
+
+            return listBox.Items.Count;
         }
 
         private void RefreshCharacterModelList()
