@@ -15,6 +15,13 @@ namespace GFDLibrary.Rendering.OpenGL
 
         public GLVertexArray VertexArray { get; }
 
+        /// <summary>
+        /// The vertex positions currently uploaded for this mesh. For skinned
+        /// meshes these are rebuilt from the current animation pose before the
+        /// mesh is drawn, so consumers can calculate an animated world bound.
+        /// </summary>
+        public Vector3[] VertexPositions { get; }
+
         public GLBaseMaterial Material { get; }
 
         public bool IsVisible { get; }
@@ -22,6 +29,7 @@ namespace GFDLibrary.Rendering.OpenGL
         public GLMesh( GLVertexArray vertexArray, GLBaseMaterial material, bool isVisible )
         {
             Mesh = null;
+            VertexPositions = null;
             VertexArray = vertexArray;
             Material = material;
             IsVisible = isVisible;
@@ -68,6 +76,8 @@ namespace GFDLibrary.Rendering.OpenGL
                             Vector3.Normalize( Vector3.TransformNormal( newNormal, modelMatrixInv ) );
                 }
             }
+
+            VertexPositions = vertices;
 
             var indices = new uint[mesh.Triangles.Length * 3];
             for ( int i = 0; i < mesh.Triangles.Length; i++ )
