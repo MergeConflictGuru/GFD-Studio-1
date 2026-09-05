@@ -70,7 +70,6 @@ namespace GFDStudio.GUI.Controls
         // Animation
         private Stopwatch mTimeCounter;
         private double mLastTime;
-        private Timer mUpdateTimer;
         private AnimationPlaybackState mAnimationPlayback = AnimationPlaybackState.Stopped;
         private double mAnimationTime;
         private float mGuideArrowOpacity;
@@ -99,10 +98,13 @@ namespace GFDStudio.GUI.Controls
                     case AnimationPlaybackState.Stopped:
                         AnimationTime = 0;
                         mModel?.UnloadAnimation();
+                        ResetAnimationClock();
                         break;
                     case AnimationPlaybackState.Paused:
+                        ResetAnimationClock();
                         break;
                     case AnimationPlaybackState.Playing:
+                        ResetAnimationClock();
                         if ( mModel?.Animation == null && IsAnimationLoaded )
                         {
                             mModel?.LoadAnimation( Animation );
@@ -149,6 +151,9 @@ namespace GFDStudio.GUI.Controls
 
             // required to use GL in the context of this control
             MakeCurrent();
+            // Let SwapBuffers pace the preview to the display refresh rate instead of
+            // imposing a separate 60 Hz timer on the showroom/editor viewport.
+            VSync = true;
             LogGLInfo();
 
             if ( !InitializeShaders() )
@@ -512,6 +517,7 @@ namespace GFDStudio.GUI.Controls
             if ( reset )
             {
                 AnimationTime = 0;
+                ResetAnimationClock();
                 AnimationPlayback = AnimationPlaybackState.Playing;
             }
         }
@@ -542,6 +548,8 @@ namespace GFDStudio.GUI.Controls
                 mShaderRegistry.mDefaultShader?.Dispose();
                 mShaderRegistry.mGuideArrowShader?.Dispose();
 
+                Application.Idle -= HandleApplicationIdle;
+
                 if ( mIsModelLoaded )
                     UnloadModel();
             }
@@ -557,21 +565,20 @@ namespace GFDStudio.GUI.Controls
         {
             mTimeCounter = new Stopwatch();
             mTimeCounter.Start();
+            mLastTime = mTimeCounter.Elapsed.TotalSeconds;
+            Application.Idle += HandleApplicationIdle;
+        }
 
-            mUpdateTimer = new Timer();
-            mUpdateTimer.Interval = (int)( ( 1f / 60f ) * 1000 );
-            mUpdateTimer.Tick += ( o, s ) =>
+        private void HandleApplicationIdle( object sender, EventArgs e )
+        {
+            // With VSync enabled, SwapBuffers blocks until the next display refresh.
+            // Rendering directly from the idle loop therefore follows 60/120/144 Hz
+            // displays without relying on a coarse WinForms timer.
+            while ( mCanRender && mCamera != null &&
+                    AnimationPlayback == AnimationPlaybackState.Playing && IsIdle )
             {
-                if ( !mCanRender )
-                    return;
-
-                ExecuteTimedCallback( () =>
-                {
-                    if ( AnimationPlayback == AnimationPlaybackState.Playing )
-                        Invalidate();
-                } );
-            };
-            mUpdateTimer.Start();
+                RenderFrame();
+            }
         }
 
         private void ExecuteTimedCallback( Action action )
@@ -592,6 +599,12 @@ namespace GFDStudio.GUI.Controls
             mLastTime = curTime;
         }
 
+        private void ResetAnimationClock()
+        {
+            if ( mTimeCounter != null )
+                mLastTime = mTimeCounter.Elapsed.TotalSeconds;
+        }
+
         /// <summary>
         /// Executed when a frame is rendered.
         /// </summary>
@@ -601,6 +614,11 @@ namespace GFDStudio.GUI.Controls
             if ( !mCanRender || mCamera == null )
                 return;
 
+            RenderFrame();
+        }
+
+        private void RenderFrame()
+        {
             ExecuteTimedCallback( () =>
             {
                 // clear the buffers
