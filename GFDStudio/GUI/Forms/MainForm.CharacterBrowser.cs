@@ -1267,6 +1267,18 @@ namespace GFDStudio.GUI.Forms
             var blendIndex = hasBlendSelection
                 ? FindCharacterBrowserAnimationIndex(mCharacterBlendAnimationListBox, blendSelection)
                 : -1;
+            var allAnimationsRestored = animationIndexes.Count == animationSelections.Count;
+            var currentAnimationIndexes = mCharacterAnimationListBox.SelectedIndices
+                .Cast<int>()
+                .OrderBy(index => index)
+                .ToList();
+            var targetAnimationIndexes = animationIndexes
+                .OrderBy(index => index)
+                .ToList();
+            var animationSelectionChanged = allAnimationsRestored &&
+                                            !currentAnimationIndexes.SequenceEqual(targetAnimationIndexes);
+            var blendSelectionChanged = blendIndex >= 0 &&
+                                        mCharacterBlendAnimationListBox.SelectedIndex != blendIndex;
 
             var hasSavedSelection = !string.IsNullOrWhiteSpace(modelPath) ||
                                     !string.IsNullOrWhiteSpace(facePath) ||
@@ -1285,11 +1297,17 @@ namespace GFDStudio.GUI.Forms
                 if (hairIndex >= 0)
                     mCharacterHairListBox.SelectedIndex = hairIndex;
 
-                mCharacterAnimationListBox.ClearSelected();
-                foreach (var index in animationIndexes)
-                    mCharacterAnimationListBox.SetSelected(index, true);
+                // Animation entries arrive in batches while the scan is running. Do not replace
+                // the current selection with a partial saved selection, and do not clear/reapply
+                // an already-restored selection on every scan phase.
+                if (animationSelectionChanged)
+                {
+                    mCharacterAnimationListBox.ClearSelected();
+                    foreach (var index in animationIndexes)
+                        mCharacterAnimationListBox.SetSelected(index, true);
+                }
 
-                if (blendIndex >= 0)
+                if (blendSelectionChanged)
                     mCharacterBlendAnimationListBox.SelectedIndex = blendIndex;
             }
             finally
@@ -1316,7 +1334,7 @@ namespace GFDStudio.GUI.Forms
                         : faceIndex >= 0 ? mCharacterFaceListBox : mCharacterHairListBox;
                     CharacterModelListBox_SelectedIndexChanged(modelSender, EventArgs.Empty);
                 }
-                else if (animationIndexes.Count > 0)
+                else if (animationSelectionChanged)
                     CharacterAnimationListBox_SelectedIndexChanged(mCharacterAnimationListBox, EventArgs.Empty);
             }
             finally
@@ -1327,7 +1345,6 @@ namespace GFDStudio.GUI.Forms
             var allModelsRestored = string.IsNullOrWhiteSpace(modelPath) || modelIndex >= 0;
             allModelsRestored &= string.IsNullOrWhiteSpace(facePath) || faceIndex >= 0;
             allModelsRestored &= string.IsNullOrWhiteSpace(hairPath) || hairIndex >= 0;
-            var allAnimationsRestored = animationIndexes.Count == animationSelections.Count;
             var allSelectionsRestored = allModelsRestored && allAnimationsRestored &&
                                         (!hasBlendSelection || blendIndex >= 0);
             mCharacterBrowserSelectionRestoredForScan = allSelectionsRestored;
