@@ -932,20 +932,27 @@ namespace GFDStudio.GUI.Controls
             if ( e.Button == MouseButtons.Left )
                 Raypick( e.X, e.Y );
         }
+
+        protected override void OnMouseDown( System.Windows.Forms.MouseEventArgs e )
+        {
+            mLastMouseLocation = e.Location;
+            base.OnMouseDown( e );
+        }
+
         protected override void OnMouseMove( System.Windows.Forms.MouseEventArgs e )
         {
             if ( !mIsModelLoaded )
                 return;
             bool left = e.Button.HasFlag( MouseButtons.Left );
             bool right = e.Button.HasFlag( MouseButtons.Right );
-            if ( left || right )
+            bool middle = e.Button.HasFlag( MouseButtons.Middle );
+            if ( left || right || middle )
             {
-                float multiplier = CalculateMultiplier();
-
                 var locationDelta = GetMouseLocationDelta( e.Location );
 
                 if ( right )
                 {
+                    float multiplier = CalculateMultiplier();
                     mCamera.ModelTranslation = new Vector3(
                          mCamera.ModelTranslation.X + ( locationDelta.X / 3f ) * multiplier,
                          mCamera.ModelTranslation.Y - ( locationDelta.Y / 3f ) * multiplier,
@@ -953,10 +960,18 @@ namespace GFDStudio.GUI.Controls
                 }
                 else if ( left )
                 {
+                    float multiplier = CalculateMultiplier();
                     mCamera.ModelRotation = new Vector3(
                         mCamera.ModelRotation.X + locationDelta.Y * 0.01f * multiplier,
                         mCamera.ModelRotation.Y + locationDelta.X * 0.01f * multiplier,
                         mCamera.ModelRotation.Z );
+                }
+                else if ( middle )
+                {
+                    float multiplier = CalculateMultiplier( 0.25f );
+                    var translation = mCamera.ModelTranslation;
+                    translation.Z -= locationDelta.Y * multiplier;
+                    mCamera.ModelTranslation = translation;
                 }
                 Invalidate();
             }
