@@ -63,9 +63,12 @@ $env:FBXSDKRoot = $fbxSdkRoot
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 
 $runningProcesses = @(Get-Process -Name GFDStudio -ErrorAction SilentlyContinue)
-if ($runningProcesses.Count -gt 0) {
+$restartAfterBuild = $runningProcesses.Count -gt 0
+if ($restartAfterBuild) {
     $processIds = $runningProcesses.Id -join ', '
-    throw "GFD Studio is running (PID $processIds). Close it before starting the Release build."
+    Write-Host "[release] Stopping GFD Studio (PID $processIds) before replacing the build..."
+    $runningProcesses | Stop-Process -Force
+    Start-Sleep -Milliseconds 250
 }
 
 function Invoke-MSBuild {
@@ -96,56 +99,61 @@ foreach ($outputFile in @('GFDStudio.dll', 'GFDStudio.exe')) {
 $mainProject = Join-Path $workspace 'GFDStudio\GFDStudio.csproj'
 $fbxProject = Join-Path $workspace 'GFDLibrary.Conversion.FbxSdk\GFDLibrary.Conversion.FbxSdk.vcxproj'
 $publishDirectory = $binaryDirectory.TrimEnd('\') + '\'
-
-Write-Host '[release] Restoring the normal GFD Studio project graph...'
-Invoke-MSBuild @(
-    $mainProject,
-    '/t:Restore',
-    '/p:RuntimeIdentifier=win-x64',
-    '/p:SelfContained=true',
-    '/p:Platform=x64',
-    "/p:FBXSDKRoot=$fbxSdkRoot",
-    '/verbosity:minimal'
-)
-
-Write-Host '[release] Restoring the native FBX project...'
-Invoke-MSBuild @(
-    $fbxProject,
-    '/t:Restore',
-    '/p:Configuration=Release',
-    '/p:Platform=x64',
-    '/p:RuntimeIdentifier=win-x64',
-    '/p:RestoreRuntimeIdentifier=win-x64',
-    "/p:FBXSDKRoot=$fbxSdkRoot",
-    '/verbosity:minimal'
-)
-
-Write-Host '[release] Building the normal incremental Release graph into GFDStudio-binary...'
-Invoke-MSBuild @(
-    $mainProject,
-    '/t:Publish',
-    '/p:Configuration=Release',
-    '/p:TargetFramework=net8.0-windows',
-    '/p:RuntimeIdentifier=win-x64',
-    '/p:SelfContained=true',
-    "/p:PublishDir=$publishDirectory",
-    '/p:Platform=x64',
-    "/p:FBXSDKRoot=$fbxSdkRoot",
-    '/p:PublishSingleFile=false',
-    '/p:DebugType=None',
-    '/p:DebugSymbols=false',
-    '/verbosity:minimal'
-)
-
 $application = Join-Path $binaryDirectory 'GFDStudio.exe'
-$assembly = Join-Path $binaryDirectory 'GFDStudio.dll'
-if (-not (Test-Path -LiteralPath $application) -or -not (Test-Path -LiteralPath $assembly)) {
-    throw 'The Release build completed without producing GFDStudio.exe and GFDStudio.dll.'
+$buildSucceeded = $false
+
+try {
+    Write-Host '[release] Restoring the normal GFD Studio project graph...'
+    Invoke-MSBuild @(
+        $mainProject,
+        '/t:Restore',
+        '/p:RuntimeIdentifier=win-x64',
+        '/p:SelfContained=true',
+        '/p:Platform=x64',
+        "/p:FBXSDKRoot=$fbxSdkRoot",
+        '/verbosity:minimal'
+    )
+
+    Write-Host '[release] Restoring the native FBX project...'
+    Invoke-MSBuild @(
+        $fbxProject,
+        '/t:Restore',
+        '/p:Configuration=Release',
+        '/p:Platform=x64',
+        '/p:RuntimeIdentifier=win-x64',
+        '/p:RestoreRuntimeIdentifier=win-x64',
+        "/p:FBXSDKRoot=$fbxSdkRoot",
+        '/verbosity:minimal'
+    )
+
+    Write-Host '[release] Building the normal incremental Release graph into GFDStudio-binary...'
+    Invoke-MSBuild @(
+        $mainProject,
+        '/t:Publish',
+        '/p:Configuration=Release',
+        '/p:TargetFramework=net8.0-windows',
+        '/p:RuntimeIdentifier=win-x64',
+        '/p:SelfContained=true',
+        "/p:PublishDir=$publishDirectory",
+        '/p:Platform=x64',
+        "/p:FBXSDKRoot=$fbxSdkRoot",
+        '/p:PublishSingleFile=false',
+        '/p:DebugType=None',
+        '/p:DebugSymbols=false',
+        '/verbosity:minimal'
+    )
+
+    $assembly = Join-Path $binaryDirectory 'GFDStudio.dll'
+    if (-not (Test-Path -LiteralPath $application) -or -not (Test-Path -LiteralPath $assembly)) {
+        throw 'The Release build completed without producing GFDStudio.exe and GFDStudio.dll.'
+    }
+
+    Write-Host "[release] Built $application"
+    $buildSucceeded = $true
 }
-
-Write-Host "[release] Built $application"
-
-if ($Run) {
-    $process = Start-Process -FilePath $application -WorkingDirectory $binaryDirectory -PassThru
-    Write-Host "[release] Started GFD Studio (PID $($process.Id))."
+finally {
+    if (($restartAfterBuild -or ($Run -and $buildSucceeded)) -and (Test-Path -LiteralPath $application)) {
+        $process = Start-Process -FilePath $application -WorkingDirectory $binaryDirectory -PassThru
+        Write-Host "[release] Started GFD Studio (PID $($process.Id))."
+    }
 }
