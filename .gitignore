@@ -35,3 +35,4 @@ AtlusGfdLibTesting/
 /.vs
 /Resources/TestData
 /GFDStudio-binary/
+.dotnet-cli-home
