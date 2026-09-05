@@ -893,15 +893,15 @@ namespace GFDStudio.GUI.Forms
             var relative = Path.GetRelativePath(root, gapPath);
             var stem = Path.ChangeExtension(relative, null);
 
-            var normalCount = pack.Animations?.Count(HasAnimationKeyframes) ?? 0;
-            var extraCount = pack.METAPHOR_AnimArray3?.Count(HasAnimationKeyframes) ?? 0;
+            var normalCount = pack.Animations?.Count(AnimationAnalysis.HasBodyMotion) ?? 0;
+            var extraCount = pack.METAPHOR_AnimArray3?.Count(AnimationAnalysis.HasBodyMotion) ?? 0;
             var normalAndExtraCount = normalCount + extraCount;
 
             if (pack.Animations != null)
             {
                 for (var i = 0; i < pack.Animations.Count; i++)
                 {
-                    if (!HasAnimationKeyframes(pack.Animations[i]) ||
+                    if (!AnimationAnalysis.HasBodyMotion(pack.Animations[i]) ||
                         !animationDefinitions.Add(pack.Animations[i]))
                         continue;
 
@@ -919,7 +919,7 @@ namespace GFDStudio.GUI.Forms
             {
                 for (var i = 0; i < pack.BlendAnimations.Count; i++)
                 {
-                    if (!HasAnimationKeyframes(pack.BlendAnimations[i]) ||
+                    if (!AnimationAnalysis.HasBodyMotion(pack.BlendAnimations[i]) ||
                         !animationDefinitions.Add(pack.BlendAnimations[i]))
                         continue;
 
@@ -937,7 +937,7 @@ namespace GFDStudio.GUI.Forms
             {
                 for (var i = 0; i < pack.METAPHOR_AnimArray3.Count; i++)
                 {
-                    if (!HasAnimationKeyframes(pack.METAPHOR_AnimArray3[i]) ||
+                    if (!AnimationAnalysis.HasBodyMotion(pack.METAPHOR_AnimArray3[i]) ||
                         !animationDefinitions.Add(pack.METAPHOR_AnimArray3[i]))
                         continue;
 
@@ -950,12 +950,6 @@ namespace GFDStudio.GUI.Forms
                     });
                 }
             }
-        }
-
-        private static bool HasAnimationKeyframes(Animation animation)
-        {
-            return animation?.Controllers?.Any(controller =>
-                controller?.Layers?.Any(layer => layer?.Keys?.Count > 0) == true) == true;
         }
 
         private static byte[] SerializeAnimation(Animation animation)
