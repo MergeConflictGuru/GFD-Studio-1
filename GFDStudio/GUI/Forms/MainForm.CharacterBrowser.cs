@@ -814,7 +814,14 @@ namespace GFDStudio.GUI.Forms
                 }
 
                 if (!restoredSelection)
-                    listBox.SelectedIndex = listBox.Items.Count - 1;
+                {
+                    // Prefer the first compatible part when the body changes.
+                    // Keep (none) as the fallback only when no matching model
+                    // survived the filter.
+                    listBox.SelectedIndex = listBox.Items.Count > 1
+                        ? 0
+                        : listBox.Items.Count - 1;
+                }
             }
             finally
             {
