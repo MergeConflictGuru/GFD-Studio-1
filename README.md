@@ -10,7 +10,7 @@ To fetch the latest successful build without compiling locally, run:
 run-latest-build.bat
 ```
 
-To download it without launching the application, run `fetch-latest-build.ps1`. The script reads the GitHub owner/repository and current branch from the local checkout, and places the downloaded files in `GFDStudio-binary`. Use `-Repository owner/repository` or `-Branch branch-name` to override them.
+To fetch it without launching a new application instance, run `fetch-latest-build.ps1`. The script reads the GitHub owner/repository and current branch from the local checkout, and places the downloaded files in `GFDStudio-binary`. If that binary is already running, the script closes it before replacing the files and restarts it after a successful fetch. Use `-Launch` to launch the fetched binary when it was not already running, or use `-Repository owner/repository` and `-Branch branch-name` to override discovery.
 
 The same fetch operation is available in VS Code through `Terminal > Run Task > GFD Studio: Fetch latest binary`; it is also the default build task (`Ctrl+Shift+B`). Use `GFD Studio: Fetch and run latest binary` to launch the downloaded build.
 
@@ -22,7 +22,7 @@ To have every successful build fetched automatically after `git push`, enable th
 
 After that, a successful push waits for the matching GitHub Actions pipeline to finish and downloads its artifact. Failed pipelines are reported by the push command and are not downloaded. The same setup is available in VS Code through `Terminal > Run Task > GFD Studio: Enable post-push auto-fetch`.
 
-For a continuously running monitor instead, use `GFD Studio: Watch and auto-fetch latest binary`. It checks every 30 seconds and can be started or stopped from `Terminal > Run Task`. If the downloaded binary is currently running, Windows may prevent replacement until GFD Studio is closed.
+For a continuously running monitor instead, use `GFD Studio: Watch and auto-fetch latest binary`. It checks every 30 seconds and can be started or stopped from `Terminal > Run Task`. If the downloaded binary is currently running, it is closed before replacement and restarted after the fetch completes.
 
 ## Features
 - View a rendered preview of the opened model
