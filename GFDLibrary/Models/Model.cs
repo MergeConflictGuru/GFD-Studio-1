@@ -184,6 +184,165 @@ namespace GFDLibrary.Models
             RebuildBonePalette( otherNodes );
         }
 
+        /// <summary>
+        /// Adds the geometry from another model to this model while keeping the
+        /// geometry that is already present. This is used for games that store a
+        /// character's body, face, and hair as separate model files.
+        /// </summary>
+        public void MergeWith( Model other )
+        {
+            if ( other?.RootNode == null )
+                return;
+
+            var thisNodes = Nodes.ToList();
+            var otherNodes = other.Nodes.ToList();
+            var otherToThisNodes = new Dictionary<Node, Node>();
+            var meshBoneNodes = new Dictionary<Mesh, Node[]>();
+
+            if ( Bones != null )
+            {
+                foreach ( var node in thisNodes )
+                {
+                    foreach ( var mesh in node.Meshes )
+                        meshBoneNodes[mesh] = Bones.Select( bone => thisNodes[bone.NodeIndex] ).ToArray();
+                }
+            }
+
+            if ( other.Bones != null )
+            {
+                foreach ( var node in otherNodes )
+                {
+                    foreach ( var mesh in node.Meshes )
+                        meshBoneNodes[mesh] = other.Bones.Select( bone => otherNodes[bone.NodeIndex] ).ToArray();
+                }
+            }
+
+            otherToThisNodes[other.RootNode] = RootNode;
+
+            foreach ( var otherNode in otherNodes )
+            {
+                if ( otherNode == other.RootNode )
+                    continue;
+
+                var thisNode = thisNodes.FirstOrDefault( node => node.Name == otherNode.Name );
+                if ( thisNode == null )
+                    continue;
+
+                otherToThisNodes[otherNode] = thisNode;
+                Matrix4x4.Invert( thisNode.WorldTransform, out var thisNodeWorldTransformInv );
+                var offsetMatrix = otherNode.WorldTransform * thisNodeWorldTransformInv;
+
+                foreach ( var attachment in otherNode.Attachments.ToList() )
+                {
+                    if ( attachment.Type == NodeAttachmentType.Epl )
+                        continue;
+
+                    if ( attachment.Type == NodeAttachmentType.Mesh )
+                        TransformMesh( attachment.GetValue<Mesh>(), offsetMatrix );
+
+                    thisNode.Attachments.Add( attachment );
+                }
+
+                foreach ( var property in otherNode.Properties )
+                    thisNode.Properties[property.Key] = property.Value;
+            }
+
+            // Move each hierarchy that exists only in the incoming model under
+            // this model's root while preserving its world-space transform.
+            foreach ( var otherNode in otherNodes )
+            {
+                if ( otherNode == other.RootNode || otherToThisNodes.ContainsKey( otherNode ) )
+                    continue;
+
+                if ( otherNode.Parent != null && !otherToThisNodes.ContainsKey( otherNode.Parent ) )
+                    continue;
+
+                var worldTransform = otherNode.WorldTransform;
+                otherNode.Parent?.RemoveChildNode( otherNode );
+                otherNode.LocalTransform = worldTransform;
+                RootNode.AddChildNode( otherNode );
+            }
+
+            // Rebuild one palette for both the original and incoming meshes.
+            // The captured node references let us translate each file's old bone
+            // indices after their node hierarchies have been combined.
+            var finalNodes = Nodes.ToList();
+            var combinedBones = new List<Bone>();
+            foreach ( var node in finalNodes )
+            {
+                var nodeInverseWorld = Matrix4x4.Invert( node.WorldTransform, out var inverseWorld )
+                    ? inverseWorld
+                    : Matrix4x4.Identity;
+
+                foreach ( var mesh in node.Meshes )
+                {
+                    if ( mesh.VertexWeights == null || !meshBoneNodes.TryGetValue( mesh, out var sourceBoneNodes ) )
+                        continue;
+
+                    foreach ( var weight in mesh.VertexWeights )
+                    {
+                        for ( var i = 0; i < weight.Indices.Length; i++ )
+                        {
+                            if ( weight.Weights[i] == 0 || weight.Indices[i] >= sourceBoneNodes.Length )
+                                continue;
+
+                            var sourceBoneNode = sourceBoneNodes[weight.Indices[i]];
+                            if ( otherToThisNodes.TryGetValue( sourceBoneNode, out var mappedBoneNode ) )
+                                sourceBoneNode = mappedBoneNode;
+
+                            var boneNodeIndex = finalNodes.IndexOf( sourceBoneNode );
+                            if ( boneNodeIndex < 0 )
+                                boneNodeIndex = finalNodes.IndexOf( RootNode );
+
+                            var bindMatrix = sourceBoneNode.WorldTransform * nodeInverseWorld;
+                            Matrix4x4.Invert( bindMatrix, out var inverseBindMatrix );
+                            var newBoneIndex = combinedBones.FindIndex( bone =>
+                                bone.NodeIndex == boneNodeIndex && bone.InverseBindMatrix.Equals( inverseBindMatrix ) );
+
+                            if ( newBoneIndex < 0 )
+                            {
+                                combinedBones.Add( new Bone( (ushort)boneNodeIndex, inverseBindMatrix ) );
+                                newBoneIndex = combinedBones.Count - 1;
+                            }
+
+                            weight.Indices[i] = (ushort)newBoneIndex;
+                        }
+                    }
+                }
+            }
+
+            if ( combinedBones.Count > 0 )
+                Bones = combinedBones;
+        }
+
+        private static void TransformMesh( Mesh mesh, Matrix4x4 transform )
+        {
+            if ( mesh?.Vertices != null )
+            {
+                for ( var i = 0; i < mesh.Vertices.Length; i++ )
+                {
+                    var position = mesh.Vertices[i];
+                    var transformedPosition = Vector3.Transform( position, transform );
+                    mesh.Vertices[i] = transformedPosition;
+
+                    if ( mesh.MorphTargets != null )
+                    {
+                        foreach ( var morphTarget in mesh.MorphTargets )
+                        {
+                            morphTarget.Vertices[i] = Vector3.Transform(
+                                position + morphTarget.Vertices[i], transform ) - transformedPosition;
+                        }
+                    }
+                }
+            }
+
+            if ( mesh?.Normals != null )
+            {
+                for ( var i = 0; i < mesh.Normals.Length; i++ )
+                    mesh.Normals[i] = Vector3.TransformNormal( mesh.Normals[i], transform );
+            }
+        }
+
         private List<Node> ReplaceCommonNodesAndGetUniqueNodes( IEnumerable<Node> otherNodes )
         {
             var uniqueNodes = new List<Node>();
