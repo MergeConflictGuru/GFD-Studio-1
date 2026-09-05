@@ -53,6 +53,9 @@ namespace GFDStudio.GUI.Controls
         private PrimitiveMesh mCameraPrimitive;
         private PrimitiveMesh mLightPrimitive;
         private PrimitiveMesh mEplPrimitive;
+        private GuideArrowMesh mGuideArrow;
+
+        private static readonly Vector3 sGuideArrowGridAnchor = new Vector3( 0.0f, 1.0f, 0.0f );
 
         // Model
         private GLModel mModel;
@@ -183,6 +186,7 @@ namespace GFDStudio.GUI.Controls
             mCameraPrimitive = new PrimitiveMesh( "primitives/camera.obj" );
             mLightPrimitive = new PrimitiveMesh( "primitives/light.obj" );
             mEplPrimitive = new PrimitiveMesh( "primitives/epl.obj" );
+            mGuideArrow = new GuideArrowMesh();
         }
 
         private void DrawLine( Vector3 start, Vector3 end, Vector4 color )
@@ -526,7 +530,9 @@ namespace GFDStudio.GUI.Controls
             {
                 components?.Dispose();
 
+                mGuideArrow?.Dispose();
                 mShaderRegistry.mDefaultShader?.Dispose();
+                mShaderRegistry.mGuideArrowShader?.Dispose();
 
                 if ( mIsModelLoaded )
                     UnloadModel();
@@ -605,6 +611,8 @@ namespace GFDStudio.GUI.Controls
                         SelectedMaterial = mSelectedMaterial,
                         SelectedMesh = mSelectedMesh
                     } );
+
+                    DrawGuideArrow();
                 }
 
                 //foreach ( var node in mModel.Nodes )
@@ -624,6 +632,119 @@ namespace GFDStudio.GUI.Controls
 
                 SwapBuffers();
             } );
+        }
+
+        private void DrawGuideArrow()
+        {
+            if ( mGuideArrow == null || mShaderRegistry?.mGuideArrowShader == null || !mIsModelLoaded )
+                return;
+
+            var target = GetGuideArrowTargetWorldPosition();
+            var targetClip = ProjectGuideArrowPoint( target, out var targetInFrontOfCamera );
+            var opacity = CalculateGuideArrowOpacity( targetClip, targetInFrontOfCamera );
+            if ( opacity <= 0.001f )
+                return;
+
+            var anchor = ResolveGuideArrowAnchor();
+            var direction = target - anchor;
+            direction.Y = 0.0f;
+            if ( direction.LengthSquared < 0.0001f )
+                return;
+
+            direction.Normalize();
+            var yaw = MathF.Atan2( direction.X, direction.Z );
+            var model = Matrix4.CreateRotationY( yaw ) * Matrix4.CreateTranslation( anchor );
+
+            var blended = opacity < 0.999f;
+            if ( blended )
+            {
+                GL.Enable( EnableCap.Blend );
+                GL.BlendFunc( BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha );
+                GL.DepthMask( false );
+            }
+
+            mGuideArrow.Draw( mShaderRegistry.mGuideArrowShader, mCamera.View, mCamera.Projection, model, opacity );
+
+            if ( blended )
+            {
+                GL.DepthMask( true );
+                GL.Disable( EnableCap.Blend );
+            }
+        }
+
+        private Vector3 GetGuideArrowTargetWorldPosition()
+        {
+            var model = mModel?.ModelPack?.Model;
+            if ( model == null )
+                return Vector3.Zero;
+
+            if ( model.BoundingSphere.HasValue )
+            {
+                var center = model.BoundingSphere.Value.Center;
+                return new Vector3( center.X, center.Y, center.Z );
+            }
+
+            if ( model.BoundingBox.HasValue )
+            {
+                var bounds = model.BoundingBox.Value;
+                var center = ( bounds.Min + bounds.Max ) * 0.5f;
+                return new Vector3( center.X, center.Y, center.Z );
+            }
+
+            return Vector3.Zero;
+        }
+
+        private Vector3 ResolveGuideArrowAnchor()
+        {
+            var gridAnchorClip = ProjectGuideArrowPoint( sGuideArrowGridAnchor, out var gridAnchorInFront );
+            if ( gridAnchorInFront && IsGuideArrowPointOnScreen( gridAnchorClip, 0.82f ) )
+                return sGuideArrowGridAnchor;
+
+            // Keep the real 3D model available when the user pans the grid
+            // itself out of frame: place a camera-relative copy at the view
+            // center as a graceful off-screen-indicator fallback.
+            var modelRadius = 2.0f;
+            if ( mModel?.ModelPack?.Model?.BoundingSphere is { } sphere )
+                modelRadius = MathF.Max( 2.0f, sphere.Radius );
+
+            var inverseView = Matrix4.Invert( mCamera.View );
+            var viewSpaceAnchor = new Vector4( 0.0f, 0.65f, -MathF.Max( 2.5f, modelRadius * 1.5f ), 1.0f );
+            var worldAnchor = Vector4.Transform( viewSpaceAnchor, inverseView );
+            return new Vector3( worldAnchor.X, worldAnchor.Y, worldAnchor.Z );
+        }
+
+        private Vector4 ProjectGuideArrowPoint( Vector3 worldPosition, out bool inFrontOfCamera )
+        {
+            var viewPosition = Vector4.Transform( new Vector4( worldPosition, 1.0f ), mCamera.View );
+            inFrontOfCamera = viewPosition.Z < 0.0f;
+            return Vector4.Transform( viewPosition, mCamera.Projection );
+        }
+
+        private static bool IsGuideArrowPointOnScreen( Vector4 clipPosition, float margin )
+        {
+            if ( clipPosition.W <= 0.0001f )
+                return false;
+
+            var normalizedX = clipPosition.X / clipPosition.W;
+            var normalizedY = clipPosition.Y / clipPosition.W;
+            return MathF.Abs( normalizedX ) <= margin && MathF.Abs( normalizedY ) <= margin;
+        }
+
+        private static float CalculateGuideArrowOpacity( Vector4 clipPosition, bool inFrontOfCamera )
+        {
+            if ( !inFrontOfCamera || clipPosition.W <= 0.0001f )
+                return 1.0f;
+
+            var normalizedX = clipPosition.X / clipPosition.W;
+            var normalizedY = clipPosition.Y / clipPosition.W;
+            var edgeDistance = MathF.Max( MathF.Abs( normalizedX ), MathF.Abs( normalizedY ) );
+            return SmoothStep( 0.72f, 0.98f, edgeDistance );
+        }
+
+        private static float SmoothStep( float edge0, float edge1, float value )
+        {
+            var t = Math.Clamp( ( value - edge0 ) / ( edge1 - edge0 ), 0.0f, 1.0f );
+            return t * t * ( 3.0f - 2.0f * t );
         }
 
         private void DrawGrid( Matrix4 view, Matrix4 projection )
