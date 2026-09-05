@@ -11,6 +11,8 @@ using System.Text.RegularExpressions;
 
 using GFDLibrary;
 using GFDLibrary.Animations;
+using GFDLibrary.Materials;
+using GFDLibrary.Textures;
 using GFDStudio.GUI.Controls;
 
 namespace GFDStudio.GUI.Forms
@@ -21,7 +23,15 @@ namespace GFDStudio.GUI.Forms
         {
             public string Path { get; init; }
             public string DisplayName { get; init; }
+            public CharacterModelPart Part { get; init; }
             public override string ToString() => DisplayName;
+        }
+
+        private enum CharacterModelPart
+        {
+            Body,
+            Face,
+            Hair
         }
 
         private enum CharacterAnimationListKind
@@ -71,9 +81,13 @@ namespace GFDStudio.GUI.Forms
         private Panel mCharacterBrowserPanel;
         private TextBox mCharacterRootTextBox;
         private TextBox mCharacterModelFilterTextBox;
+        private TextBox mCharacterFaceFilterTextBox;
+        private TextBox mCharacterHairFilterTextBox;
         private TextBox mCharacterAnimationFilterTextBox;
         private TextBox mCharacterBlendAnimationFilterTextBox;
         private ListBox mCharacterModelListBox;
+        private ListBox mCharacterFaceListBox;
+        private ListBox mCharacterHairListBox;
         private ListBox mCharacterAnimationListBox;
         private ListBox mCharacterBlendAnimationListBox;
         private Label mCharacterBrowserStatusLabel;
@@ -86,6 +100,7 @@ namespace GFDStudio.GUI.Forms
         private CancellationTokenSource mCharacterBrowserScanCancellation;
         private string mCharacterBrowserRoot;
         private string mCharacterBrowserCurrentModelPath;
+        private ModelPack mCharacterBrowserCurrentModelPack;
         private int mCharacterBrowserScanGeneration;
         private bool mCharacterBrowserRestoringSelection;
         private bool mCharacterBrowserSelectionRestoredForScan;
@@ -150,10 +165,7 @@ namespace GFDStudio.GUI.Forms
             mCharacterBrowserPanel.Controls.Add(rootLayout);
 
             rootLayout.Controls.Add(CreateCharacterBrowserToolbar(), 0, 0);
-            rootLayout.Controls.Add(CreateCharacterBrowserListSection(
-                "MODELS",
-                out mCharacterModelFilterTextBox,
-                out mCharacterModelListBox), 0, 1);
+            rootLayout.Controls.Add(CreateCharacterBrowserModelPartsSection(), 0, 1);
             rootLayout.Controls.Add(CreateCharacterBrowserListSection(
                 "ANIMATIONS",
                 out mCharacterAnimationFilterTextBox,
@@ -174,9 +186,13 @@ namespace GFDStudio.GUI.Forms
             rootLayout.Controls.Add(mCharacterBrowserStatusLabel, 0, 4);
 
             mCharacterModelFilterTextBox.TextChanged += (s, e) => RefreshCharacterModelList();
+            mCharacterFaceFilterTextBox.TextChanged += (s, e) => RefreshCharacterFaceList();
+            mCharacterHairFilterTextBox.TextChanged += (s, e) => RefreshCharacterHairList();
             mCharacterAnimationFilterTextBox.TextChanged += (s, e) => RefreshCharacterAnimationList();
             mCharacterBlendAnimationFilterTextBox.TextChanged += (s, e) => RefreshCharacterBlendAnimationList();
             mCharacterModelListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
+            mCharacterFaceListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
+            mCharacterHairListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
             mCharacterAnimationListBox.SelectedIndexChanged += CharacterAnimationListBox_SelectedIndexChanged;
             mCharacterBlendAnimationListBox.SelectedIndexChanged += CharacterBlendAnimationListBox_SelectedIndexChanged;
             mCharacterAnimationListBox.SelectionMode = SelectionMode.MultiExtended;
@@ -187,6 +203,8 @@ namespace GFDStudio.GUI.Forms
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
             // immediately load the newly selected model/animation.
             mCharacterModelListBox.KeyDown += CharacterBrowserList_KeyDown;
+            mCharacterFaceListBox.KeyDown += CharacterBrowserList_KeyDown;
+            mCharacterHairListBox.KeyDown += CharacterBrowserList_KeyDown;
             mCharacterAnimationListBox.KeyDown += CharacterBrowserList_KeyDown;
             mCharacterBlendAnimationListBox.KeyDown += CharacterBrowserList_KeyDown;
 
@@ -328,6 +346,36 @@ namespace GFDStudio.GUI.Forms
             return group;
         }
 
+        private Control CreateCharacterBrowserModelPartsSection()
+        {
+            var parts = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                RowCount = 1,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty,
+                BackColor = Color.FromArgb(30, 30, 30)
+            };
+            parts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+            parts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+            parts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+
+            parts.Controls.Add(CreateCharacterBrowserListSection(
+                "BODY (or normal persona)",
+                out mCharacterModelFilterTextBox,
+                out mCharacterModelListBox), 0, 0);
+            parts.Controls.Add(CreateCharacterBrowserListSection(
+                "FACE",
+                out mCharacterFaceFilterTextBox,
+                out mCharacterFaceListBox), 1, 0);
+            parts.Controls.Add(CreateCharacterBrowserListSection(
+                "HAIR",
+                out mCharacterHairFilterTextBox,
+                out mCharacterHairListBox), 2, 0);
+            return parts;
+        }
+
         private void SetCharacterBrowserVisible(bool visible)
         {
             if (mCharacterBrowserPanel == null)
@@ -403,7 +451,10 @@ namespace GFDStudio.GUI.Forms
                 mCharacterAnimations.Clear();
                 mCharacterBlendAnimations.Clear();
                 mCharacterBrowserCurrentModelPath = null;
+                mCharacterBrowserCurrentModelPack = null;
                 mCharacterModelListBox.Items.Clear();
+                mCharacterFaceListBox.Items.Clear();
+                mCharacterHairListBox.Items.Clear();
                 mCharacterAnimationListBox.Items.Clear();
                 mCharacterBlendAnimationListBox.Items.Clear();
             }
@@ -443,10 +494,13 @@ namespace GFDStudio.GUI.Forms
                         mCharacterModels.Add(new CharacterModelEntry
                         {
                             Path = path,
-                            DisplayName = MakeCharacterBrowserRelativePath(path)
+                            DisplayName = MakeCharacterBrowserRelativePath(path),
+                            Part = ClassifyCharacterModel(path)
                         });
                     }
                     RefreshCharacterModelList();
+                    RefreshCharacterFaceList();
+                    RefreshCharacterHairList();
                 }
                 finally
                 {
@@ -666,11 +720,12 @@ namespace GFDStudio.GUI.Forms
             try
             {
                 mCharacterModelListBox.Items.Clear();
-                foreach (var entry in mCharacterModels)
+                foreach (var entry in mCharacterModels.Where(entry => entry.Part == CharacterModelPart.Body))
                 {
                     if (CharacterBrowserMatches(entry.DisplayName, filter))
                         mCharacterModelListBox.Items.Add(entry);
                 }
+                mCharacterModelListBox.Items.Add(CreateCharacterModelNoneEntry(CharacterModelPart.Body));
             }
             finally
             {
@@ -697,6 +752,48 @@ namespace GFDStudio.GUI.Forms
             finally
             {
                 mCharacterAnimationListBox.EndUpdate();
+            }
+        }
+
+        private void RefreshCharacterFaceList()
+        {
+            RefreshCharacterModelPartList(
+                mCharacterFaceListBox,
+                mCharacterFaceFilterTextBox,
+                CharacterModelPart.Face);
+        }
+
+        private void RefreshCharacterHairList()
+        {
+            RefreshCharacterModelPartList(
+                mCharacterHairListBox,
+                mCharacterHairFilterTextBox,
+                CharacterModelPart.Hair);
+        }
+
+        private void RefreshCharacterModelPartList(
+            ListBox listBox,
+            TextBox filterTextBox,
+            CharacterModelPart part)
+        {
+            if (listBox == null)
+                return;
+
+            var filter = filterTextBox.Text?.Trim();
+            listBox.BeginUpdate();
+            try
+            {
+                listBox.Items.Clear();
+                foreach (var entry in mCharacterModels.Where(entry => entry.Part == part))
+                {
+                    if (CharacterBrowserMatches(entry.DisplayName, filter))
+                        listBox.Items.Add(entry);
+                }
+                listBox.Items.Add(CreateCharacterModelNoneEntry(part));
+            }
+            finally
+            {
+                listBox.EndUpdate();
             }
         }
 
@@ -728,14 +825,35 @@ namespace GFDStudio.GUI.Forms
                    value.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        private static CharacterModelEntry CreateCharacterModelNoneEntry(CharacterModelPart part)
+        {
+            return new CharacterModelEntry
+            {
+                Part = part,
+                DisplayName = "(none)"
+            };
+        }
+
         private bool RestoreCharacterBrowserSelection()
         {
             if (mCharacterBrowserSavedSelection == null || mCharacterBrowserSavedSelection.Length < 4)
                 return false;
 
             var modelIndex = ParseCharacterBrowserSelectionIndex(mCharacterBrowserSavedSelection[1]);
-            var blendIndex = ParseCharacterBrowserSelectionIndex(mCharacterBrowserSavedSelection[3]);
-            var animationIndexes = mCharacterBrowserSavedSelection[2]
+            var faceIndex = mCharacterBrowserSavedSelection.Length >= 6
+                ? ParseCharacterBrowserSelectionIndex(mCharacterBrowserSavedSelection[2])
+                : -1;
+            var hairIndex = mCharacterBrowserSavedSelection.Length >= 6
+                ? ParseCharacterBrowserSelectionIndex(mCharacterBrowserSavedSelection[3])
+                : -1;
+            var animationSelection = mCharacterBrowserSavedSelection.Length >= 6
+                ? mCharacterBrowserSavedSelection[4]
+                : mCharacterBrowserSavedSelection[2];
+            var blendIndex = ParseCharacterBrowserSelectionIndex(
+                mCharacterBrowserSavedSelection.Length >= 6
+                    ? mCharacterBrowserSavedSelection[5]
+                    : mCharacterBrowserSavedSelection[3]);
+            var animationIndexes = animationSelection
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(ParseCharacterBrowserSelectionIndex)
                 .Where(index => index >= 0 && index < mCharacterAnimationListBox.Items.Count)
@@ -744,10 +862,15 @@ namespace GFDStudio.GUI.Forms
 
             if (modelIndex < 0 || modelIndex >= mCharacterModelListBox.Items.Count)
                 modelIndex = -1;
+            if (faceIndex < 0 || faceIndex >= mCharacterFaceListBox.Items.Count)
+                faceIndex = -1;
+            if (hairIndex < 0 || hairIndex >= mCharacterHairListBox.Items.Count)
+                hairIndex = -1;
             if (blendIndex < 0 || blendIndex >= mCharacterBlendAnimationListBox.Items.Count)
                 blendIndex = -1;
 
-            if (modelIndex < 0 && animationIndexes.Count == 0 && blendIndex < 0)
+            if (modelIndex < 0 && faceIndex < 0 && hairIndex < 0 &&
+                animationIndexes.Count == 0 && blendIndex < 0)
                 return false;
 
             mCharacterBrowserRestoringSelection = true;
@@ -755,6 +878,10 @@ namespace GFDStudio.GUI.Forms
             {
                 if (modelIndex >= 0)
                     mCharacterModelListBox.SelectedIndex = modelIndex;
+                if (faceIndex >= 0)
+                    mCharacterFaceListBox.SelectedIndex = faceIndex;
+                if (hairIndex >= 0)
+                    mCharacterHairListBox.SelectedIndex = hairIndex;
 
                 mCharacterAnimationListBox.ClearSelected();
                 foreach (var index in animationIndexes)
@@ -769,7 +896,7 @@ namespace GFDStudio.GUI.Forms
             }
 
             mCharacterBrowserSelectionRestoredForScan = true;
-            if (modelIndex >= 0)
+            if (modelIndex >= 0 || faceIndex >= 0 || hairIndex >= 0)
                 CharacterModelListBox_SelectedIndexChanged(mCharacterModelListBox, EventArgs.Empty);
             else if (animationIndexes.Count > 0)
                 CharacterAnimationListBox_SelectedIndexChanged(mCharacterAnimationListBox, EventArgs.Empty);
@@ -787,39 +914,106 @@ namespace GFDStudio.GUI.Forms
             if (mCharacterBrowserRestoringSelection)
                 return;
 
-            if (mCharacterModelListBox.SelectedItem is not CharacterModelEntry entry)
-            {
-                SaveCharacterBrowserSelectionSettings();
-                return;
-            }
-
             try
             {
-                mCharacterBrowserCurrentModelPath = entry.Path;
-                SaveCharacterBrowserSelectionSettings();
-                OpenFile(entry.Path);
-
-                if (mCharacterAnimationListBox.SelectedItem is CharacterAnimationEntry animationEntry)
-                {
-                    var animation = PrepareCharacterBrowserAnimation(animationEntry, out var retargetNote);
-                    if (animation != null)
-                    {
-                        ModelViewControl.Instance.LoadAnimation(animation, true);
-                        ApplySelectedCharacterBrowserBlend();
-                        SetCharacterBrowserStatus(
-                            string.IsNullOrWhiteSpace(retargetNote)
-                                ? "Model: " + entry.DisplayName
-                                : $"Model: {entry.DisplayName} ({retargetNote})");
-                        return;
-                    }
-                }
-
-                SetCharacterBrowserStatus("Model: " + entry.DisplayName);
+                LoadSelectedCharacterModelParts();
             }
             catch (Exception ex)
             {
                 SetCharacterBrowserStatus("Model load failed: " + ex.Message);
             }
+        }
+
+        private void LoadSelectedCharacterModelParts()
+        {
+            var selectedParts = GetSelectedCharacterModelParts();
+            SaveCharacterBrowserSelectionSettings();
+
+            if (selectedParts.Count == 0)
+            {
+                mCharacterBrowserCurrentModelPath = null;
+                mCharacterBrowserCurrentModelPack = null;
+                SetCharacterBrowserStatus("Select a body, face, or hair model");
+                return;
+            }
+
+            var primary = selectedParts.FirstOrDefault(part => part.Part == CharacterModelPart.Body) ??
+                          selectedParts[0];
+            mCharacterBrowserCurrentModelPath = primary.Path;
+
+            // Keep the editor/tree in sync with the primary file, then replace
+            // its preview with the composed character shown by the browser.
+            OpenFile(primary.Path);
+            var modelPack = ComposeCharacterModelPack(selectedParts);
+            mCharacterBrowserCurrentModelPack = modelPack;
+            ModelViewControl.Instance.LoadModel(modelPack);
+
+            var animationEntry = mCharacterAnimationListBox.SelectedItem as CharacterAnimationEntry;
+            if (animationEntry != null)
+            {
+                var animation = PrepareCharacterBrowserAnimation(animationEntry, out _);
+                if (animation != null)
+                {
+                    ModelViewControl.Instance.LoadAnimation(animation, true);
+                    ApplySelectedCharacterBrowserBlend();
+                }
+            }
+
+            var selectedNames = string.Join(" + ", selectedParts.Select(part => part.Part.ToString().ToLowerInvariant()));
+            SetCharacterBrowserStatus($"Character: {selectedNames}");
+        }
+
+        private List<CharacterModelEntry> GetSelectedCharacterModelParts()
+        {
+            return new[]
+            {
+                mCharacterModelListBox.SelectedItem as CharacterModelEntry,
+                mCharacterFaceListBox.SelectedItem as CharacterModelEntry,
+                mCharacterHairListBox.SelectedItem as CharacterModelEntry
+            }
+            .Where(entry => entry != null)
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Path))
+            .ToList();
+        }
+
+        private static ModelPack ComposeCharacterModelPack(IReadOnlyList<CharacterModelEntry> selectedParts)
+        {
+            var loadedParts = selectedParts
+                .Select(part => Resource.Load<ModelPack>(part.Path))
+                .Where(pack => pack?.Model != null)
+                .ToList();
+            if (loadedParts.Count == 0)
+                throw new InvalidDataException("The selected files do not contain model data.");
+
+            var composed = loadedParts[0];
+            composed.Textures ??= new TextureDictionary(composed.Version);
+            composed.Materials ??= new MaterialDictionary(composed.Version);
+
+            for (var i = 1; i < loadedParts.Count; i++)
+            {
+                var part = loadedParts[i];
+                if (part.Textures != null)
+                {
+                    foreach (var texture in part.Textures)
+                    {
+                        if (!composed.Textures.ContainsKey(texture.Key))
+                            composed.Textures.Add(texture.Key, texture.Value);
+                    }
+                }
+
+                if (part.Materials != null)
+                {
+                    foreach (var material in part.Materials)
+                    {
+                        if (!composed.Materials.ContainsKey(material.Key))
+                            composed.Materials.Add(material.Key, material.Value);
+                    }
+                }
+
+                composed.Model.MergeWith(part.Model);
+            }
+
+            return composed;
         }
 
         private void CharacterBlendAnimationListBox_SelectedIndexChanged(object sender, EventArgs e)
@@ -1026,7 +1220,8 @@ namespace GFDStudio.GUI.Forms
             if (animation == null)
                 return null;
 
-            var targetModelPack = ModelEditorTreeView?.TopNode?.Data as ModelPack;
+            var targetModelPack = mCharacterBrowserCurrentModelPack ??
+                                  ModelEditorTreeView?.TopNode?.Data as ModelPack;
             if (targetModelPack?.Model == null)
                 return animation;
 
@@ -1080,6 +1275,9 @@ namespace GFDStudio.GUI.Forms
 
         private string GetCurrentCharacterBrowserModelPath()
         {
+            if (!string.IsNullOrWhiteSpace(mCharacterBrowserCurrentModelPath))
+                return mCharacterBrowserCurrentModelPath;
+
             if (!string.IsNullOrWhiteSpace(LastOpenedFilePath) &&
                 string.Equals(Path.GetExtension(LastOpenedFilePath), ".GMD", StringComparison.OrdinalIgnoreCase))
                 return LastOpenedFilePath;
@@ -1167,6 +1365,22 @@ namespace GFDStudio.GUI.Forms
             return Regex.Match(stem ?? string.Empty, @"\d{4}_\d{3}", RegexOptions.CultureInvariant).Value;
         }
 
+        private static CharacterModelPart ClassifyCharacterModel(string path)
+        {
+            var stem = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+            var directory = Path.GetDirectoryName(path) ?? string.Empty;
+
+            if (Regex.IsMatch(directory, @"(?:^|[\\/])face(?:[\\/]|$)", RegexOptions.IgnoreCase) ||
+                Regex.IsMatch(stem, @"(?:^|[_-])f\d+$", RegexOptions.IgnoreCase))
+                return CharacterModelPart.Face;
+
+            if (Regex.IsMatch(directory, @"(?:^|[\\/])hair(?:[\\/]|$)", RegexOptions.IgnoreCase) ||
+                Regex.IsMatch(stem, @"(?:^|[_-])h\d+$", RegexOptions.IgnoreCase))
+                return CharacterModelPart.Hair;
+
+            return CharacterModelPart.Body;
+        }
+
         private static string ExtractCharacterId(string path)
         {
             var stem = Path.GetFileNameWithoutExtension(path);
@@ -1246,6 +1460,8 @@ namespace GFDStudio.GUI.Forms
                 {
                     mCharacterBrowserRoot,
                     mCharacterModelListBox?.SelectedIndex.ToString() ?? "-1",
+                    mCharacterFaceListBox?.SelectedIndex.ToString() ?? "-1",
+                    mCharacterHairListBox?.SelectedIndex.ToString() ?? "-1",
                     string.Join(",", mCharacterAnimationListBox?.SelectedIndices.Cast<int>() ?? Enumerable.Empty<int>()),
                     mCharacterBlendAnimationListBox?.SelectedIndex.ToString() ?? "-1"
                 };
