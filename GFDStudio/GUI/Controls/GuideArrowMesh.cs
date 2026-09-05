@@ -407,7 +407,11 @@ namespace GFDStudio.GUI.Controls
                 GL.Disable( EnableCap.CullFace );
             }
 
-            public override bool IsMaterialTransparent() => true;
+            // The shell, inset, and cyan channel are opaque geometry. The
+            // viewer fades the complete marker explicitly through uOpacity;
+            // classifying these meshes as transparent would make the viewer's
+            // transparent-object pass and blend state make the body look hollow.
+            public override bool IsMaterialTransparent() => false;
         }
     }
 }

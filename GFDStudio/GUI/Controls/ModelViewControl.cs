@@ -55,7 +55,9 @@ namespace GFDStudio.GUI.Controls
         private PrimitiveMesh mEplPrimitive;
         private GuideArrowMesh mGuideArrow;
 
-        private static readonly Vector3 sGuideArrowGridAnchor = new Vector3( 0.0f, 1.0f, 0.0f );
+        private const float GuideArrowHeightAboveGrid = 1.0f;
+        private static readonly Vector3 sGuideArrowGridAnchor =
+            new Vector3( 0.0f, GuideArrowHeightAboveGrid, 0.0f );
 
         // Model
         private GLModel mModel;
@@ -71,6 +73,10 @@ namespace GFDStudio.GUI.Controls
         private Timer mUpdateTimer;
         private AnimationPlaybackState mAnimationPlayback = AnimationPlaybackState.Stopped;
         private double mAnimationTime;
+        private float mGuideArrowOpacity;
+        private double mGuideArrowLastUpdateTime = -1.0;
+
+        private const float GuideArrowFadeTime = 0.24f;
 
         public Animation Animation { get; private set; }
 
@@ -469,6 +475,8 @@ namespace GFDStudio.GUI.Controls
             }
 
             mIsModelLoaded = true;
+            mGuideArrowOpacity = 0.0f;
+            mGuideArrowLastUpdateTime = -1.0;
 
             // Initialize camera
             InitializeCamera();
@@ -639,11 +647,11 @@ namespace GFDStudio.GUI.Controls
             if ( mGuideArrow == null || mShaderRegistry?.mGuideArrowShader == null || !mIsModelLoaded )
                 return;
 
-            var target = GetGuideArrowTargetWorldPosition();
+            GetGuideArrowTargetBounds( out var target, out var targetExtents );
             var targetClip = ProjectGuideArrowPoint( target, out var targetInFrontOfCamera );
-            GetGuideArrowTargetBounds( out var targetCenter, out var targetExtents );
-            var targetInView = IsGuideArrowTargetInView( targetCenter, targetExtents );
-            var opacity = CalculateGuideArrowOpacity( targetClip, targetInFrontOfCamera, targetInView );
+            var targetInView = IsGuideArrowTargetInView( target, targetExtents );
+            var desiredOpacity = CalculateGuideArrowOpacity( targetClip, targetInFrontOfCamera, targetInView );
+            var opacity = UpdateGuideArrowOpacity( desiredOpacity );
             if ( opacity <= 0.001f )
                 return;
 
@@ -653,14 +661,8 @@ namespace GFDStudio.GUI.Controls
                 return;
 
             direction.Normalize();
-            var horizontalLength = MathF.Sqrt( direction.X * direction.X + direction.Z * direction.Z );
-            var yaw = horizontalLength > 0.0001f ? MathF.Atan2( direction.X, direction.Z ) : 0.0f;
-            var pitch = MathF.Atan2( direction.Y, horizontalLength );
             var model = Matrix4.CreateScale( GetGuideArrowScale( anchor ) ) *
-                        // The mesh points along local +Z. Pitch first makes the
-                        // marker follow targets above and below the camera too.
-                        Matrix4.CreateRotationX( -pitch ) *
-                        Matrix4.CreateRotationY( yaw ) *
+                        CreateGuideArrowOrientation( direction ) *
                         Matrix4.CreateTranslation( anchor );
 
             var blended = opacity < 0.999f;
@@ -673,6 +675,13 @@ namespace GFDStudio.GUI.Controls
                 GL.Enable( EnableCap.Blend );
                 GL.BlendFunc( BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha );
                 GL.DepthMask( false );
+            }
+            else
+            {
+                // Do not inherit blending left by a model material. The arrow
+                // body must be solid whenever the marker is fully visible.
+                GL.Disable( EnableCap.Blend );
+                GL.DepthMask( true );
             }
 
             mGuideArrow.Draw( mShaderRegistry.mGuideArrowShader, mCamera.View, mCamera.Projection, model, opacity );
@@ -703,15 +712,76 @@ namespace GFDStudio.GUI.Controls
             return Math.Clamp( scale, 0.85f, 48.0f );
         }
 
-        private Vector3 GetGuideArrowTargetWorldPosition()
+        private float UpdateGuideArrowOpacity( float desiredOpacity )
         {
-            GetGuideArrowTargetBounds( out var center, out _ );
-            return center;
+            var currentTime = mTimeCounter?.Elapsed.TotalSeconds ?? 0.0;
+            var deltaTime = mGuideArrowLastUpdateTime < 0.0
+                ? 1.0 / 60.0
+                : currentTime - mGuideArrowLastUpdateTime;
+            mGuideArrowLastUpdateTime = currentTime;
+
+            // Keep the transition stable if a debugger pauses or a frame takes
+            // unusually long. Exponential smoothing gives both entering and
+            // leaving the viewport the same gentle response.
+            var step = 1.0f - MathF.Exp( -(float)Math.Clamp( deltaTime, 1.0 / 240.0, 0.10 ) /
+                                         GuideArrowFadeTime );
+            mGuideArrowOpacity += ( desiredOpacity - mGuideArrowOpacity ) * step;
+            if ( MathF.Abs( desiredOpacity - mGuideArrowOpacity ) < 0.001f )
+                mGuideArrowOpacity = desiredOpacity;
+
+            return mGuideArrowOpacity;
         }
 
         private void GetGuideArrowTargetBounds( out Vector3 center, out Vector3 extents )
         {
             var model = mModel?.ModelPack?.Model;
+            var minimum = new Vector3( float.PositiveInfinity );
+            var maximum = new Vector3( float.NegativeInfinity );
+            var hasVertices = false;
+
+            // GLModel.Draw updates GLNode.WorldTransform and rebuilds skinned
+            // GLMeshes before this method is called. Read those current vertices
+            // instead of using the bind-pose Model.BoundingBox.
+            if ( mModel != null )
+            {
+                foreach ( var node in mModel.Nodes )
+                {
+                    if ( !node.IsVisible )
+                        continue;
+
+                    foreach ( var mesh in node.Meshes )
+                    {
+                        if ( !mesh.IsVisible || mesh.VertexPositions == null )
+                            continue;
+
+                        foreach ( var vertex in mesh.VertexPositions )
+                        {
+                            var worldVertex = System.Numerics.Vector3.Transform( vertex, node.WorldTransform );
+                            minimum.X = MathF.Min( minimum.X, worldVertex.X );
+                            minimum.Y = MathF.Min( minimum.Y, worldVertex.Y );
+                            minimum.Z = MathF.Min( minimum.Z, worldVertex.Z );
+                            maximum.X = MathF.Max( maximum.X, worldVertex.X );
+                            maximum.Y = MathF.Max( maximum.Y, worldVertex.Y );
+                            maximum.Z = MathF.Max( maximum.Z, worldVertex.Z );
+                            hasVertices = true;
+                        }
+                    }
+                }
+            }
+
+            if ( hasVertices )
+            {
+                center = new Vector3(
+                    ( minimum.X + maximum.X ) * 0.5f,
+                    ( minimum.Y + maximum.Y ) * 0.5f,
+                    ( minimum.Z + maximum.Z ) * 0.5f );
+                extents = new Vector3(
+                    MathF.Max( 0.001f, ( maximum.X - minimum.X ) * 0.5f ),
+                    MathF.Max( 0.001f, ( maximum.Y - minimum.Y ) * 0.5f ),
+                    MathF.Max( 0.001f, ( maximum.Z - minimum.Z ) * 0.5f ) );
+                return;
+            }
+
             if ( model?.BoundingBox is { } bounds )
             {
                 center = new Vector3(
@@ -743,37 +813,79 @@ namespace GFDStudio.GUI.Controls
             var minimumY = float.PositiveInfinity;
             var maximumY = float.NegativeInfinity;
             var hasFrontPoint = false;
-            var hasBehindPoint = false;
+            var hasProjectedPoint = false;
 
-            for ( var x = -1; x <= 1; x += 2 )
-            for ( var y = -1; y <= 1; y += 2 )
-            for ( var z = -1; z <= 1; z += 2 )
+            // Test the actual animated vertices, not the bind-pose box or an
+            // axis-aligned approximation. This prevents a loose box around a
+            // moving limb from hiding the marker while the visible geometry is
+            // already outside the viewport.
+            if ( mModel != null )
             {
-                var point = center + new Vector3( extents.X * x, extents.Y * y, extents.Z * z );
-                var viewPosition = Vector4.Transform( new Vector4( point, 1.0f ), mCamera.View );
-                if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
+                foreach ( var node in mModel.Nodes )
                 {
-                    hasBehindPoint = true;
-                    continue;
+                    if ( !node.IsVisible )
+                        continue;
+
+                    foreach ( var mesh in node.Meshes )
+                    {
+                        if ( !mesh.IsVisible || mesh.VertexPositions == null )
+                            continue;
+
+                        foreach ( var vertex in mesh.VertexPositions )
+                        {
+                            var point = System.Numerics.Vector3.Transform( vertex, node.WorldTransform );
+                            var viewPosition = Vector4.Transform( new Vector4( point.X, point.Y, point.Z, 1.0f ), mCamera.View );
+                            if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
+                                continue;
+
+                            hasFrontPoint = true;
+                            var clipPosition = Vector4.Transform( viewPosition, mCamera.Projection );
+                            if ( clipPosition.W <= 0.0001f )
+                                continue;
+
+                            var normalizedX = clipPosition.X / clipPosition.W;
+                            var normalizedY = clipPosition.Y / clipPosition.W;
+                            minimumX = MathF.Min( minimumX, normalizedX );
+                            maximumX = MathF.Max( maximumX, normalizedX );
+                            minimumY = MathF.Min( minimumY, normalizedY );
+                            maximumY = MathF.Max( maximumY, normalizedY );
+                            hasProjectedPoint = true;
+                        }
+                    }
                 }
-
-                hasFrontPoint = true;
-                var clipPosition = Vector4.Transform( viewPosition, mCamera.Projection );
-                if ( clipPosition.W <= 0.0001f )
-                    continue;
-
-                var normalizedX = clipPosition.X / clipPosition.W;
-                var normalizedY = clipPosition.Y / clipPosition.W;
-                minimumX = MathF.Min( minimumX, normalizedX );
-                maximumX = MathF.Max( maximumX, normalizedX );
-                minimumY = MathF.Min( minimumY, normalizedY );
-                maximumY = MathF.Max( maximumY, normalizedY );
             }
 
-            if ( !hasFrontPoint )
+            // A primitive or an unusual model may not expose CPU vertices. Keep
+            // a conservative fallback for that case rather than disabling the
+            // locator completely.
+            if ( !hasProjectedPoint )
+            {
+                for ( var x = -1; x <= 1; x += 2 )
+                for ( var y = -1; y <= 1; y += 2 )
+                for ( var z = -1; z <= 1; z += 2 )
+                {
+                    var point = center + new Vector3( extents.X * x, extents.Y * y, extents.Z * z );
+                    var viewPosition = Vector4.Transform( new Vector4( point, 1.0f ), mCamera.View );
+                    if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
+                        continue;
+
+                    hasFrontPoint = true;
+                    var clipPosition = Vector4.Transform( viewPosition, mCamera.Projection );
+                    if ( clipPosition.W <= 0.0001f )
+                        continue;
+
+                    var normalizedX = clipPosition.X / clipPosition.W;
+                    var normalizedY = clipPosition.Y / clipPosition.W;
+                    minimumX = MathF.Min( minimumX, normalizedX );
+                    maximumX = MathF.Max( maximumX, normalizedX );
+                    minimumY = MathF.Min( minimumY, normalizedY );
+                    maximumY = MathF.Max( maximumY, normalizedY );
+                    hasProjectedPoint = true;
+                }
+            }
+
+            if ( !hasFrontPoint || !hasProjectedPoint )
                 return false;
-            if ( hasBehindPoint )
-                return true;
 
             // The projected AABB is intentionally conservative: if any portion of
             // the model overlaps the viewport, the navigation marker is hidden.
@@ -781,21 +893,76 @@ namespace GFDStudio.GUI.Controls
                    minimumY <= 1.0f && maximumY >= -1.0f;
         }
 
+        private Matrix4 CreateGuideArrowOrientation( Vector3 forward )
+        {
+            // The mesh uses local +Z as its arrow tip direction and local +Y as
+            // its broad, shaded face. Build a complete orthonormal basis from the
+            // actual target direction, while keeping that broad face toward the
+            // camera so the marker remains visually readable at steep angles.
+            var inverseView = Matrix4.Invert( mCamera.View );
+            var cameraDirection = Vector4.Transform( new Vector4( 0.0f, 0.0f, 1.0f, 0.0f ), inverseView );
+            var faceNormal = new Vector3( cameraDirection.X, cameraDirection.Y, cameraDirection.Z );
+            if ( faceNormal.LengthSquared < 0.0001f )
+                faceNormal = Vector3.UnitY;
+            else
+                faceNormal.Normalize();
+
+            var up = faceNormal - forward * Vector3.Dot( faceNormal, forward );
+            if ( up.LengthSquared < 0.0001f )
+            {
+                var cameraUp = Vector4.Transform( new Vector4( 0.0f, 1.0f, 0.0f, 0.0f ), inverseView );
+                up = new Vector3( cameraUp.X, cameraUp.Y, cameraUp.Z );
+                up -= forward * Vector3.Dot( up, forward );
+            }
+
+            if ( up.LengthSquared < 0.0001f )
+                up = Vector3.UnitY - forward * Vector3.Dot( Vector3.UnitY, forward );
+            up.Normalize();
+
+            var right = Vector3.Cross( up, forward );
+            right.Normalize();
+            up = Vector3.Cross( forward, right );
+            up.Normalize();
+
+            return new Matrix4(
+                new Vector4( right, 0.0f ),
+                new Vector4( up, 0.0f ),
+                new Vector4( forward, 0.0f ),
+                Vector4.UnitW );
+        }
+
         private Vector3 ResolveGuideArrowAnchor()
         {
             var gridAnchorClip = ProjectGuideArrowPoint( sGuideArrowGridAnchor, out var gridAnchorInFront );
-            if ( gridAnchorInFront && IsGuideArrowPointOnScreen( gridAnchorClip, 0.82f ) )
+            // This is the normal placement: one world unit above the grid
+            // origin. Only leave it when the marker would be clipped.
+            if ( gridAnchorInFront && IsGuideArrowPointOnScreen( gridAnchorClip, 0.52f ) )
                 return sGuideArrowGridAnchor;
 
-            // Keep the real 3D model available when the user pans the grid
-            // itself out of frame: place a camera-relative copy at the view
-            // center as a graceful off-screen-indicator fallback.
+            // If the grid anchor itself is outside the viewport, keep the
+            // fallback on the same side of the screen as that real anchor. This
+            // preserves the grid-based default instead of silently moving the
+            // marker to the view center.
             var modelRadius = 2.0f;
             if ( mModel?.ModelPack?.Model?.BoundingSphere is { } sphere )
                 modelRadius = MathF.Max( 2.0f, sphere.Radius );
 
             var inverseView = Matrix4.Invert( mCamera.View );
-            var viewSpaceAnchor = new Vector4( 0.0f, 0.65f, -MathF.Max( 2.5f, modelRadius * 1.5f ), 1.0f );
+            var viewDepth = MathF.Max( 2.5f, modelRadius * 1.5f );
+            var fallbackX = 0.0f;
+            var fallbackY = 0.65f;
+            if ( gridAnchorInFront && gridAnchorClip.W > 0.0001f )
+            {
+                var normalizedX = gridAnchorClip.X / gridAnchorClip.W;
+                var normalizedY = gridAnchorClip.Y / gridAnchorClip.W;
+                fallbackX = Math.Clamp( normalizedX, -0.52f, 0.52f );
+                fallbackY = Math.Clamp( normalizedY, -0.52f, 0.52f );
+            }
+
+            var viewSpaceAnchor = new Vector4(
+                fallbackX * viewDepth / MathF.Max( 0.1f, MathF.Abs( mCamera.Projection.M11 ) ),
+                fallbackY * viewDepth / MathF.Max( 0.1f, MathF.Abs( mCamera.Projection.M22 ) ),
+                -viewDepth, 1.0f );
             var worldAnchor = Vector4.Transform( viewSpaceAnchor, inverseView );
             return new Vector3( worldAnchor.X, worldAnchor.Y, worldAnchor.Z );
         }
@@ -922,6 +1089,8 @@ namespace GFDStudio.GUI.Controls
                 return;
 
             mIsModelLoaded = false;
+            mGuideArrowOpacity = 0.0f;
+            mGuideArrowLastUpdateTime = -1.0;
             mModel.Dispose();
         }
 
