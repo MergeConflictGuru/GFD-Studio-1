@@ -53,6 +53,7 @@ namespace GFDStudio.GUI.Forms
         }
 
         private const string CharacterBrowserSelectionFormat = "paths-v1";
+        private const string CharacterBrowserFilterFormat = "filters-v1";
         private const string CharacterBrowserNoneSelection = "(none)";
 
         private sealed class CharacterBrowserAnimationSelection
@@ -133,6 +134,12 @@ namespace GFDStudio.GUI.Forms
                 "GFDStudio",
                 "character_browser_selection.txt");
 
+        private string CharacterBrowserFiltersPath =>
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "GFDStudio",
+                "character_browser_filters.txt");
+
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
@@ -200,11 +207,38 @@ namespace GFDStudio.GUI.Forms
             };
             rootLayout.Controls.Add(mCharacterBrowserStatusLabel, 0, 4);
 
-            mCharacterModelFilterTextBox.TextChanged += (s, e) => RefreshCharacterModelList();
-            mCharacterFaceFilterTextBox.TextChanged += (s, e) => RefreshCharacterFaceList();
-            mCharacterHairFilterTextBox.TextChanged += (s, e) => RefreshCharacterHairList();
-            mCharacterAnimationFilterTextBox.TextChanged += (s, e) => RefreshCharacterAnimationList();
-            mCharacterBlendAnimationFilterTextBox.TextChanged += (s, e) => RefreshCharacterBlendAnimationList();
+            var savedFilters = LoadCharacterBrowserFilters();
+            mCharacterModelFilterTextBox.Text = savedFilters[0];
+            mCharacterFaceFilterTextBox.Text = savedFilters[1];
+            mCharacterHairFilterTextBox.Text = savedFilters[2];
+            mCharacterAnimationFilterTextBox.Text = savedFilters[3];
+            mCharacterBlendAnimationFilterTextBox.Text = savedFilters[4];
+
+            mCharacterModelFilterTextBox.TextChanged += (s, e) =>
+            {
+                SaveCharacterBrowserFilterSettings();
+                RefreshCharacterModelList();
+            };
+            mCharacterFaceFilterTextBox.TextChanged += (s, e) =>
+            {
+                SaveCharacterBrowserFilterSettings();
+                RefreshCharacterFaceList();
+            };
+            mCharacterHairFilterTextBox.TextChanged += (s, e) =>
+            {
+                SaveCharacterBrowserFilterSettings();
+                RefreshCharacterHairList();
+            };
+            mCharacterAnimationFilterTextBox.TextChanged += (s, e) =>
+            {
+                SaveCharacterBrowserFilterSettings();
+                RefreshCharacterAnimationList();
+            };
+            mCharacterBlendAnimationFilterTextBox.TextChanged += (s, e) =>
+            {
+                SaveCharacterBrowserFilterSettings();
+                RefreshCharacterBlendAnimationList();
+            };
             mCharacterModelListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
             mCharacterFaceListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
             mCharacterHairListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
@@ -2125,6 +2159,62 @@ namespace GFDStudio.GUI.Forms
             {
                 // Browsing still works if persistence fails.
             }
+        }
+
+        private void SaveCharacterBrowserFilterSettings()
+        {
+            if (mCharacterModelFilterTextBox == null)
+                return;
+
+            try
+            {
+                var path = CharacterBrowserFiltersPath;
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllLines(path, new[]
+                {
+                    CharacterBrowserFilterFormat,
+                    mCharacterModelFilterTextBox.Text ?? string.Empty,
+                    mCharacterFaceFilterTextBox.Text ?? string.Empty,
+                    mCharacterHairFilterTextBox.Text ?? string.Empty,
+                    mCharacterAnimationFilterTextBox.Text ?? string.Empty,
+                    mCharacterBlendAnimationFilterTextBox.Text ?? string.Empty
+                });
+            }
+            catch
+            {
+                // Browsing still works if persistence fails.
+            }
+        }
+
+        private string[] LoadCharacterBrowserFilters()
+        {
+            try
+            {
+                if (!File.Exists(CharacterBrowserFiltersPath))
+                    return EmptyCharacterBrowserFilters();
+
+                var filters = File.ReadAllLines(CharacterBrowserFiltersPath);
+                return filters.Length >= 6 &&
+                       string.Equals(filters[0], CharacterBrowserFilterFormat, StringComparison.Ordinal)
+                    ? filters.Skip(1).Take(5).ToArray()
+                    : EmptyCharacterBrowserFilters();
+            }
+            catch
+            {
+                return EmptyCharacterBrowserFilters();
+            }
+        }
+
+        private static string[] EmptyCharacterBrowserFilters()
+        {
+            return new[]
+            {
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty
+            };
         }
 
         private void SaveCharacterBrowserSelectionSettings()
