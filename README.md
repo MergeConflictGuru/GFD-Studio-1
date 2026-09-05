@@ -2,7 +2,7 @@
 **GFD Studio** is a tool for viewing, editing and converting models in **GMD**/**GFS** format.  
 ## Latest builds
 
-Every pushed branch is built on GitHub Actions as a self-contained Windows x64 release. The workflow uploads a downloadable `gfdstudio-windows-x64` artifact.
+Every pushed branch change that affects the application is built on GitHub Actions as a self-contained Windows x64 release. Documentation-only and test-only commits are skipped. The workflow uploads a downloadable `gfdstudio-windows-x64` artifact.
 
 To fetch the latest successful build without compiling locally, run:
 
