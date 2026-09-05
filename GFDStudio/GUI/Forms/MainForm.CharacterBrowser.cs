@@ -103,6 +103,7 @@ namespace GFDStudio.GUI.Forms
         private ModelPack mCharacterBrowserCurrentModelPack;
         private int mCharacterBrowserScanGeneration;
         private bool mCharacterBrowserRestoringSelection;
+        private bool mCharacterBrowserRefreshingModelParts;
         private bool mCharacterBrowserSelectionRestoredForScan;
         private string[] mCharacterBrowserSavedSelection;
 
@@ -780,16 +781,40 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             var filter = filterTextBox.Text?.Trim();
+            var bodyCharacterId = GetSelectedCharacterBodyId();
+            var selectedPath = (listBox.SelectedItem as CharacterModelEntry)?.Path;
             listBox.BeginUpdate();
             try
             {
                 listBox.Items.Clear();
-                foreach (var entry in mCharacterModels.Where(entry => entry.Part == part))
+                foreach (var entry in mCharacterModels.Where(entry => entry.Part == part)
+                    .Where(entry => string.IsNullOrWhiteSpace(bodyCharacterId) ||
+                                    string.Equals(ExtractCharacterId(entry.Path), bodyCharacterId,
+                                                  StringComparison.OrdinalIgnoreCase)))
                 {
                     if (CharacterBrowserMatches(entry.DisplayName, filter))
                         listBox.Items.Add(entry);
                 }
+
                 listBox.Items.Add(CreateCharacterModelNoneEntry(part));
+
+                var restoredSelection = false;
+                if (!string.IsNullOrWhiteSpace(selectedPath))
+                {
+                    for (var i = 0; i < listBox.Items.Count; i++)
+                    {
+                        if (string.Equals((listBox.Items[i] as CharacterModelEntry)?.Path,
+                                          selectedPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            listBox.SelectedIndex = i;
+                            restoredSelection = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!restoredSelection)
+                    listBox.SelectedIndex = listBox.Items.Count - 1;
             }
             finally
             {
@@ -823,6 +848,14 @@ namespace GFDStudio.GUI.Forms
         {
             return string.IsNullOrWhiteSpace(filter) ||
                    value.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private string GetSelectedCharacterBodyId()
+        {
+            var selectedBody = mCharacterModelListBox?.SelectedItem as CharacterModelEntry;
+            return selectedBody == null || string.IsNullOrWhiteSpace(selectedBody.Path)
+                ? null
+                : ExtractCharacterId(selectedBody.Path);
         }
 
         private static CharacterModelEntry CreateCharacterModelNoneEntry(CharacterModelPart part)
@@ -916,6 +949,23 @@ namespace GFDStudio.GUI.Forms
 
             try
             {
+                if (ReferenceEquals(sender, mCharacterModelListBox))
+                {
+                    mCharacterBrowserRefreshingModelParts = true;
+                    try
+                    {
+                        RefreshCharacterFaceList();
+                        RefreshCharacterHairList();
+                    }
+                    finally
+                    {
+                        mCharacterBrowserRefreshingModelParts = false;
+                    }
+                }
+
+                if (mCharacterBrowserRefreshingModelParts)
+                    return;
+
                 LoadSelectedCharacterModelParts();
             }
             catch (Exception ex)
@@ -1384,7 +1434,7 @@ namespace GFDStudio.GUI.Forms
         private static string ExtractCharacterId(string path)
         {
             var stem = Path.GetFileNameWithoutExtension(path);
-            return Regex.Match(stem ?? string.Empty, @"(?<!\d)\d{4}(?=_)", RegexOptions.CultureInvariant).Value;
+            return Regex.Match(stem ?? string.Empty, @"(?<!\d)\d{3,4}(?=_)", RegexOptions.CultureInvariant).Value;
         }
 
         private static Animation GetCharacterBrowserAnimation(AnimationPack pack, CharacterAnimationEntry entry)
