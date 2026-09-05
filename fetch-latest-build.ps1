@@ -7,6 +7,7 @@ param(
     [string]$OutputDirectory,
     [string]$Commit,
     [switch]$Watch,
+    [switch]$Launch,
     [ValidateRange(10, 86400)]
     [int]$IntervalSeconds = 30
 )
@@ -15,6 +16,51 @@ $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $PSScriptRoot 'GFDStudio-binary'
+}
+
+function Get-RunningGfdStudioProcesses {
+    param(
+        [string]$ExecutablePath
+    )
+
+    $fullExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
+    return @(Get-Process -Name 'GFDStudio' -ErrorAction SilentlyContinue | Where-Object {
+        try {
+            [IO.Path]::GetFullPath($_.MainModule.FileName) -ieq $fullExecutablePath
+        }
+        catch {
+            $false
+        }
+    })
+}
+
+function Stop-GfdStudioProcesses {
+    param(
+        [System.Diagnostics.Process[]]$Processes
+    )
+
+    foreach ($process in $Processes) {
+        if ($process.HasExited) {
+            continue
+        }
+
+        Write-Host "Closing running GFD Studio process $($process.Id) before replacing the binary."
+        Stop-Process -Id $process.Id -Force
+        $process.WaitForExit()
+    }
+}
+
+function Start-GfdStudio {
+    param(
+        [string]$ExecutablePath
+    )
+
+    if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
+        throw "Cannot launch GFD Studio because '$ExecutablePath' was not found."
+    }
+
+    Start-Process -FilePath $ExecutablePath -WorkingDirectory (Split-Path -Parent $ExecutablePath) | Out-Null
+    Write-Host "Started GFD Studio: $ExecutablePath"
 }
 
 function Get-GitRemoteUrl {
@@ -150,6 +196,7 @@ function Download-BuildArtifact {
     $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) "gfdstudio-artifact-$([Guid]::NewGuid().ToString('N'))"
     $archivePath = Join-Path $temporaryDirectory 'artifact.zip'
     $expandedDirectory = Join-Path $temporaryDirectory 'expanded'
+    $targetExecutablePath = Join-Path $DestinationDirectory 'GFDStudio.exe'
 
     try {
         New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
@@ -173,6 +220,11 @@ function Download-BuildArtifact {
             throw 'Downloaded artifact does not contain GFDStudio.exe.'
         }
 
+        $runningProcesses = @(Get-RunningGfdStudioProcesses -ExecutablePath $targetExecutablePath)
+        if ($runningProcesses.Count -gt 0) {
+            Stop-GfdStudioProcesses -Processes $runningProcesses
+        }
+
         if (Test-Path -LiteralPath $DestinationDirectory) {
             Remove-Item -LiteralPath $DestinationDirectory -Recurse -Force
         }
@@ -182,6 +234,10 @@ function Download-BuildArtifact {
         $shortSha = if ($Run.head_sha.Length -ge 7) { $Run.head_sha.Substring(0, 7) } else { $Run.head_sha }
         Write-Host "Downloaded GFD Studio run $($Run.run_number) ($shortSha)."
         Write-Host "Binary: $DestinationDirectory\GFDStudio.exe"
+
+        if ($runningProcesses.Count -gt 0 -or $Launch) {
+            Start-GfdStudio -ExecutablePath $targetExecutablePath
+        }
     }
     finally {
         if (Test-Path -LiteralPath $temporaryDirectory) {
