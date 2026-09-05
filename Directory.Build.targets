@@ -1,5 +1,5 @@
 <Project>
-  <Target Name="GenerateCommitNumber" BeforeTargets="CoreCompile" Condition="'$(MSBuildProjectName)' == 'GFDStudio'">
+  <Target Name="ReadCommitNumber" Condition="'$(MSBuildProjectName)' == 'GFDStudio'">
     <Exec Command="git log -1 --format=%%s" ConsoleToMSBuild="true" IgnoreExitCode="true">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitNumber" />
     </Exec>
@@ -8,9 +8,18 @@
       <CommitNumber Condition="'$(CommitNumber)' == '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitCommitNumber)', '^\s*[0-9]+'))">$([System.Text.RegularExpressions.Regex]::Replace('$(GitCommitNumber)', '(?s)^\s*([0-9]+).*$', '$1'))</CommitNumber>
       <CommitNumber Condition="'$(CommitNumber)' == ''">0</CommitNumber>
       <CommitNumberFile>$(IntermediateOutputPath)Generated\CommitNumber.g.cs</CommitNumberFile>
+      <CommitNumberStamp>$(IntermediateOutputPath)Generated\CommitNumber.$(CommitNumber).stamp</CommitNumberStamp>
     </PropertyGroup>
+  </Target>
 
+  <!--
+    Use a commit-number-specific stamp as the input. The generated source is
+    rewritten only when the commit number changes, so it no longer invalidates
+    the whole GFDStudio project on every incremental build.
+  -->
+  <Target Name="GenerateCommitNumber" BeforeTargets="CoreCompile" DependsOnTargets="ReadCommitNumber" Inputs="$(CommitNumberStamp)" Outputs="$(CommitNumberFile)" Condition="'$(MSBuildProjectName)' == 'GFDStudio'">
     <MakeDir Directories="$(IntermediateOutputPath)Generated" />
+    <Touch Files="$(CommitNumberStamp)" AlwaysCreate="true" />
     <WriteLinesToFile
       File="$(CommitNumberFile)"
       Lines="namespace GFDStudio { internal static class BuildInfo { public const int CommitNumber = $([System.String]::Copy('$(CommitNumber)').Trim())%3B } }"
