@@ -1990,6 +1990,7 @@ namespace GFDStudio.GUI.Forms
 
             var characterDirectory = GetCharacterDirectory(gapPath);
             var characterModels = mCharacterModels
+                .Where(model => model.Part == CharacterModelPart.Body)
                 .Where(model => string.Equals(GetCharacterDirectory(model.Path), characterDirectory,
                                               StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -2035,7 +2036,12 @@ namespace GFDStudio.GUI.Forms
         private static string ExtractCharacterModelKey(string path)
         {
             var stem = Path.GetFileNameWithoutExtension(path);
-            return Regex.Match(stem ?? string.Empty, @"\d{4}_\d{3}", RegexOptions.CultureInvariant).Value;
+            // P5/R uses keys such as c0001_001, while P3D/P5D uses pc203_018
+            // for animations and pc203_26 for body models.
+            return Regex.Match(
+                stem ?? string.Empty,
+                @"(?<!\d)\d{3,4}_\d{2,3}(?=_|$)",
+                RegexOptions.CultureInvariant).Value;
         }
 
         private static CharacterModelPart ClassifyCharacterModel(string path)
