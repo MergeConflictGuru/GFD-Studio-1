@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "GFD Studio: Release binary",
+            "type": "coreclr",
+            "request": "launch",
+            "program": "${workspaceFolder}/GFDStudio-binary/GFDStudio.dll",
+            "cwd": "${workspaceFolder}/GFDStudio-binary",
+            "preLaunchTask": "GFD Studio: Build Release (binary)",
+            "stopAtEntry": false,
+            "console": "internalConsole"
+        }
+    ]
+}
