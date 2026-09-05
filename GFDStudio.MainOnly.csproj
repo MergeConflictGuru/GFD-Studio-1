@@ -1,0 +1,90 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <MSBuildProjectExtensionsPath>obj\GFDStudio.MainOnly\</MSBuildProjectExtensionsPath>
+    <AssemblyName>GFDStudio</AssemblyName>
+    <RootNamespace>GFDStudio</RootNamespace>
+    <Version>0.10.3</Version>
+    <Authors>TGE</Authors>
+    <Company>TGE</Company>
+    <ApplicationIcon>GFDStudio\app_data\icons\main_icon.ico</ApplicationIcon>
+    <StartupObject>GFDStudio.Program</StartupObject>
+    <ApplicationManifest>GFDStudio\app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="GFDStudio\**\*.cs" Exclude="GFDStudio\bin\**;GFDStudio\obj\**" />
+    <EmbeddedResource Include="GFDStudio\**\*.resx" Exclude="GFDStudio\bin\**;GFDStudio\obj\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="AssimpNet">
+      <HintPath>GFDStudio-binary\AssimpNet.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="CSharpImageLibrary">
+      <HintPath>GFDStudio-binary\CSharpImageLibrary.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="GFDLibrary">
+      <HintPath>GFDStudio-binary\GFDLibrary.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="GFDLibrary.Conversion.AssimpNet">
+      <HintPath>GFDStudio-binary\GFDLibrary.Conversion.AssimpNet.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="GFDLibrary.Conversion.FbxSdk">
+      <HintPath>GFDStudio-binary\GFDLibrary.Conversion.FbxSdk.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="GFDLibrary.Rendering.OpenGL">
+      <HintPath>GFDStudio-binary\GFDLibrary.Rendering.OpenGL.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="MetroSet_UI">
+      <HintPath>GFDStudio-binary\MetroSet UI.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>GFDStudio-binary\Newtonsoft.Json.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Ookii.Dialogs.Wpf">
+      <HintPath>GFDStudio-binary\Ookii.Dialogs.Wpf.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="OpenTK">
+      <HintPath>GFDStudio-binary\OpenTK.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="OpenTK.GLControl">
+      <HintPath>GFDStudio-binary\OpenTK.GLControl.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SixLabors.ImageSharp">
+      <HintPath>GFDStudio-binary\SixLabors.ImageSharp.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="GFDStudio\app_data\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>app_data\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="GFDStudio\Presets\**\*">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <TargetPath>Presets\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+  </ItemGroup>
+
+</Project>
