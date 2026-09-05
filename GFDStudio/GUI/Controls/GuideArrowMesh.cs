@@ -393,10 +393,19 @@ namespace GFDStudio.GUI.Controls
         {
             public GuideArrowMaterial()
             {
-                EnableBackfaceCulling = true;
+                // The indicator can be viewed from above, below, or edge-on while
+                // the model camera is orbiting. Keep both sides available so the
+                // real beveled geometry never disappears because of winding.
+                EnableBackfaceCulling = false;
             }
 
-            public override void Bind( GLShaderProgram shaderProgram ) { }
+            public override void Bind( GLShaderProgram shaderProgram )
+            {
+                // GLMesh calls the base non-virtual Unbind afterwards, so make the
+                // state explicit for every part instead of relying on constructor
+                // state left by the character material pass.
+                GL.Disable( EnableCap.CullFace );
+            }
 
             public override bool IsMaterialTransparent() => true;
         }

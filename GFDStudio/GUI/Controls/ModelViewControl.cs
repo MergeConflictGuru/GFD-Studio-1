@@ -641,21 +641,33 @@ namespace GFDStudio.GUI.Controls
 
             var target = GetGuideArrowTargetWorldPosition();
             var targetClip = ProjectGuideArrowPoint( target, out var targetInFrontOfCamera );
-            var opacity = CalculateGuideArrowOpacity( targetClip, targetInFrontOfCamera );
+            GetGuideArrowTargetBounds( out var targetCenter, out var targetExtents );
+            var targetInView = IsGuideArrowTargetInView( targetCenter, targetExtents );
+            var opacity = CalculateGuideArrowOpacity( targetClip, targetInFrontOfCamera, targetInView );
             if ( opacity <= 0.001f )
                 return;
 
             var anchor = ResolveGuideArrowAnchor();
             var direction = target - anchor;
-            direction.Y = 0.0f;
             if ( direction.LengthSquared < 0.0001f )
                 return;
 
             direction.Normalize();
-            var yaw = MathF.Atan2( direction.X, direction.Z );
-            var model = Matrix4.CreateRotationY( yaw ) * Matrix4.CreateTranslation( anchor );
+            var horizontalLength = MathF.Sqrt( direction.X * direction.X + direction.Z * direction.Z );
+            var yaw = horizontalLength > 0.0001f ? MathF.Atan2( direction.X, direction.Z ) : 0.0f;
+            var pitch = MathF.Atan2( direction.Y, horizontalLength );
+            var model = Matrix4.CreateScale( GetGuideArrowScale( anchor ) ) *
+                        // The mesh points along local +Z. Pitch first makes the
+                        // marker follow targets above and below the camera too.
+                        Matrix4.CreateRotationX( -pitch ) *
+                        Matrix4.CreateRotationY( yaw ) *
+                        Matrix4.CreateTranslation( anchor );
 
             var blended = opacity < 0.999f;
+            var depthTestEnabled = GL.IsEnabled( EnableCap.DepthTest );
+            // The indicator is a navigation aid, so it must stay readable even when
+            // the character or grid happens to occupy the same depth range.
+            GL.Disable( EnableCap.DepthTest );
             if ( blended )
             {
                 GL.Enable( EnableCap.Blend );
@@ -670,28 +682,103 @@ namespace GFDStudio.GUI.Controls
                 GL.DepthMask( true );
                 GL.Disable( EnableCap.Blend );
             }
+
+            if ( depthTestEnabled )
+                GL.Enable( EnableCap.DepthTest );
+        }
+
+        private float GetGuideArrowScale( Vector3 anchor )
+        {
+            var viewAnchor = Vector4.Transform( new Vector4( anchor, 1.0f ), mCamera.View );
+            var viewDepth = MathF.Max( 0.25f, -viewAnchor.Z );
+            var focalLength = MathF.Max( 0.1f, MathF.Abs( mCamera.Projection.M22 ) );
+
+            // The mesh is about 2.1 units across its local bounding sphere. Size it
+            // from camera depth so its projected diameter is roughly one third of
+            // the viewport even when the viewer is zoomed far out.
+            const float localBoundingDiameter = 2.1f;
+            const float desiredViewportDiameter = 0.68f; // 34% of the NDC width/height
+            var scale = desiredViewportDiameter * viewDepth /
+                        ( localBoundingDiameter * focalLength );
+            return Math.Clamp( scale, 0.85f, 48.0f );
         }
 
         private Vector3 GetGuideArrowTargetWorldPosition()
         {
+            GetGuideArrowTargetBounds( out var center, out _ );
+            return center;
+        }
+
+        private void GetGuideArrowTargetBounds( out Vector3 center, out Vector3 extents )
+        {
             var model = mModel?.ModelPack?.Model;
-            if ( model == null )
-                return Vector3.Zero;
-
-            if ( model.BoundingSphere.HasValue )
+            if ( model?.BoundingBox is { } bounds )
             {
-                var center = model.BoundingSphere.Value.Center;
-                return new Vector3( center.X, center.Y, center.Z );
+                center = new Vector3(
+                    ( bounds.Min.X + bounds.Max.X ) * 0.5f,
+                    ( bounds.Min.Y + bounds.Max.Y ) * 0.5f,
+                    ( bounds.Min.Z + bounds.Max.Z ) * 0.5f );
+                extents = new Vector3(
+                    MathF.Max( 0.001f, MathF.Abs( bounds.Max.X - bounds.Min.X ) * 0.5f ),
+                    MathF.Max( 0.001f, MathF.Abs( bounds.Max.Y - bounds.Min.Y ) * 0.5f ),
+                    MathF.Max( 0.001f, MathF.Abs( bounds.Max.Z - bounds.Min.Z ) * 0.5f ) );
+                return;
             }
 
-            if ( model.BoundingBox.HasValue )
+            if ( model?.BoundingSphere is { } sphere )
             {
-                var bounds = model.BoundingBox.Value;
-                var center = ( bounds.Min + bounds.Max ) * 0.5f;
-                return new Vector3( center.X, center.Y, center.Z );
+                center = new Vector3( sphere.Center.X, sphere.Center.Y, sphere.Center.Z );
+                extents = new Vector3( MathF.Max( 0.001f, sphere.Radius ) );
+                return;
             }
 
-            return Vector3.Zero;
+            center = Vector3.Zero;
+            extents = new Vector3( 1.0f );
+        }
+
+        private bool IsGuideArrowTargetInView( Vector3 center, Vector3 extents )
+        {
+            var minimumX = float.PositiveInfinity;
+            var maximumX = float.NegativeInfinity;
+            var minimumY = float.PositiveInfinity;
+            var maximumY = float.NegativeInfinity;
+            var hasFrontPoint = false;
+            var hasBehindPoint = false;
+
+            for ( var x = -1; x <= 1; x += 2 )
+            for ( var y = -1; y <= 1; y += 2 )
+            for ( var z = -1; z <= 1; z += 2 )
+            {
+                var point = center + new Vector3( extents.X * x, extents.Y * y, extents.Z * z );
+                var viewPosition = Vector4.Transform( new Vector4( point, 1.0f ), mCamera.View );
+                if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
+                {
+                    hasBehindPoint = true;
+                    continue;
+                }
+
+                hasFrontPoint = true;
+                var clipPosition = Vector4.Transform( viewPosition, mCamera.Projection );
+                if ( clipPosition.W <= 0.0001f )
+                    continue;
+
+                var normalizedX = clipPosition.X / clipPosition.W;
+                var normalizedY = clipPosition.Y / clipPosition.W;
+                minimumX = MathF.Min( minimumX, normalizedX );
+                maximumX = MathF.Max( maximumX, normalizedX );
+                minimumY = MathF.Min( minimumY, normalizedY );
+                maximumY = MathF.Max( maximumY, normalizedY );
+            }
+
+            if ( !hasFrontPoint )
+                return false;
+            if ( hasBehindPoint )
+                return true;
+
+            // The projected AABB is intentionally conservative: if any portion of
+            // the model overlaps the viewport, the navigation marker is hidden.
+            return minimumX <= 1.0f && maximumX >= -1.0f &&
+                   minimumY <= 1.0f && maximumY >= -1.0f;
         }
 
         private Vector3 ResolveGuideArrowAnchor()
@@ -730,8 +817,11 @@ namespace GFDStudio.GUI.Controls
             return MathF.Abs( normalizedX ) <= margin && MathF.Abs( normalizedY ) <= margin;
         }
 
-        private static float CalculateGuideArrowOpacity( Vector4 clipPosition, bool inFrontOfCamera )
+        private static float CalculateGuideArrowOpacity( Vector4 clipPosition, bool inFrontOfCamera,
+                                                         bool targetInView )
         {
+            if ( targetInView )
+                return 0.0f;
             if ( !inFrontOfCamera || clipPosition.W <= 0.0001f )
                 return 1.0f;
 
