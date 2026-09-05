@@ -18,6 +18,7 @@ namespace GFDStudio
         public static AssemblyName AssemblyName { get; } = Assembly.GetName();
         public static string Name { get; } = "GFD Studio";
         public static Version Version { get; } = AssemblyName.Version;
+        public const int CommitNumber = 30;
 
         public static bool DarkMode { get; set; } = true;
 
