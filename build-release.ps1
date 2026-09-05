@@ -97,7 +97,6 @@ foreach ($outputFile in @('GFDStudio.dll', 'GFDStudio.exe')) {
 }
 
 $mainProject = Join-Path $workspace 'GFDStudio\GFDStudio.csproj'
-$fbxProject = Join-Path $workspace 'GFDLibrary.Conversion.FbxSdk\GFDLibrary.Conversion.FbxSdk.vcxproj'
 $publishDirectory = $binaryDirectory.TrimEnd('\') + '\'
 $application = Join-Path $binaryDirectory 'GFDStudio.exe'
 $buildSucceeded = $false
@@ -114,18 +113,6 @@ try {
         '/verbosity:minimal'
     )
 
-    Write-Host '[release] Restoring the native FBX project...'
-    Invoke-MSBuild @(
-        $fbxProject,
-        '/t:Restore',
-        '/p:Configuration=Release',
-        '/p:Platform=x64',
-        '/p:RuntimeIdentifier=win-x64',
-        '/p:RestoreRuntimeIdentifier=win-x64',
-        "/p:FBXSDKRoot=$fbxSdkRoot",
-        '/verbosity:minimal'
-    )
-
     Write-Host '[release] Building the normal incremental Release graph into GFDStudio-binary...'
     Invoke-MSBuild @(
         $mainProject,
@@ -136,6 +123,10 @@ try {
         '/p:SelfContained=true',
         "/p:PublishDir=$publishDirectory",
         '/p:Platform=x64',
+        # The checked-in Scarlet projects run NetRevisionTool in pre/post-build
+        # events. Those events mutate source files and defeat incremental builds.
+        '/p:PreBuildEvent=',
+        '/p:PostBuildEvent=',
         "/p:FBXSDKRoot=$fbxSdkRoot",
         '/p:PublishSingleFile=false',
         '/p:DebugType=None',
