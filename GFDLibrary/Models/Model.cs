@@ -258,9 +258,28 @@ namespace GFDLibrary.Models
                     continue;
 
                 var worldTransform = otherNode.WorldTransform;
-                otherNode.Parent?.RemoveChildNode( otherNode );
-                otherNode.LocalTransform = worldTransform;
-                RootNode.AddChildNode( otherNode );
+                var originalParent = otherNode.Parent;
+                originalParent?.RemoveChildNode( otherNode );
+
+                // Keep incoming geometry under the corresponding animated node.
+                // Face meshes commonly live directly below "head", while hair
+                // meshes are below "mesh_grp". Moving them to the model root
+                // preserves the bind pose but disconnects them from animation.
+                if ( originalParent != null && otherToThisNodes.TryGetValue( originalParent, out var mappedParent ) )
+                {
+                    Matrix4x4.Invert( mappedParent.WorldTransform, out var mappedParentWorldInv );
+                    otherNode.LocalTransform = worldTransform * mappedParentWorldInv;
+                    mappedParent.AddChildNode( otherNode );
+                }
+                else
+                {
+                    otherNode.LocalTransform = worldTransform;
+                    RootNode.AddChildNode( otherNode );
+                }
+
+                // Allow descendants of an unmatched hierarchy to be attached
+                // beneath this newly moved node on the next pass.
+                otherToThisNodes[otherNode] = otherNode;
             }
 
             // Rebuild one palette for both the original and incoming meshes.
