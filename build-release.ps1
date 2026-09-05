@@ -8,87 +8,73 @@ $ErrorActionPreference = 'Stop'
 
 $workspace = (Resolve-Path $PSScriptRoot).Path
 $binaryDirectory = Join-Path $workspace 'GFDStudio-binary'
-$temporaryBuildDirectory = Join-Path $env:TEMP 'GFDStudio-release-build'
-$dotnetCandidates = @(
-    'Q:\_coding\tools\unity\editor\6000.5.7f1\Editor\Data\DotNetSdk\dotnet.exe',
-    'C:\Program Files\dotnet\dotnet.exe'
-)
 
-$dotnetPath = $dotnetCandidates |
+$dotnetRootCandidates = @(
+    'Q:\_coding\tools\unity\editor\6000.5.7f1\Editor\Data\DotNetSdk',
+    'C:\Program Files\dotnet'
+)
+$dotnetRoot = $dotnetRootCandidates |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_ 'dotnet.exe') } |
+    Select-Object -First 1
+
+$msbuildCandidates = @(
+    'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe',
+    'C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe',
+    'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe',
+    'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe'
+)
+$msbuildPath = $msbuildCandidates |
     Where-Object { Test-Path -LiteralPath $_ } |
     Select-Object -First 1
 
-if (-not $dotnetPath) {
-    $dotnetCommand = Get-Command dotnet.exe -ErrorAction SilentlyContinue
-    if ($dotnetCommand) {
-        $dotnetPath = $dotnetCommand.Source
-    }
+$fbxSdkCandidates = @(
+    'Q:\_coding\tools\fbxsdk',
+    'C:\Program Files\Autodesk\FBX\FBX SDK\2020.3.7'
+)
+$fbxSdkRoot = $fbxSdkCandidates |
+    Where-Object {
+        (Test-Path -LiteralPath (Join-Path $_ 'include\fbxsdk.h')) -and
+        (Test-Path -LiteralPath (Join-Path $_ 'lib\x64\release\libfbxsdk-md.lib'))
+    } |
+    Select-Object -First 1
+
+if (-not $dotnetRoot) {
+    throw 'A .NET SDK could not be found. Install .NET 8 or update the SDK path in build-release.ps1.'
+}
+if (-not $msbuildPath) {
+    throw 'Visual Studio MSBuild could not be found. Install the Visual Studio desktop C++ workload.'
+}
+if (-not $fbxSdkRoot) {
+    throw 'The FBX SDK 2020.3.7 could not be found. Install it or update the FBX SDK path in build-release.ps1.'
 }
 
-if (-not $dotnetPath) {
-    throw 'A .NET SDK could not be found. Install .NET 8 or update the dotnet path in build-release.ps1.'
-}
-
-$dotnetRoot = Split-Path -Parent $dotnetPath
-$unitySdkRoot = Join-Path $dotnetRoot 'sdk\8.0.318'
 $env:DOTNET_ROOT = $dotnetRoot
 $env:PATH = "$dotnetRoot;$env:PATH"
-
-if (Test-Path -LiteralPath $unitySdkRoot) {
-    $env:MSBuildSDKsPath = Join-Path $unitySdkRoot 'Sdks'
+$sdkDirectories = Get-ChildItem -LiteralPath (Join-Path $dotnetRoot 'sdk') -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like '8.*' } |
+    Sort-Object Name -Descending
+if ($sdkDirectories) {
+    $env:MSBuildSDKsPath = Join-Path $sdkDirectories[0].FullName 'Sdks'
 }
 else {
     Remove-Item Env:MSBuildSDKsPath -ErrorAction SilentlyContinue
 }
-
-$env:DOTNET_CLI_HOME = Join-Path $temporaryBuildDirectory 'dotnet-home'
-$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
-$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-$env:DOTNET_NOLOGO = '1'
-New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME | Out-Null
+$env:FBXSDKRoot = $fbxSdkRoot
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 
-function Invoke-DotNet {
+function Invoke-MSBuild {
     param(
         [Parameter(Mandatory)]
         [string[]]$Arguments
     )
 
-    & $dotnetPath @Arguments
+    & $msbuildPath @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "dotnet $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
+        throw "MSBuild $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
     }
 }
 
-$requiredBinaryInputs = @(
-    'AssimpNet.dll',
-    'BCnEncoder.dll',
-    'BCnEncoder.NET.ImageSharp.dll',
-    'CSharpImageLibrary.dll',
-    'GFDLibrary.Conversion.AssimpNet.dll',
-    'GFDLibrary.Conversion.FbxSdk.dll',
-    'GFDLibrary.Rendering.OpenGL.dll',
-    'MetroSet UI.dll',
-    'Newtonsoft.Json.dll',
-    'Ookii.Dialogs.Wpf.dll',
-    'OpenTK.dll',
-    'OpenTK.GLControl.dll',
-    'Scarlet.dll',
-    'Scarlet.IO.ImageFormats.dll',
-    'SixLabors.ImageSharp.dll',
-    'System.Drawing.Common.dll',
-    'TgaDecoderTest.dll',
-    'UsefulThings.dll',
-    'YamlDotNet.dll'
-)
-
-$missingInputs = $requiredBinaryInputs |
-    Where-Object { -not (Test-Path -LiteralPath (Join-Path $binaryDirectory $_)) }
-if ($missingInputs) {
-    throw "GFDStudio-binary is missing required prebuilt libraries: $($missingInputs -join ', ')"
-}
-
-foreach ($outputFile in @('GFDLibrary.dll', 'GFDStudio.dll', 'GFDStudio.exe')) {
+foreach ($outputFile in @('GFDStudio.dll', 'GFDStudio.exe')) {
     $outputPath = Join-Path $binaryDirectory $outputFile
     if (Test-Path -LiteralPath $outputPath) {
         try {
@@ -101,44 +87,48 @@ foreach ($outputFile in @('GFDLibrary.dll', 'GFDStudio.dll', 'GFDStudio.exe')) {
     }
 }
 
-$libraryProject = Join-Path $workspace 'GFDLibrary.MainOnly.csproj'
-$libraryBinary = Join-Path $binaryDirectory 'GFDLibrary.dll'
-$librarySources = Get-ChildItem -LiteralPath (Join-Path $workspace 'GFDLibrary') -Recurse -File -Filter '*.cs'
-$libraryTimestamp = if (Test-Path -LiteralPath $libraryBinary) { (Get-Item $libraryBinary).LastWriteTimeUtc } else { [DateTime]::MinValue }
-$librarySourceChanges = @($librarySources | Where-Object { $_.LastWriteTimeUtc -gt $libraryTimestamp })
-$libraryNeedsBuild =
-    (-not (Test-Path -LiteralPath $libraryBinary)) -or
-    ($librarySourceChanges.Count -gt 0)
+$mainProject = Join-Path $workspace 'GFDStudio\GFDStudio.csproj'
+$fbxProject = Join-Path $workspace 'GFDLibrary.Conversion.FbxSdk\GFDLibrary.Conversion.FbxSdk.vcxproj'
+$publishDirectory = $binaryDirectory.TrimEnd('\') + '\'
 
-if ($libraryNeedsBuild) {
-    Write-Host '[release] Building the changed managed GFDLibrary dependency...'
-    $libraryStagingDirectory = Join-Path $temporaryBuildDirectory 'GFDLibrary'
-    $libraryIntermediateDirectory = Join-Path $temporaryBuildDirectory 'GFDLibrary-obj'
-    New-Item -ItemType Directory -Force -Path $libraryStagingDirectory | Out-Null
-    $libraryOutput = $libraryStagingDirectory.TrimEnd('\') + '\'
-    $libraryIntermediate = $libraryIntermediateDirectory.TrimEnd('\') + '\'
+Write-Host '[release] Restoring the normal GFD Studio project graph...'
+Invoke-MSBuild @(
+    $mainProject,
+    '/t:Restore',
+    '/p:RuntimeIdentifier=win-x64',
+    '/p:Platform=x64',
+    "/p:FBXSDKRoot=$fbxSdkRoot",
+    '/verbosity:minimal'
+)
 
-    Invoke-DotNet @('restore', $libraryProject, '--ignore-failed-sources', '--nologo', "-p:MSBuildProjectExtensionsPath=$libraryIntermediate", '-v:minimal')
-    Invoke-DotNet @('build', $libraryProject, '--no-restore', '--nologo', '-c', 'Release', "-p:MSBuildProjectExtensionsPath=$libraryIntermediate", "-p:OutDir=$libraryOutput")
+Write-Host '[release] Restoring the native FBX project...'
+Invoke-MSBuild @(
+    $fbxProject,
+    '/t:Restore',
+    '/p:Configuration=Release',
+    '/p:Platform=x64',
+    '/p:RuntimeIdentifier=win-x64',
+    '/p:RestoreRuntimeIdentifier=win-x64',
+    "/p:FBXSDKRoot=$fbxSdkRoot",
+    '/verbosity:minimal'
+)
 
-    foreach ($fileName in @('GFDLibrary.dll', 'GFDLibrary.pdb', 'GFDLibrary.deps.json')) {
-        $builtFile = Join-Path $libraryStagingDirectory $fileName
-        if (Test-Path -LiteralPath $builtFile) {
-            Copy-Item -LiteralPath $builtFile -Destination (Join-Path $binaryDirectory $fileName) -Force
-        }
-    }
-}
-else {
-    Write-Host '[release] GFDLibrary is up to date; keeping the prebuilt library.'
-}
-
-$mainProject = Join-Path $workspace 'GFDStudio.MainOnly.csproj'
-$mainOutput = $binaryDirectory.TrimEnd('\') + '\'
-$mainIntermediateDirectory = Join-Path $temporaryBuildDirectory 'GFDStudio-obj'
-$mainIntermediate = $mainIntermediateDirectory.TrimEnd('\') + '\'
-Write-Host '[release] Building GFDStudio into GFDStudio-binary...'
-Invoke-DotNet @('restore', $mainProject, '--ignore-failed-sources', '--nologo', "-p:MSBuildProjectExtensionsPath=$mainIntermediate", '-v:minimal')
-Invoke-DotNet @('build', $mainProject, '--no-restore', '--nologo', '-c', 'Release', '-p:SelfContained=false', "-p:MSBuildProjectExtensionsPath=$mainIntermediate", "-p:OutDir=$mainOutput")
+Write-Host '[release] Building the normal incremental Release graph into GFDStudio-binary...'
+Invoke-MSBuild @(
+    $mainProject,
+    '/t:Publish',
+    '/p:Configuration=Release',
+    '/p:TargetFramework=net8.0-windows',
+    '/p:RuntimeIdentifier=win-x64',
+    '/p:SelfContained=false',
+    "/p:PublishDir=$publishDirectory",
+    '/p:Platform=x64',
+    "/p:FBXSDKRoot=$fbxSdkRoot",
+    '/p:PublishSingleFile=false',
+    '/p:DebugType=None',
+    '/p:DebugSymbols=false',
+    '/verbosity:minimal'
+)
 
 $application = Join-Path $binaryDirectory 'GFDStudio.exe'
 $assembly = Join-Path $binaryDirectory 'GFDStudio.dll'
@@ -149,6 +139,6 @@ if (-not (Test-Path -LiteralPath $application) -or -not (Test-Path -LiteralPath 
 Write-Host "[release] Built $application"
 
 if ($Run) {
-    $process = Start-Process -FilePath $dotnetPath -ArgumentList @($assembly) -WorkingDirectory $binaryDirectory -PassThru
+    $process = Start-Process -FilePath $application -WorkingDirectory $binaryDirectory -PassThru
     Write-Host "[release] Started GFD Studio (PID $($process.Id))."
 }

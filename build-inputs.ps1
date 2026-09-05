@@ -6,7 +6,7 @@ function Get-GfdStudioPathImpact {
 
     $normalizedPath = $Path.Trim() -replace '\\', '/'
 
-    $nonBuildPath = $normalizedPath -match '^(?:README\.md|AGENTS\.md|\.editorconfig|\.gitignore|\.githooks/|\.github/(?!workflows/)|\.vscode/|fetch-latest-build\.ps1|create-build-delta\.ps1|build-inputs\.ps1|build-release\.ps1|install-git-hooks\.ps1|run-latest-build\.bat|appveyor\.yml|GFDStudio\.MainOnly\.csproj|GFDLibrary\.MainOnly\.csproj|Resources/|GFDLibrary\.Tests/|GFDLibrary\.Conversion\.Core/|GFDLibrary\.Conversion\.FbxSdk\.Tests/|Dependencies/Scarlet/(?:Scarlet\.IO\.CompressionFormats|Scarlet\.IO\.ContainerFormats|ScarletTestApp|ScarletUnitTests|ScarletWinTest)/)'
+    $nonBuildPath = $normalizedPath -match '^(?:README\.md|AGENTS\.md|\.editorconfig|\.gitignore|\.githooks/|\.github/(?!workflows/)|\.vscode/|fetch-latest-build\.ps1|create-build-delta\.ps1|build-inputs\.ps1|build-release\.ps1|install-git-hooks\.ps1|run-latest-build\.bat|appveyor\.yml|Resources/|GFDLibrary\.Tests/|GFDLibrary\.Conversion\.Core/|GFDLibrary\.Conversion\.FbxSdk\.Tests/|Dependencies/Scarlet/(?:Scarlet\.IO\.CompressionFormats|Scarlet\.IO\.ContainerFormats|ScarletTestApp|ScarletUnitTests|ScarletWinTest)/)'
     if ($nonBuildPath) {
         return [pscustomobject]@{
             Full     = $false
