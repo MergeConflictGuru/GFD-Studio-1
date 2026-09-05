@@ -1,5 +1,7 @@
 #version 330 core
 
+// Keep the guide arrow delta path covered by the build/fetch smoke test.
+
 in vec3 fViewPosition;
 in vec3 fNormal;
 
