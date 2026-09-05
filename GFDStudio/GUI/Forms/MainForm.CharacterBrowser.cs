@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Text.RegularExpressions;
+using System.Text;
 
 using GFDLibrary;
 using GFDLibrary.Animations;
@@ -48,6 +49,16 @@ namespace GFDStudio.GUI.Forms
             public int Index { get; init; }
             public string DisplayName { get; init; }
             public override string ToString() => DisplayName;
+        }
+
+        private const string CharacterBrowserSelectionFormat = "paths-v1";
+        private const string CharacterBrowserNoneSelection = "(none)";
+
+        private sealed class CharacterBrowserAnimationSelection
+        {
+            public string PackPath { get; init; }
+            public CharacterAnimationListKind Kind { get; init; }
+            public int Index { get; init; }
         }
 
         private sealed class CharacterAnimationDefinitionSet
@@ -103,6 +114,7 @@ namespace GFDStudio.GUI.Forms
         private ModelPack mCharacterBrowserCurrentModelPack;
         private int mCharacterBrowserScanGeneration;
         private bool mCharacterBrowserRestoringSelection;
+        private bool mCharacterBrowserApplyingSavedSelection;
         private bool mCharacterBrowserRefreshingModelParts;
         private bool mCharacterBrowserSelectionRestoredForScan;
         private string[] mCharacterBrowserSavedSelection;
@@ -467,7 +479,14 @@ namespace GFDStudio.GUI.Forms
 
             try
             {
-                var files = await Task.Run(() =>
+                var priorityModelPaths = GetCharacterBrowserPriorityPaths(root, ".GMD");
+                var priorityGapPaths = GetCharacterBrowserPriorityPaths(root, ".GAP");
+                var priorityGapSet = new HashSet<string>(priorityGapPaths, StringComparer.OrdinalIgnoreCase);
+
+                // Discover the complete directory in parallel with the saved selection. The
+                // selected files are known already, so they can be shown/loaded before a large
+                // character directory has finished enumerating.
+                var discoveryTask = Task.Run(() =>
                 {
                     token.ThrowIfCancellationRequested();
 
@@ -484,41 +503,82 @@ namespace GFDStudio.GUI.Forms
                     return (models, gaps);
                 }, token);
 
+                AddCharacterBrowserModelEntries(priorityModelPaths);
+                RefreshCharacterBrowserModelLists();
+
+                if (IsPathBasedCharacterBrowserSelection())
+                    RestoreCharacterBrowserSelection();
+                else
+                    RestoreLegacyCharacterBrowserModel(priorityModelPaths.FirstOrDefault());
+
+                var animationDefinitions = new CharacterAnimationDefinitionSet();
+                var priorityResult = await Task.Run(() =>
+                {
+                    var output = new List<CharacterAnimationEntry>(128);
+                    var failed = 0;
+                    var parsed = 0;
+
+                    foreach (var gapPath in priorityGapPaths)
+                    {
+                        token.ThrowIfCancellationRequested();
+
+                        try
+                        {
+                            var pack = Resource.Load<AnimationPack>(gapPath);
+                            AddAnimationPackEntries(output, root, gapPath, pack, animationDefinitions);
+                        }
+                        catch (Exception ex)
+                        {
+                            failed++;
+                            Logger.Debug($"CharacterBrowser: failed to index priority GAP {gapPath}: {ex}");
+                        }
+
+                        parsed++;
+                    }
+
+                    return (Entries: output, Failed: failed, Parsed: parsed);
+                }, token);
+
+                if (token.IsCancellationRequested || generation != mCharacterBrowserScanGeneration)
+                    return;
+
+                AddCharacterBrowserAnimationEntries(priorityResult.Entries);
+                if (IsPathBasedCharacterBrowserSelection())
+                    RestoreCharacterBrowserSelection();
+
+                var files = await discoveryTask;
+
                 if (token.IsCancellationRequested || generation != mCharacterBrowserScanGeneration)
                     return;
 
                 mCharacterBrowserRestoringSelection = true;
                 try
                 {
-                    foreach (var path in files.models)
-                    {
-                        mCharacterModels.Add(new CharacterModelEntry
-                        {
-                            Path = path,
-                            DisplayName = MakeCharacterBrowserRelativePath(path),
-                            Part = ClassifyCharacterModel(path)
-                        });
-                    }
-                    RefreshCharacterModelList();
-                    RefreshCharacterFaceList();
-                    RefreshCharacterHairList();
+                    AddCharacterBrowserModelEntries(
+                        OrderCharacterBrowserScanPaths(files.models, priorityModelPaths));
+                    FinalizeCharacterBrowserModelLists();
                 }
                 finally
                 {
                     mCharacterBrowserRestoringSelection = false;
                 }
 
+                if (IsPathBasedCharacterBrowserSelection())
+                    RestoreCharacterBrowserSelection();
+
                 SetCharacterBrowserStatus($"{files.models.Count:N0} models; indexing {files.gaps.Count:N0} GAP files...");
 
-                var parsedCount = 0;
-                var failedCount = 0;
+                var parsedCount = priorityResult.Parsed;
+                var failedCount = priorityResult.Failed;
+                var remainingGapPaths = OrderCharacterBrowserScanPaths(files.gaps, priorityGapPaths)
+                    .Where(path => !priorityGapSet.Contains(path))
+                    .ToList();
 
                 await Task.Run(() =>
                 {
                     var batch = new List<CharacterAnimationEntry>(128);
-                    var animationDefinitions = new CharacterAnimationDefinitionSet();
 
-                    foreach (var gapPath in files.gaps)
+                    foreach (var gapPath in remainingGapPaths)
                     {
                         token.ThrowIfCancellationRequested();
 
@@ -542,7 +602,7 @@ namespace GFDStudio.GUI.Forms
                             var parsedSnapshot = parsedCount;
                             var failedSnapshot = failedCount;
 
-                            BeginInvoke(new Action(() =>
+                            Invoke(new Action(() =>
                             {
                                 if (token.IsCancellationRequested || generation != mCharacterBrowserScanGeneration)
                                     return;
@@ -556,6 +616,9 @@ namespace GFDStudio.GUI.Forms
                                 {
                                     mCharacterBrowserRestoringSelection = false;
                                 }
+                                if (parsedSnapshot == files.gaps.Count)
+                                    FinalizeCharacterBrowserAnimationLists();
+
                                 var restored = parsedSnapshot == files.gaps.Count &&
                                                RestoreCharacterBrowserSelection();
                                 if (!restored)
@@ -571,8 +634,11 @@ namespace GFDStudio.GUI.Forms
 
                 if (!token.IsCancellationRequested && generation == mCharacterBrowserScanGeneration)
                 {
-                    if (files.gaps.Count == 0)
+                    if (remainingGapPaths.Count == 0)
+                    {
+                        FinalizeCharacterBrowserAnimationLists();
                         mCharacterBrowserSelectionRestoredForScan = RestoreCharacterBrowserSelection();
+                    }
 
                     if (!mCharacterBrowserSelectionRestoredForScan)
                         SetCharacterBrowserStatus(
@@ -588,6 +654,223 @@ namespace GFDStudio.GUI.Forms
             catch (Exception ex)
             {
                 SetCharacterBrowserStatus("Scan failed: " + ex.Message);
+            }
+        }
+
+        private void AddCharacterBrowserModelEntries(IEnumerable<string> paths)
+        {
+            var knownPaths = new HashSet<string>(
+                mCharacterModels.Select(entry => entry.Path),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var path in paths)
+            {
+                if (!knownPaths.Add(path))
+                    continue;
+
+                mCharacterModels.Add(new CharacterModelEntry
+                {
+                    Path = path,
+                    DisplayName = MakeCharacterBrowserRelativePath(path),
+                    Part = ClassifyCharacterModel(path)
+                });
+            }
+        }
+
+        private void AddCharacterBrowserAnimationEntries(IEnumerable<CharacterAnimationEntry> entries)
+        {
+            mCharacterBrowserRestoringSelection = true;
+            try
+            {
+                AddCharacterAnimationBatch(entries);
+            }
+            finally
+            {
+                mCharacterBrowserRestoringSelection = false;
+            }
+        }
+
+        private void RefreshCharacterBrowserModelLists()
+        {
+            RefreshCharacterModelList();
+            RefreshCharacterFaceList();
+            RefreshCharacterHairList();
+        }
+
+        private void FinalizeCharacterBrowserModelLists()
+        {
+            mCharacterModels.Sort((first, second) =>
+                StringComparer.OrdinalIgnoreCase.Compare(first.Path, second.Path));
+            RefreshCharacterBrowserModelLists();
+        }
+
+        private void FinalizeCharacterBrowserAnimationLists()
+        {
+            mCharacterAnimations.Sort((first, second) =>
+            {
+                var result = StringComparer.OrdinalIgnoreCase.Compare(first.PackPath, second.PackPath);
+                if (result != 0)
+                    return result;
+
+                result = first.Kind.CompareTo(second.Kind);
+                return result != 0 ? result : first.Index.CompareTo(second.Index);
+            });
+            mCharacterBlendAnimations.Sort((first, second) =>
+            {
+                var result = StringComparer.OrdinalIgnoreCase.Compare(first.PackPath, second.PackPath);
+                return result != 0 ? result : first.Index.CompareTo(second.Index);
+            });
+
+            mCharacterBrowserRestoringSelection = true;
+            try
+            {
+                RefreshCharacterAnimationList();
+                RefreshCharacterBlendAnimationList();
+            }
+            finally
+            {
+                mCharacterBrowserRestoringSelection = false;
+            }
+        }
+
+        private List<string> GetCharacterBrowserPriorityPaths(string root, string extension)
+        {
+            var priorityPaths = new List<string>();
+
+            if (IsPathBasedCharacterBrowserSelection())
+            {
+                if (string.Equals(extension, ".GMD", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddCharacterBrowserPriorityPath(priorityPaths, root, mCharacterBrowserSavedSelection[2], extension);
+                    AddCharacterBrowserPriorityPath(priorityPaths, root, mCharacterBrowserSavedSelection[3], extension);
+                    AddCharacterBrowserPriorityPath(priorityPaths, root, mCharacterBrowserSavedSelection[4], extension);
+                }
+                else if (string.Equals(extension, ".GAP", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var selection in GetSavedCharacterBrowserAnimationSelections())
+                        AddCharacterBrowserPriorityPath(priorityPaths, root, selection.PackPath, extension);
+
+                    if (TryGetSavedCharacterBrowserBlendSelection(out var blendSelection))
+                        AddCharacterBrowserPriorityPath(priorityPaths, root, blendSelection.PackPath, extension);
+                }
+            }
+
+            // Older selection files only stored list indexes. The most recently opened model
+            // still gives the first boot a useful anchor; future saves use stable paths.
+            if (priorityPaths.Count == 0 && string.Equals(extension, ".GMD", StringComparison.OrdinalIgnoreCase))
+            {
+                var lastOpenedPath = GetLastCharacterBrowserFilePath();
+                AddCharacterBrowserPriorityPath(priorityPaths, root, lastOpenedPath, extension);
+            }
+
+            return priorityPaths;
+        }
+
+        private string GetLastCharacterBrowserFilePath()
+        {
+            if (!string.IsNullOrWhiteSpace(LastOpenedFilePath))
+                return LastOpenedFilePath;
+
+            return mFileHistoryList != null && mFileHistoryList.Count > 0
+                ? mFileHistoryList.Last
+                : null;
+        }
+
+        private static void AddCharacterBrowserPriorityPath(
+            ICollection<string> paths,
+            string root,
+            string path,
+            string extension)
+        {
+            if (string.IsNullOrWhiteSpace(path) ||
+                !string.Equals(Path.GetExtension(path), extension, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            try
+            {
+                var fullPath = Path.GetFullPath(path);
+                var relativePath = Path.GetRelativePath(root, fullPath);
+                if (relativePath == ".." || relativePath.StartsWith(".." + Path.DirectorySeparatorChar) ||
+                    relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar) ||
+                    Path.IsPathRooted(relativePath) || !File.Exists(fullPath))
+                    return;
+
+                if (!paths.Contains(fullPath, StringComparer.OrdinalIgnoreCase))
+                    paths.Add(fullPath);
+            }
+            catch
+            {
+                // A stale selection should not prevent the rest of the directory from loading.
+            }
+        }
+
+        private static List<string> OrderCharacterBrowserScanPaths(
+            IEnumerable<string> paths,
+            IEnumerable<string> priorityPaths)
+        {
+            var orderedPaths = paths
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var priority = priorityPaths
+                .Where(path => orderedPaths.Any(candidate => AreSamePath(candidate, path)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (priority.Count == 0)
+                return orderedPaths;
+
+            var result = new List<string>(orderedPaths.Count);
+            var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Add(string path)
+            {
+                if (added.Add(path))
+                    result.Add(path);
+            }
+
+            foreach (var path in priority)
+                Add(path);
+
+            var anchor = orderedPaths.FindIndex(path => AreSamePath(path, priority[0]));
+            for (var offset = 1; result.Count < orderedPaths.Count; offset++)
+            {
+                var before = anchor - offset;
+                var after = anchor + offset;
+                if (before >= 0)
+                    Add(orderedPaths[before]);
+                if (after < orderedPaths.Count)
+                    Add(orderedPaths[after]);
+            }
+
+            return result;
+        }
+
+        private void RestoreLegacyCharacterBrowserModel(string priorityModelPath)
+        {
+            if (string.IsNullOrWhiteSpace(priorityModelPath))
+                return;
+
+            var modelIndex = FindCharacterBrowserPathIndex(mCharacterModelListBox, priorityModelPath);
+            if (modelIndex < 0)
+                return;
+
+            mCharacterBrowserRestoringSelection = true;
+            try
+            {
+                mCharacterModelListBox.SelectedIndex = modelIndex;
+            }
+            finally
+            {
+                mCharacterBrowserRestoringSelection = false;
+            }
+
+            mCharacterBrowserApplyingSavedSelection = true;
+            try
+            {
+                CharacterModelListBox_SelectedIndexChanged(mCharacterModelListBox, EventArgs.Empty);
+            }
+            finally
+            {
+                mCharacterBrowserApplyingSavedSelection = false;
             }
         }
 
@@ -717,6 +1000,7 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             var filter = mCharacterModelFilterTextBox.Text?.Trim();
+            var selectedPath = (mCharacterModelListBox.SelectedItem as CharacterModelEntry)?.Path;
             mCharacterModelListBox.BeginUpdate();
             try
             {
@@ -727,6 +1011,13 @@ namespace GFDStudio.GUI.Forms
                         mCharacterModelListBox.Items.Add(entry);
                 }
                 mCharacterModelListBox.Items.Add(CreateCharacterModelNoneEntry(CharacterModelPart.Body));
+
+                if (!string.IsNullOrWhiteSpace(selectedPath))
+                {
+                    var selectedIndex = FindCharacterBrowserPathIndex(mCharacterModelListBox, selectedPath);
+                    if (selectedIndex >= 0)
+                        mCharacterModelListBox.SelectedIndex = selectedIndex;
+                }
             }
             finally
             {
@@ -879,6 +1170,9 @@ namespace GFDStudio.GUI.Forms
             if (mCharacterBrowserSavedSelection == null || mCharacterBrowserSavedSelection.Length < 4)
                 return false;
 
+            if (IsPathBasedCharacterBrowserSelection())
+                return RestorePathBasedCharacterBrowserSelection();
+
             var modelIndex = ParseCharacterBrowserSelectionIndex(mCharacterBrowserSavedSelection[1]);
             var faceIndex = mCharacterBrowserSavedSelection.Length >= 6
                 ? ParseCharacterBrowserSelectionIndex(mCharacterBrowserSavedSelection[2])
@@ -942,6 +1236,209 @@ namespace GFDStudio.GUI.Forms
                 CharacterAnimationListBox_SelectedIndexChanged(mCharacterAnimationListBox, EventArgs.Empty);
 
             return true;
+        }
+
+        private bool RestorePathBasedCharacterBrowserSelection()
+        {
+            var modelPath = GetSavedCharacterBrowserPath(2);
+            var facePath = GetSavedCharacterBrowserPath(3);
+            var hairPath = GetSavedCharacterBrowserPath(4);
+            var animationSelections = GetSavedCharacterBrowserAnimationSelections();
+            var hasBlendSelection = TryGetSavedCharacterBrowserBlendSelection(out var blendSelection);
+
+            var modelIndex = FindCharacterBrowserPathIndex(mCharacterModelListBox, modelPath);
+            var faceIndex = FindCharacterBrowserPathIndex(mCharacterFaceListBox, facePath);
+            var hairIndex = FindCharacterBrowserPathIndex(mCharacterHairListBox, hairPath);
+            var animationIndexes = animationSelections
+                .Select(selection => FindCharacterBrowserAnimationIndex(
+                    mCharacterAnimationListBox, selection))
+                .Where(index => index >= 0)
+                .Distinct()
+                .ToList();
+            var blendIndex = hasBlendSelection
+                ? FindCharacterBrowserAnimationIndex(mCharacterBlendAnimationListBox, blendSelection)
+                : -1;
+
+            var hasSavedSelection = !string.IsNullOrWhiteSpace(modelPath) ||
+                                    !string.IsNullOrWhiteSpace(facePath) ||
+                                    !string.IsNullOrWhiteSpace(hairPath) ||
+                                    animationSelections.Count > 0 || hasBlendSelection;
+            if (!hasSavedSelection)
+                return false;
+
+            mCharacterBrowserRestoringSelection = true;
+            try
+            {
+                if (modelIndex >= 0)
+                    mCharacterModelListBox.SelectedIndex = modelIndex;
+                if (faceIndex >= 0)
+                    mCharacterFaceListBox.SelectedIndex = faceIndex;
+                if (hairIndex >= 0)
+                    mCharacterHairListBox.SelectedIndex = hairIndex;
+
+                mCharacterAnimationListBox.ClearSelected();
+                foreach (var index in animationIndexes)
+                    mCharacterAnimationListBox.SetSelected(index, true);
+
+                if (blendIndex >= 0)
+                    mCharacterBlendAnimationListBox.SelectedIndex = blendIndex;
+            }
+            finally
+            {
+                mCharacterBrowserRestoringSelection = false;
+            }
+
+            // Keep the saved path set intact while the early model/animation load calls save
+            // their current UI state. This allows the selected model to load before the rest of
+            // the scan has discovered every animation.
+            mCharacterBrowserApplyingSavedSelection = true;
+            try
+            {
+                var selectedPrimaryPath = (mCharacterModelListBox.SelectedItem as CharacterModelEntry)?.Path ??
+                                          (mCharacterFaceListBox.SelectedItem as CharacterModelEntry)?.Path ??
+                                          (mCharacterHairListBox.SelectedItem as CharacterModelEntry)?.Path;
+                var modelNeedsLoading = (modelIndex >= 0 || faceIndex >= 0 || hairIndex >= 0) &&
+                                        (mCharacterBrowserCurrentModelPack == null ||
+                                         !AreSamePath(mCharacterBrowserCurrentModelPath, selectedPrimaryPath));
+                if (modelNeedsLoading)
+                {
+                    var modelSender = modelIndex >= 0
+                        ? mCharacterModelListBox
+                        : faceIndex >= 0 ? mCharacterFaceListBox : mCharacterHairListBox;
+                    CharacterModelListBox_SelectedIndexChanged(modelSender, EventArgs.Empty);
+                }
+                else if (animationIndexes.Count > 0)
+                    CharacterAnimationListBox_SelectedIndexChanged(mCharacterAnimationListBox, EventArgs.Empty);
+            }
+            finally
+            {
+                mCharacterBrowserApplyingSavedSelection = false;
+            }
+
+            var allModelsRestored = string.IsNullOrWhiteSpace(modelPath) || modelIndex >= 0;
+            allModelsRestored &= string.IsNullOrWhiteSpace(facePath) || faceIndex >= 0;
+            allModelsRestored &= string.IsNullOrWhiteSpace(hairPath) || hairIndex >= 0;
+            var allAnimationsRestored = animationIndexes.Count == animationSelections.Count;
+            var allSelectionsRestored = allModelsRestored && allAnimationsRestored &&
+                                        (!hasBlendSelection || blendIndex >= 0);
+            mCharacterBrowserSelectionRestoredForScan = allSelectionsRestored;
+            return allSelectionsRestored;
+        }
+
+        private bool IsPathBasedCharacterBrowserSelection()
+        {
+            return mCharacterBrowserSavedSelection?.Length >= 7 &&
+                   string.Equals(mCharacterBrowserSavedSelection[1],
+                                 CharacterBrowserSelectionFormat,
+                                 StringComparison.Ordinal);
+        }
+
+        private string GetSavedCharacterBrowserPath(int index)
+        {
+            return IsPathBasedCharacterBrowserSelection() &&
+                   index >= 0 && index < mCharacterBrowserSavedSelection.Length
+                ? mCharacterBrowserSavedSelection[index]
+                : null;
+        }
+
+        private List<CharacterBrowserAnimationSelection> GetSavedCharacterBrowserAnimationSelections()
+        {
+            if (!IsPathBasedCharacterBrowserSelection())
+                return new List<CharacterBrowserAnimationSelection>();
+
+            return mCharacterBrowserSavedSelection[5]
+                .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(ParseCharacterBrowserAnimationSelection)
+                .Where(selection => selection != null)
+                .ToList();
+        }
+
+        private bool TryGetSavedCharacterBrowserBlendSelection(
+            out CharacterBrowserAnimationSelection selection)
+        {
+            selection = null;
+            if (!IsPathBasedCharacterBrowserSelection() ||
+                string.IsNullOrWhiteSpace(mCharacterBrowserSavedSelection[6]))
+                return false;
+
+            selection = ParseCharacterBrowserAnimationSelection(mCharacterBrowserSavedSelection[6]);
+            return selection != null;
+        }
+
+        private static CharacterBrowserAnimationSelection ParseCharacterBrowserAnimationSelection(
+            string value)
+        {
+            try
+            {
+                var parts = value.Split('|');
+                if (parts.Length != 3 || !int.TryParse(parts[1], out var index) ||
+                    !Enum.TryParse(parts[0], out CharacterAnimationListKind kind))
+                    return null;
+
+                return new CharacterBrowserAnimationSelection
+                {
+                    Kind = kind,
+                    Index = index,
+                    PackPath = Encoding.UTF8.GetString(Convert.FromBase64String(parts[2]))
+                };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string SerializeCharacterBrowserAnimationSelection(
+            CharacterAnimationEntry entry)
+        {
+            return string.Join("|",
+                entry.Kind,
+                entry.Index,
+                Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.PackPath ?? string.Empty)));
+        }
+
+        private static string SerializeCharacterBrowserModelSelection(CharacterModelEntry entry)
+        {
+            return entry == null
+                ? string.Empty
+                : entry.Path ?? CharacterBrowserNoneSelection;
+        }
+
+        private static int FindCharacterBrowserPathIndex(ListBox listBox, string path)
+        {
+            if (listBox == null || string.IsNullOrWhiteSpace(path))
+                return -1;
+
+            for (var i = 0; i < listBox.Items.Count; i++)
+            {
+                if (string.Equals(path, CharacterBrowserNoneSelection, StringComparison.Ordinal) &&
+                    listBox.Items[i] is CharacterModelEntry noneEntry &&
+                    string.IsNullOrWhiteSpace(noneEntry.Path))
+                    return i;
+
+                if (AreSamePath((listBox.Items[i] as CharacterModelEntry)?.Path, path))
+                    return i;
+            }
+
+            return -1;
+        }
+
+        private static int FindCharacterBrowserAnimationIndex(
+            ListBox listBox,
+            CharacterBrowserAnimationSelection selection)
+        {
+            if (listBox == null || selection == null)
+                return -1;
+
+            for (var i = 0; i < listBox.Items.Count; i++)
+            {
+                if (listBox.Items[i] is CharacterAnimationEntry entry &&
+                    entry.Kind == selection.Kind && entry.Index == selection.Index &&
+                    AreSamePath(entry.PackPath, selection.PackPath))
+                    return i;
+            }
+
+            return -1;
         }
 
         private static int ParseCharacterBrowserSelectionIndex(string value)
@@ -1507,20 +2004,32 @@ namespace GFDStudio.GUI.Forms
 
         private void SaveCharacterBrowserSelectionSettings()
         {
-            if (mCharacterBrowserRestoringSelection || string.IsNullOrWhiteSpace(mCharacterBrowserRoot))
+            if (mCharacterBrowserRestoringSelection || mCharacterBrowserApplyingSavedSelection ||
+                string.IsNullOrWhiteSpace(mCharacterBrowserRoot))
                 return;
 
             try
             {
                 var path = CharacterBrowserSelectionPath;
+                var modelSelection = mCharacterModelListBox?.SelectedItem as CharacterModelEntry;
+                var faceSelection = mCharacterFaceListBox?.SelectedItem as CharacterModelEntry;
+                var hairSelection = mCharacterHairListBox?.SelectedItem as CharacterModelEntry;
+                var animationSelections = mCharacterAnimationListBox?.SelectedItems
+                    .Cast<CharacterAnimationEntry>()
+                    .Select(SerializeCharacterBrowserAnimationSelection) ??
+                    Enumerable.Empty<string>();
+                var blendSelection = mCharacterBlendAnimationListBox?.SelectedItem as CharacterAnimationEntry;
                 var selection = new[]
                 {
                     mCharacterBrowserRoot,
-                    mCharacterModelListBox?.SelectedIndex.ToString() ?? "-1",
-                    mCharacterFaceListBox?.SelectedIndex.ToString() ?? "-1",
-                    mCharacterHairListBox?.SelectedIndex.ToString() ?? "-1",
-                    string.Join(",", mCharacterAnimationListBox?.SelectedIndices.Cast<int>() ?? Enumerable.Empty<int>()),
-                    mCharacterBlendAnimationListBox?.SelectedIndex.ToString() ?? "-1"
+                    CharacterBrowserSelectionFormat,
+                    SerializeCharacterBrowserModelSelection(modelSelection),
+                    SerializeCharacterBrowserModelSelection(faceSelection),
+                    SerializeCharacterBrowserModelSelection(hairSelection),
+                    string.Join(",", animationSelections),
+                    blendSelection == null
+                        ? string.Empty
+                        : SerializeCharacterBrowserAnimationSelection(blendSelection)
                 };
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 File.WriteAllLines(path, selection);
