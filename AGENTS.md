@@ -11,7 +11,7 @@ Push the commit.
 
 ## Local Release build
 
-Run the supported partial Release build from the repository root:
+Run the normal incremental Release build from the repository root:
 
 ```powershell
 .\build-release.ps1
@@ -23,10 +23,8 @@ The output is written to `GFDStudio-binary`. To build and launch it, run:
 .\build-release.ps1 -Run
 ```
 
-The script uses the Unity-bundled .NET SDK at `Q:\_coding\tools\unity\editor\6000.5.7f1\Editor\Data\DotNetSdk\dotnet.exe` when available. Its temporary MSBuild/NuGet state is under `%TEMP%\GFDStudio-release-build`; do not set `DOTNET_CLI_HOME` to a directory in the repository.
+The script uses Visual Studio MSBuild and the normal `GFDStudio\GFDStudio.csproj` dependency graph. It automatically uses the Unity-bundled .NET SDK under `Q:\_coding\tools\unity\editor\6000.5.7f1\Editor\Data\DotNetSdk` and the FBX SDK under `Q:\_coding\tools\fbxsdk` when available. MSBuild decides which projects and source files need rebuilding; there is no timestamp-based partial-build logic.
 
-This build compiles `GFDLibrary.MainOnly.csproj` only when `GFDLibrary` sources changed, then compiles `GFDStudio.MainOnly.csproj` against the prebuilt DLLs in `GFDStudio-binary`. It does not rebuild the native FBX library or other prebuilt libraries. Close any running GFD Studio process before replacing the binaries.
+The normal graph includes the managed libraries, OpenGL renderer, Assimp conversion library, and native FBX C++/CLI project. The framework-dependent Release publish is written to `GFDStudio-binary`. Close any running GFD Studio process before replacing the binaries.
 
-Changes under `GFDLibrary.Rendering.OpenGL` are not included by the main-only build. That project is consumed from the prebuilt `GFDStudio-binary\GFDLibrary.Rendering.OpenGL.dll`. If a change adds or removes API such as `ShaderRegistry.mGuideArrowShader`, rebuild and replace that library first, or keep the change on the GFDStudio side.
-
-The full Visual Studio build is separate: it requires the .NET 8 SDK, the FBX SDK 2020.3.7, initialized submodules, and the native FBX project. Use the solution for that full build rather than the `MainOnly` projects.
+NuGet and .NET CLI state uses the normal user profile cache. Do not set `DOTNET_CLI_HOME` to a directory in the repository.
