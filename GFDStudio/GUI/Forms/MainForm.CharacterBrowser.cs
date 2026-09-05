@@ -48,6 +48,7 @@ namespace GFDStudio.GUI.Forms
             public CharacterAnimationListKind Kind { get; init; }
             public int Index { get; init; }
             public string DisplayName { get; init; }
+            public IReadOnlyCollection<string> BodyTargetNames { get; init; }
             public override string ToString() => DisplayName;
         }
 
@@ -112,6 +113,7 @@ namespace GFDStudio.GUI.Forms
         private string mCharacterBrowserRoot;
         private string mCharacterBrowserCurrentModelPath;
         private ModelPack mCharacterBrowserCurrentModelPack;
+        private HashSet<string> mCharacterBrowserCurrentModelNodeNames;
         private int mCharacterBrowserScanGeneration;
         private bool mCharacterBrowserRestoringSelection;
         private bool mCharacterBrowserApplyingSavedSelection;
@@ -465,6 +467,7 @@ namespace GFDStudio.GUI.Forms
                 mCharacterBlendAnimations.Clear();
                 mCharacterBrowserCurrentModelPath = null;
                 mCharacterBrowserCurrentModelPack = null;
+                mCharacterBrowserCurrentModelNodeNames = null;
                 mCharacterModelListBox.Items.Clear();
                 mCharacterFaceListBox.Items.Clear();
                 mCharacterHairListBox.Items.Clear();
@@ -901,8 +904,9 @@ namespace GFDStudio.GUI.Forms
             {
                 for (var i = 0; i < pack.Animations.Count; i++)
                 {
-                    if (!AnimationAnalysis.HasBodyMotion(pack.Animations[i]) ||
-                        !animationDefinitions.Add(pack.Animations[i]))
+                    var animation = pack.Animations[i];
+                    if (!AnimationAnalysis.HasBodyMotion(animation) ||
+                        !animationDefinitions.Add(animation))
                         continue;
 
                     output.Add(new CharacterAnimationEntry
@@ -910,7 +914,8 @@ namespace GFDStudio.GUI.Forms
                         PackPath = gapPath,
                         Kind = CharacterAnimationListKind.Animation,
                         Index = i,
-                        DisplayName = normalAndExtraCount == 1 ? stem : $"{stem}  #{i + 1}"
+                        DisplayName = normalAndExtraCount == 1 ? stem : $"{stem}  #{i + 1}",
+                        BodyTargetNames = AnimationAnalysis.GetBodyTargetNames(animation)
                     });
                 }
             }
@@ -919,8 +924,9 @@ namespace GFDStudio.GUI.Forms
             {
                 for (var i = 0; i < pack.BlendAnimations.Count; i++)
                 {
-                    if (!AnimationAnalysis.HasBodyMotion(pack.BlendAnimations[i]) ||
-                        !animationDefinitions.Add(pack.BlendAnimations[i]))
+                    var animation = pack.BlendAnimations[i];
+                    if (!AnimationAnalysis.HasBodyMotion(animation) ||
+                        !animationDefinitions.Add(animation))
                         continue;
 
                     output.Add(new CharacterAnimationEntry
@@ -928,7 +934,8 @@ namespace GFDStudio.GUI.Forms
                         PackPath = gapPath,
                         Kind = CharacterAnimationListKind.BlendAnimation,
                         Index = i,
-                        DisplayName = $"{stem}  [blend {i + 1}]"
+                        DisplayName = $"{stem}  [blend {i + 1}]",
+                        BodyTargetNames = AnimationAnalysis.GetBodyTargetNames(animation)
                     });
                 }
             }
@@ -937,8 +944,9 @@ namespace GFDStudio.GUI.Forms
             {
                 for (var i = 0; i < pack.METAPHOR_AnimArray3.Count; i++)
                 {
-                    if (!AnimationAnalysis.HasBodyMotion(pack.METAPHOR_AnimArray3[i]) ||
-                        !animationDefinitions.Add(pack.METAPHOR_AnimArray3[i]))
+                    var animation = pack.METAPHOR_AnimArray3[i];
+                    if (!AnimationAnalysis.HasBodyMotion(animation) ||
+                        !animationDefinitions.Add(animation))
                         continue;
 
                     output.Add(new CharacterAnimationEntry
@@ -946,7 +954,8 @@ namespace GFDStudio.GUI.Forms
                         PackPath = gapPath,
                         Kind = CharacterAnimationListKind.ExtraAnimation,
                         Index = i,
-                        DisplayName = $"{stem}  [extra {i + 1}]"
+                        DisplayName = $"{stem}  [extra {i + 1}]",
+                        BodyTargetNames = AnimationAnalysis.GetBodyTargetNames(animation)
                     });
                 }
             }
@@ -986,7 +995,8 @@ namespace GFDStudio.GUI.Forms
                         : addDirectly;
 
                     destination.Add(entry);
-                    if (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter))
+                    if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
+                        (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
                         destinationListBox.Items.Add(entry);
                 }
             }
@@ -1040,7 +1050,8 @@ namespace GFDStudio.GUI.Forms
                 mCharacterAnimationListBox.Items.Clear();
                 foreach (var entry in mCharacterAnimations)
                 {
-                    if (CharacterBrowserMatches(entry.DisplayName, filter))
+                    if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
+                        CharacterBrowserMatches(entry.DisplayName, filter))
                         mCharacterAnimationListBox.Items.Add(entry);
                 }
             }
@@ -1135,7 +1146,8 @@ namespace GFDStudio.GUI.Forms
                 mCharacterBlendAnimationListBox.Items.Clear();
                 foreach (var entry in mCharacterBlendAnimations)
                 {
-                    if (CharacterBrowserMatches(entry.DisplayName, filter))
+                    if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
+                        CharacterBrowserMatches(entry.DisplayName, filter))
                         mCharacterBlendAnimationListBox.Items.Add(entry);
                 }
             }
@@ -1147,8 +1159,41 @@ namespace GFDStudio.GUI.Forms
 
         private static bool CharacterBrowserMatches(string value, string filter)
         {
-            return string.IsNullOrWhiteSpace(filter) ||
-                   value.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.IsNullOrWhiteSpace(filter))
+                return true;
+
+            if (filter.Length >= 2 && filter[0] == '/' && filter[^1] == '/')
+            {
+                var pattern = filter.Substring(1, filter.Length - 2);
+                try
+                {
+                    return Regex.IsMatch(
+                        value ?? string.Empty,
+                        pattern,
+                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                        TimeSpan.FromMilliseconds(100));
+                }
+                catch (ArgumentException)
+                {
+                    // Keep an invalid filter from breaking list refreshes.
+                    return false;
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    return false;
+                }
+            }
+
+            return (value ?? string.Empty).IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private bool IsCharacterBrowserAnimationForSelectedBody(CharacterAnimationEntry entry)
+        {
+            if (mCharacterBrowserCurrentModelNodeNames == null)
+                return true;
+
+            return entry?.BodyTargetNames?.Any(
+                targetName => mCharacterBrowserCurrentModelNodeNames.Contains(targetName)) == true;
         }
 
         private string GetSelectedCharacterBodyId()
@@ -1507,6 +1552,9 @@ namespace GFDStudio.GUI.Forms
             {
                 mCharacterBrowserCurrentModelPath = null;
                 mCharacterBrowserCurrentModelPack = null;
+                mCharacterBrowserCurrentModelNodeNames = null;
+                RefreshCharacterAnimationList();
+                RefreshCharacterBlendAnimationList();
                 SetCharacterBrowserStatus("Select a body, face, or hair model");
                 return;
             }
@@ -1520,6 +1568,11 @@ namespace GFDStudio.GUI.Forms
             OpenFile(primary.Path);
             var modelPack = ComposeCharacterModelPack(selectedParts);
             mCharacterBrowserCurrentModelPack = modelPack;
+            mCharacterBrowserCurrentModelNodeNames = new HashSet<string>(
+                modelPack.Model.Nodes.Select(node => node.Name),
+                StringComparer.OrdinalIgnoreCase);
+            RefreshCharacterAnimationList();
+            RefreshCharacterBlendAnimationList();
             ModelViewControl.Instance.LoadModel(modelPack);
 
             var animationEntry = mCharacterAnimationListBox.SelectedItem as CharacterAnimationEntry;

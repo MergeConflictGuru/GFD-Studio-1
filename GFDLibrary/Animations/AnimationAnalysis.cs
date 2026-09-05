@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 
@@ -17,17 +18,47 @@ namespace GFDLibrary.Animations
         /// </summary>
         public static bool HasBodyMotion(Animation animation)
         {
-            return animation?.Controllers?.Any(controller =>
-                controller?.TargetKind == TargetKind.Node &&
-                controller.Layers?.Any(HasChangingTransform) == true) == true;
+            return HasBodyMotion(animation, null);
         }
 
-        private static bool HasChangingTransform(AnimationLayer layer)
+        /// <summary>
+        /// Returns whether an animation has usable body motion for the supplied model nodes.
+        /// </summary>
+        public static bool HasBodyMotion(Animation animation, ISet<string> targetNodeNames)
+        {
+            if (animation == null || animation.Duration <= TransformEpsilon)
+                return false;
+
+            return animation?.Controllers?.Any(controller =>
+                controller?.TargetKind == TargetKind.Node &&
+                (targetNodeNames == null || targetNodeNames.Contains(controller.TargetName)) &&
+                controller.Layers?.Any(layer => HasChangingTransform(layer, animation.Duration)) == true) == true;
+        }
+
+        public static IReadOnlyCollection<string> GetBodyTargetNames(Animation animation)
+        {
+            return animation?.Controllers?
+                .Where(controller => controller?.TargetKind == TargetKind.Node &&
+                                     !string.IsNullOrWhiteSpace(controller.TargetName) &&
+                                     controller.Layers?.Any(layer => HasChangingTransform(layer, animation.Duration)) == true)
+                .Select(controller => controller.TargetName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray() ?? Array.Empty<string>();
+        }
+
+        private static bool HasChangingTransform(AnimationLayer layer, float duration)
         {
             if (layer == null || !layer.HasPRSKeyFrames || layer.Keys == null || layer.Keys.Count < 2)
                 return false;
 
-            var keys = layer.Keys.OfType<PRSKey>().ToList();
+            // GLModel loops animation time from zero up to (but not including) Duration.
+            // Keys outside that interval can never drive the preview.
+            var keys = layer.Keys.OfType<PRSKey>()
+                .Where(key => key.Time >= 0 && key.Time < duration)
+                .OrderBy(key => key.Time)
+                .GroupBy(key => key.Time)
+                .Select(group => group.Last())
+                .ToList();
             if (keys.Count < 2)
                 return false;
 
