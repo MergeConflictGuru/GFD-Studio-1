@@ -6,6 +6,7 @@ param(
     [string]$Branch,
     [string]$OutputDirectory,
     [string]$Commit,
+    [string]$SourceCommit,
     [switch]$Watch,
     [switch]$Launch,
     [ValidateRange(10, 86400)]
@@ -13,6 +14,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'build-inputs.ps1')
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $PSScriptRoot 'GFDStudio-binary'
@@ -61,6 +64,42 @@ function Start-GfdStudio {
 
     Start-Process -FilePath $ExecutablePath -WorkingDirectory (Split-Path -Parent $ExecutablePath) | Out-Null
     Write-Host "Started GFD Studio: $ExecutablePath"
+}
+
+function Get-LocalBuildCommit {
+    param(
+        [string]$BuildDirectory
+    )
+
+    $metadataPath = Join-Path $BuildDirectory 'gfdstudio-build.json'
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+        if ($metadata.format -eq 1 -and $metadata.commit -match '^[0-9a-fA-F]{40}$') {
+            return $metadata.commit.ToLowerInvariant()
+        }
+    }
+    catch {
+        Write-Warning "Could not read local GFD Studio build metadata: $($_.Exception.Message)"
+    }
+
+    return $null
+}
+
+function Get-SafeRelativePath {
+    param(
+        [string]$Path
+    )
+
+    $normalizedPath = $Path.Trim() -replace '\\', '/'
+    if ([IO.Path]::IsPathRooted($normalizedPath) -or $normalizedPath -match '(^|/)\.\.(?:/|$)') {
+        throw "The delta contains an unsafe path: '$Path'."
+    }
+
+    return $normalizedPath
 }
 
 function Get-GitRemoteUrl {
@@ -174,6 +213,21 @@ function Get-WorkflowRunForCommit {
         Select-Object -First 1
 }
 
+function Get-RunArtifactInfo {
+    param(
+        [hashtable]$RequestHeaders,
+        [string]$Repo,
+        [object]$Run,
+        [string]$ArtifactName
+    )
+
+    $artifactsUri = "https://api.github.com/repos/$Repo/actions/runs/$($Run.id)/artifacts?per_page=100"
+    $artifacts = Invoke-RestMethod -Uri $artifactsUri -Headers $RequestHeaders
+    return $artifacts.artifacts |
+        Where-Object { $_.name -eq $ArtifactName -and -not $_.expired } |
+        Select-Object -First 1
+}
+
 function Download-BuildArtifact {
     param(
         [hashtable]$RequestHeaders,
@@ -183,11 +237,8 @@ function Download-BuildArtifact {
         [object]$Run
     )
 
-    $artifactsUri = "https://api.github.com/repos/$Repo/actions/runs/$($Run.id)/artifacts?per_page=100"
-    $artifacts = Invoke-RestMethod -Uri $artifactsUri -Headers $RequestHeaders
-    $artifactInfo = $artifacts.artifacts |
-        Where-Object { $_.name -eq $ArtifactName -and -not $_.expired } |
-        Select-Object -First 1
+    $artifactInfo = Get-RunArtifactInfo -RequestHeaders $RequestHeaders -Repo $Repo `
+        -Run $Run -ArtifactName $ArtifactName
 
     if (-not $artifactInfo) {
         throw "Artifact '$ArtifactName' was not found on successful run $($Run.id)."
@@ -231,6 +282,13 @@ function Download-BuildArtifact {
         New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
         Copy-Item -Path (Join-Path $executable.Directory.FullName '*') -Destination $DestinationDirectory -Recurse -Force
 
+        $buildMetadata = [ordered]@{
+            format = 1
+            commit = $Run.head_sha
+        }
+        $buildMetadata | ConvertTo-Json | Set-Content `
+            -LiteralPath (Join-Path $DestinationDirectory 'gfdstudio-build.json') -Encoding UTF8
+
         $shortSha = if ($Run.head_sha.Length -ge 7) { $Run.head_sha.Substring(0, 7) } else { $Run.head_sha }
         Write-Host "Downloaded GFD Studio run $($Run.run_number) ($shortSha)."
         Write-Host "Binary: $DestinationDirectory\GFDStudio.exe"
@@ -244,6 +302,153 @@ function Download-BuildArtifact {
             Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+}
+
+function Download-BuildDeltaArtifact {
+    param(
+        [hashtable]$RequestHeaders,
+        [string]$Repo,
+        [string]$ArtifactName,
+        [string]$DestinationDirectory,
+        [object]$Run,
+        [string]$SourceCommit
+    )
+
+    $artifactInfo = Get-RunArtifactInfo -RequestHeaders $RequestHeaders -Repo $Repo `
+        -Run $Run -ArtifactName $ArtifactName
+    if (-not $artifactInfo) {
+        return $false
+    }
+
+    $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) "gfdstudio-delta-$([Guid]::NewGuid().ToString('N'))"
+    $archivePath = Join-Path $temporaryDirectory 'artifact.zip'
+    $expandedDirectory = Join-Path $temporaryDirectory 'expanded'
+    $targetExecutablePath = Join-Path $DestinationDirectory 'GFDStudio.exe'
+
+    try {
+        New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
+        Invoke-WebRequest -Uri $artifactInfo.archive_download_url -Headers $RequestHeaders -OutFile $archivePath
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $expandedDirectory -Force
+
+        $manifestFile = Get-ChildItem -LiteralPath $expandedDirectory -Filter 'gfdstudio-delta.json' -File -Recurse |
+            Select-Object -First 1
+        if (-not $manifestFile) {
+            return $false
+        }
+
+        $manifest = Get-Content -LiteralPath $manifestFile.FullName -Raw | ConvertFrom-Json
+        if ($manifest.format -ne 1 -or $manifest.fullRequired -or
+            $manifest.sourceCommit -ine $SourceCommit -or $manifest.targetCommit -ine $Run.head_sha) {
+            return $false
+        }
+
+        $copyOperations = @()
+        foreach ($file in @($manifest.files)) {
+            $relativePath = Get-SafeRelativePath -Path ([string]$file.path)
+            $sourcePath = Join-Path $manifestFile.Directory.FullName ($relativePath -replace '/', '\')
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                throw "The delta is missing '$relativePath'."
+            }
+
+            if ($file.sha256) {
+                $actualHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
+                if ($actualHash -ine ([string]$file.sha256)) {
+                    throw "The delta hash did not match for '$relativePath'."
+                }
+            }
+
+            $copyOperations += [pscustomobject]@{
+                RelativePath = $relativePath
+                SourcePath   = $sourcePath
+            }
+        }
+
+        $deleteOperations = @()
+        foreach ($file in @($manifest.deletedFiles)) {
+            $deleteOperations += Get-SafeRelativePath -Path ([string]$file)
+        }
+
+        if (-not (Test-Path -LiteralPath $DestinationDirectory -PathType Container) -or
+            -not (Test-Path -LiteralPath $targetExecutablePath -PathType Leaf)) {
+            return $false
+        }
+
+        $runningProcesses = @(Get-RunningGfdStudioProcesses -ExecutablePath $targetExecutablePath)
+        if ($runningProcesses.Count -gt 0) {
+            Stop-GfdStudioProcesses -Processes $runningProcesses
+        }
+
+        foreach ($relativePath in $deleteOperations) {
+            $destinationPath = Join-Path $DestinationDirectory ($relativePath -replace '/', '\')
+            if (Test-Path -LiteralPath $destinationPath) {
+                Remove-Item -LiteralPath $destinationPath -Force
+            }
+        }
+
+        foreach ($operation in $copyOperations) {
+            $destinationPath = Join-Path $DestinationDirectory ($operation.RelativePath -replace '/', '\')
+            $destinationParent = Split-Path -Parent $destinationPath
+            New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+            Copy-Item -LiteralPath $operation.SourcePath -Destination $destinationPath -Force
+        }
+
+        $buildMetadata = [ordered]@{
+            format = 1
+            commit = $Run.head_sha
+        }
+        $buildMetadata | ConvertTo-Json | Set-Content `
+            -LiteralPath (Join-Path $DestinationDirectory 'gfdstudio-build.json') -Encoding UTF8
+
+        $shortSha = if ($Run.head_sha.Length -ge 7) { $Run.head_sha.Substring(0, 7) } else { $Run.head_sha }
+        Write-Host "Applied GFD Studio delta to run $($Run.run_number) ($shortSha)."
+        Write-Host "Binary: $DestinationDirectory\GFDStudio.exe"
+
+        if ($runningProcesses.Count -gt 0 -or $Launch) {
+            Start-GfdStudio -ExecutablePath $targetExecutablePath
+        }
+
+        return $true
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryDirectory) {
+            Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Download-PreferredBuild {
+    param(
+        [hashtable]$RequestHeaders,
+        [string]$Repo,
+        [string]$FullArtifactName,
+        [string]$DestinationDirectory,
+        [object]$Run
+    )
+
+    $targetExecutablePath = Join-Path $DestinationDirectory 'GFDStudio.exe'
+    $localCommit = Get-LocalBuildCommit -BuildDirectory $DestinationDirectory
+    if ($localCommit -ieq $Run.head_sha -and
+        (Test-Path -LiteralPath $targetExecutablePath -PathType Leaf)) {
+        Write-Host "GFD Studio run $($Run.run_number) ($($Run.head_sha.Substring(0, 7))) is already installed."
+        if ($Launch -and @(Get-RunningGfdStudioProcesses -ExecutablePath $targetExecutablePath).Count -eq 0) {
+            Start-GfdStudio -ExecutablePath $targetExecutablePath
+        }
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($localCommit)) {
+        $deltaArtifactName = "gfdstudio-delta-$localCommit-$($Run.head_sha)"
+        if (Download-BuildDeltaArtifact -RequestHeaders $RequestHeaders -Repo $Repo `
+                -ArtifactName $deltaArtifactName -DestinationDirectory $DestinationDirectory `
+                -Run $Run -SourceCommit $localCommit) {
+            return
+        }
+
+        Write-Host "No usable delta from $localCommit to $($Run.head_sha); downloading the full archive."
+    }
+
+    Download-BuildArtifact -RequestHeaders $RequestHeaders -Repo $Repo -ArtifactName $FullArtifactName `
+        -DestinationDirectory $DestinationDirectory -Run $Run
 }
 
 if (-not [string]::IsNullOrWhiteSpace($Commit) -and $Watch) {
@@ -267,6 +472,21 @@ if (-not [string]::IsNullOrWhiteSpace($Commit)) {
         }
 
         if (-not $run) {
+            $comparisonSourceCommit = $SourceCommit
+            if ([string]::IsNullOrWhiteSpace($comparisonSourceCommit)) {
+                $comparisonSourceCommit = (& git -C $PSScriptRoot rev-parse "$Commit^" 2>$null | Select-Object -First 1)
+                if ($null -ne $comparisonSourceCommit) {
+                    $comparisonSourceCommit = $comparisonSourceCommit.Trim()
+                }
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($comparisonSourceCommit) -and
+                -not (Test-GfdStudioBuildRequired -RepositoryRoot $PSScriptRoot `
+                    -SourceCommit $comparisonSourceCommit -TargetCommit $Commit)) {
+                Write-Host "[skip] Commit $shortCommit does not change the built application; keeping the local binary."
+                exit 0
+            }
+
             if ($lastStatus -ne 'not-found') {
                 Write-Host '[wait] Pipeline run has not appeared yet. Waiting...'
                 $lastStatus = 'not-found'
@@ -288,7 +508,7 @@ if (-not [string]::IsNullOrWhiteSpace($Commit)) {
                 throw "GitHub Actions run #$($run.run_number) finished with conclusion '$($run.conclusion)'."
             }
 
-            Download-BuildArtifact -RequestHeaders $headers -Repo $Repository -ArtifactName $Artifact `
+            Download-PreferredBuild -RequestHeaders $headers -Repo $Repository -FullArtifactName $Artifact `
                 -DestinationDirectory $OutputDirectory -Run $run
             exit 0
         }
@@ -303,7 +523,7 @@ if (-not $Watch) {
         throw "No successful $Workflow run was found for $Repository on branch $Branch."
     }
 
-    Download-BuildArtifact -RequestHeaders $headers -Repo $Repository -ArtifactName $Artifact `
+    Download-PreferredBuild -RequestHeaders $headers -Repo $Repository -FullArtifactName $Artifact `
         -DestinationDirectory $OutputDirectory -Run $run
     exit 0
 }
@@ -333,7 +553,7 @@ while ($true) {
             if ($lastDownloadedRunId -ne $run.id) {
                 try {
                     Write-Host "[watch] Fetching run #$($run.run_number)..."
-                    Download-BuildArtifact -RequestHeaders $headers -Repo $Repository -ArtifactName $Artifact `
+                    Download-PreferredBuild -RequestHeaders $headers -Repo $Repository -FullArtifactName $Artifact `
                         -DestinationDirectory $OutputDirectory -Run $run
                     $lastDownloadedRunId = $run.id
                 }

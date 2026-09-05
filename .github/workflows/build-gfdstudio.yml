@@ -4,7 +4,47 @@ on:
   push:
     branches: ['**']
     tags: ['*']
+    paths:
+      - '.github/workflows/**'
+      - '.gitmodules'
+      - 'Directory.Build.props'
+      - 'GFDStudio.sln'
+      - 'global.json'
+      - 'NuGet.config'
+      - 'Directory.Packages.props'
+      - 'GFDStudio/**'
+      - 'GFDLibrary/**'
+      - 'GFDLibrary.Rendering.OpenGL/**'
+      - 'GFDLibrary.Conversion.AssimpNet/**'
+      - 'GFDStudio/app_data/**'
+      - 'GFDStudio/Presets/**'
+      - 'GFDLibrary.Conversion.FbxSdk/**'
+      - 'Dependencies/Scarlet/Scarlet/**'
+      - 'Dependencies/Scarlet/Scarlet.IO.ImageFormats/**'
+      - 'Dependencies/Scarlet'
+      - 'Dependencies/tga-decoder-cs/**'
+      - 'Dependencies/tga-decoder-cs'
   pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.gitmodules'
+      - 'Directory.Build.props'
+      - 'GFDStudio.sln'
+      - 'global.json'
+      - 'NuGet.config'
+      - 'Directory.Packages.props'
+      - 'GFDStudio/**'
+      - 'GFDLibrary/**'
+      - 'GFDLibrary.Rendering.OpenGL/**'
+      - 'GFDLibrary.Conversion.AssimpNet/**'
+      - 'GFDStudio/app_data/**'
+      - 'GFDStudio/Presets/**'
+      - 'GFDLibrary.Conversion.FbxSdk/**'
+      - 'Dependencies/Scarlet/Scarlet/**'
+      - 'Dependencies/Scarlet/Scarlet.IO.ImageFormats/**'
+      - 'Dependencies/Scarlet'
+      - 'Dependencies/tga-decoder-cs/**'
+      - 'Dependencies/tga-decoder-cs'
   workflow_dispatch:
 
 permissions:
@@ -13,6 +53,7 @@ permissions:
 env:
   FBX_SDK_ROOT: 'C:\fbxsdk'
   FBX_SDK_URL: 'https://damassets.autodesk.net/content/dam/autodesk/www/files/fbx202037_fbxsdk_vs2022_win.exe'
+  NUGET_PACKAGES: '${{ github.workspace }}\.nuget-packages'
 
 jobs:
   build:
@@ -33,6 +74,27 @@ jobs:
         uses: microsoft/setup-msbuild@v2
         with:
           msbuild-architecture: x64
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: .nuget-packages
+          key: windows-nuget-${{ hashFiles('**/*.csproj', '**/*.vcxproj', '**/*.props', '**/*.targets', '**/packages.config') }}
+          restore-keys: |
+            windows-nuget-
+
+      - name: Cache MSBuild intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/bin
+            **/obj
+            **/x64
+            **/Release
+          key: windows-msbuild-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            windows-msbuild-${{ github.ref_name }}-
+            windows-msbuild-
 
       - name: Cache FBX SDK
         id: fbx-sdk-cache
@@ -73,7 +135,8 @@ jobs:
       - name: Publish self-contained x64 binary
         shell: pwsh
         run: |
-          $publishDirectory = Join-Path $env:RUNNER_TEMP 'gfdstudio-publish'
+          $targetCommit = $env:GITHUB_SHA
+          $publishDirectory = Join-Path $env:RUNNER_TEMP "gfdstudio-publish-$targetCommit"
           Remove-Item -LiteralPath $publishDirectory -Recurse -Force -ErrorAction SilentlyContinue
 
           dotnet restore GFDStudio\GFDStudio.csproj `
@@ -112,9 +175,47 @@ jobs:
             throw 'Publish completed without producing GFDStudio.exe.'
           }
 
+          $buildMetadata = [ordered]@{
+            format = 1
+            commit = $targetCommit
+          }
+          $buildMetadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $publishDirectory 'gfdstudio-build.json') -Encoding UTF8
+
           $refName = $env:GITHUB_REF_NAME -replace '[^A-Za-z0-9._-]', '-'
-          $archive = Join-Path $env:RUNNER_TEMP "GFDStudio-$refName-win-x64.zip"
+          $archive = Join-Path $env:RUNNER_TEMP "GFDStudio-$refName-$targetCommit-win-x64.zip"
           Compress-Archive -Path (Join-Path $publishDirectory '*') -DestinationPath $archive -CompressionLevel Optimal
+
+      - name: Create source-to-target delta
+        id: delta
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          SOURCE_COMMIT: ${{ github.event.before }}
+          TARGET_COMMIT: ${{ github.sha }}
+        run: |
+          $publishDirectory = Join-Path $env:RUNNER_TEMP "gfdstudio-publish-$env:TARGET_COMMIT"
+          $deltaDirectory = Join-Path $env:RUNNER_TEMP "gfdstudio-delta-$env:TARGET_COMMIT"
+          & (Join-Path $env:GITHUB_WORKSPACE 'create-build-delta.ps1') `
+            -RepositoryRoot $env:GITHUB_WORKSPACE `
+            -PublishDirectory $publishDirectory `
+            -SourceCommit $env:SOURCE_COMMIT `
+            -TargetCommit $env:TARGET_COMMIT `
+            -OutputDirectory $deltaDirectory
+
+          $manifest = Get-Content -LiteralPath (Join-Path $deltaDirectory 'gfdstudio-delta.json') -Raw | ConvertFrom-Json
+          $available = if ($manifest.fullRequired) { 'false' } else { 'true' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "available=$available"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "source=$($manifest.sourceCommit)"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "target=$($manifest.targetCommit)"
+
+      - name: Upload source-to-target delta
+        if: steps.delta.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gfdstudio-delta-${{ steps.delta.outputs.source }}-${{ steps.delta.outputs.target }}
+          path: ${{ runner.temp }}/gfdstudio-delta-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload Windows binary artifact
         uses: actions/upload-artifact@v4
