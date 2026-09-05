@@ -25,6 +25,6 @@ The output is written to `GFDStudio-binary`. To build and launch it, run:
 
 The script uses Visual Studio MSBuild and the normal `GFDStudio\GFDStudio.csproj` dependency graph. It automatically uses the Unity-bundled .NET SDK under `Q:\_coding\tools\unity\editor\6000.5.7f1\Editor\Data\DotNetSdk` and the FBX SDK under `Q:\_coding\tools\fbxsdk` when available. MSBuild decides which projects and source files need rebuilding; there is no timestamp-based partial-build logic.
 
-The normal graph includes the managed libraries, OpenGL renderer, Assimp conversion library, and native FBX C++/CLI project. The framework-dependent Release publish is written to `GFDStudio-binary`. Close any running GFD Studio process before replacing the binaries.
+The normal graph includes the managed libraries, OpenGL renderer, Assimp conversion library, and native FBX C++/CLI project. The self-contained `win-x64` Release publish is written to `GFDStudio-binary`, so the published executable carries the .NET runtime with it. Close any running GFD Studio process before replacing the binaries.
 
 NuGet and .NET CLI state uses the normal user profile cache. Do not set `DOTNET_CLI_HOME` to a directory in the repository.

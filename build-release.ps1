@@ -62,6 +62,12 @@ else {
 $env:FBXSDKRoot = $fbxSdkRoot
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 
+$runningProcesses = @(Get-Process -Name GFDStudio -ErrorAction SilentlyContinue)
+if ($runningProcesses.Count -gt 0) {
+    $processIds = $runningProcesses.Id -join ', '
+    throw "GFD Studio is running (PID $processIds). Close it before starting the Release build."
+}
+
 function Invoke-MSBuild {
     param(
         [Parameter(Mandatory)]
@@ -96,6 +102,7 @@ Invoke-MSBuild @(
     $mainProject,
     '/t:Restore',
     '/p:RuntimeIdentifier=win-x64',
+    '/p:SelfContained=true',
     '/p:Platform=x64',
     "/p:FBXSDKRoot=$fbxSdkRoot",
     '/verbosity:minimal'
@@ -120,7 +127,7 @@ Invoke-MSBuild @(
     '/p:Configuration=Release',
     '/p:TargetFramework=net8.0-windows',
     '/p:RuntimeIdentifier=win-x64',
-    '/p:SelfContained=false',
+    '/p:SelfContained=true',
     "/p:PublishDir=$publishDirectory",
     '/p:Platform=x64',
     "/p:FBXSDKRoot=$fbxSdkRoot",
