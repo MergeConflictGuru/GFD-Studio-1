@@ -9,6 +9,7 @@ namespace GFDLibrary.Rendering.OpenGL
     {
         public GLShaderProgram mDefaultShader;
         public GLShaderProgram mLineShader;
+        public GLShaderProgram mGuideArrowShader;
         //public Dictionary<int, GLShaderProgram> mPersona5Shaders;
         public Dictionary<ResourceType, GLShaderProgram> mMetaphorShaders;
         public ShaderRegistry() {}
@@ -26,6 +27,8 @@ namespace GFDLibrary.Rendering.OpenGL
                 }
             }
             if ( !GLShaderProgram.TryCreate( GetAppData( "shaders/line.glsl.vs" ), GetAppData( "shaders/line.glsl.fs" ), out mLineShader ) )
+                return false;
+            if ( !GLShaderProgram.TryCreate( GetAppData( "shaders/guide_arrow.glsl.vs" ), GetAppData( "shaders/guide_arrow.glsl.fs" ), out mGuideArrowShader ) )
                 return false;
             try
             {
