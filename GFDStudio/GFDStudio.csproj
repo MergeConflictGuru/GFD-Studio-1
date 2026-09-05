@@ -28,6 +28,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="$(IntermediateOutputPath)Generated\CommitNumber.g.cs" />
+
     <None Update="app_data\icons\folder.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
