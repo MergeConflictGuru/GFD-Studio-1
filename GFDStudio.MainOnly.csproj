@@ -9,7 +9,6 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
     <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
-    <MSBuildProjectExtensionsPath>obj\GFDStudio.MainOnly\</MSBuildProjectExtensionsPath>
     <AssemblyName>GFDStudio</AssemblyName>
     <RootNamespace>GFDStudio</RootNamespace>
     <Version>0.10.3</Version>

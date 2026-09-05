@@ -113,11 +113,13 @@ $libraryNeedsBuild =
 if ($libraryNeedsBuild) {
     Write-Host '[release] Building the changed managed GFDLibrary dependency...'
     $libraryStagingDirectory = Join-Path $temporaryBuildDirectory 'GFDLibrary'
+    $libraryIntermediateDirectory = Join-Path $temporaryBuildDirectory 'GFDLibrary-obj'
     New-Item -ItemType Directory -Force -Path $libraryStagingDirectory | Out-Null
     $libraryOutput = $libraryStagingDirectory.TrimEnd('\') + '\'
+    $libraryIntermediate = $libraryIntermediateDirectory.TrimEnd('\') + '\'
 
-    Invoke-DotNet @('restore', $libraryProject, '--ignore-failed-sources', '--nologo', '-v:minimal')
-    Invoke-DotNet @('build', $libraryProject, '--no-restore', '--nologo', '-c', 'Release', "-p:OutDir=$libraryOutput")
+    Invoke-DotNet @('restore', $libraryProject, '--ignore-failed-sources', '--nologo', "-p:MSBuildProjectExtensionsPath=$libraryIntermediate", '-v:minimal')
+    Invoke-DotNet @('build', $libraryProject, '--no-restore', '--nologo', '-c', 'Release', "-p:MSBuildProjectExtensionsPath=$libraryIntermediate", "-p:OutDir=$libraryOutput")
 
     foreach ($fileName in @('GFDLibrary.dll', 'GFDLibrary.pdb', 'GFDLibrary.deps.json')) {
         $builtFile = Join-Path $libraryStagingDirectory $fileName
@@ -132,9 +134,11 @@ else {
 
 $mainProject = Join-Path $workspace 'GFDStudio.MainOnly.csproj'
 $mainOutput = $binaryDirectory.TrimEnd('\') + '\'
+$mainIntermediateDirectory = Join-Path $temporaryBuildDirectory 'GFDStudio-obj'
+$mainIntermediate = $mainIntermediateDirectory.TrimEnd('\') + '\'
 Write-Host '[release] Building GFDStudio into GFDStudio-binary...'
-Invoke-DotNet @('restore', $mainProject, '--ignore-failed-sources', '--nologo', '-v:minimal')
-Invoke-DotNet @('build', $mainProject, '--no-restore', '--nologo', '-c', 'Release', '-p:SelfContained=false', "-p:OutDir=$mainOutput")
+Invoke-DotNet @('restore', $mainProject, '--ignore-failed-sources', '--nologo', "-p:MSBuildProjectExtensionsPath=$mainIntermediate", '-v:minimal')
+Invoke-DotNet @('build', $mainProject, '--no-restore', '--nologo', '-c', 'Release', '-p:SelfContained=false', "-p:MSBuildProjectExtensionsPath=$mainIntermediate", "-p:OutDir=$mainOutput")
 
 $application = Join-Path $binaryDirectory 'GFDStudio.exe'
 $assembly = Join-Path $binaryDirectory 'GFDStudio.dll'
