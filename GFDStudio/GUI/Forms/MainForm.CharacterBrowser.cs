@@ -692,9 +692,18 @@ namespace GFDStudio.GUI.Forms
 
         private void RefreshCharacterBrowserModelLists()
         {
-            RefreshCharacterModelList();
-            RefreshCharacterFaceList();
-            RefreshCharacterHairList();
+            var wasRestoringSelection = mCharacterBrowserRestoringSelection;
+            mCharacterBrowserRestoringSelection = true;
+            try
+            {
+                RefreshCharacterModelList();
+                RefreshCharacterFaceList();
+                RefreshCharacterHairList();
+            }
+            finally
+            {
+                mCharacterBrowserRestoringSelection = wasRestoringSelection;
+            }
         }
 
         private void FinalizeCharacterBrowserModelLists()
