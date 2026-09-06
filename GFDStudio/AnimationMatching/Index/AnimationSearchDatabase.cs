@@ -91,14 +91,22 @@ public sealed class AnimationSearchDatabase
             if (featureBones[i].Length != commonBoneCount)
                 featureBones[i] = featureBones[i][..commonBoneCount];
 
+        // FrameCount can be a lazy GAP load in the GFD adapter. Warm those clips concurrently instead
+        // of serially opening thousands of packs before descriptor extraction can even begin.
+        var frameCounts = new int[corpus.Clips.Count];
+        Parallel.For(0, corpus.Clips.Count, new ParallelOptions { CancellationToken = cancellationToken }, clipIndex =>
+        {
+            frameCounts[clipIndex] = corpus.Clips[clipIndex].FrameCount;
+        });
+
         var dimensions = extractor.GetDescriptorLength(commonBoneCount);
         var addresses = new List<FrameAddress>();
         for (var clipIndex = 0; clipIndex < corpus.Clips.Count; clipIndex++)
         {
             var clip = corpus.Clips[clipIndex];
             var minContinuationFrames = Math.Max(1, (int)MathF.Ceiling(options.MinimumContinuationSeconds * clip.FramesPerSecond));
-            if (clip.FrameCount <= minContinuationFrames) continue;
-            var last = clip.FrameCount - 1 - minContinuationFrames;
+            if (frameCounts[clipIndex] <= minContinuationFrames) continue;
+            var last = frameCounts[clipIndex] - 1 - minContinuationFrames;
             for (var frame = 0; frame <= last; frame += options.IndexStride)
                 addresses.Add(new FrameAddress(clipIndex, frame));
         }

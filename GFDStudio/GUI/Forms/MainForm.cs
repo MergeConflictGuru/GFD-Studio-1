@@ -57,6 +57,7 @@ namespace GFDStudio.GUI.Forms
             InitializeComponent();
             InitializeState();
             InitializeEvents();
+            InitializeAnimationMatching();
 
             settings = settings.LoadJson();
             Theme.Apply( this );
