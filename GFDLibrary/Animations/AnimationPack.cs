@@ -148,16 +148,35 @@ namespace GFDLibrary.Animations
 
         public void Retarget( Model originalModel, Model newModel, bool fixArms )
         {
-            var originalNodeLookup = Animation.CreateNodeLookup( originalModel.Nodes );
-            var newNodeLookup = Animation.CreateNodeLookup( newModel.Nodes );
+            var retargetMap = AnimationRetargetMap.Create( originalModel, newModel );
 
             foreach ( var animation in Animations )
-                animation.Retarget( originalNodeLookup, newNodeLookup, fixArms );
+                animation.Retarget( retargetMap, fixArms );
 
             foreach ( var animation in BlendAnimations )
-                animation.FixTargetIds( newModel.Nodes ); // blend animations are already relative, they only need their ids fixed
+                animation.RetargetTargetIds( retargetMap ); // blend animations are already relative, only names and ids change
 
-            Bit29Data?.Retarget( originalNodeLookup, newNodeLookup, fixArms );
+            Bit29Data?.Retarget( retargetMap, fixArms );
+
+            // P5, P5R and P5D all use the legacy animation layout, but their
+            // resource versions are still different. Carry the target version
+            // through every nested resource so the saved GAP has the target
+            // game's header and string/key serialization rules.
+            SetVersion( newModel.Version );
+        }
+
+        private void SetVersion( uint version )
+        {
+            Version = version;
+
+            foreach ( var animation in Animations )
+                animation.SetVersion( version );
+            foreach ( var animation in BlendAnimations )
+                animation.SetVersion( version );
+            foreach ( var animation in METAPHOR_AnimArray3 ?? Enumerable.Empty<Animation>() )
+                animation.SetVersion( version );
+
+            Bit29Data?.SetVersion( version );
         }
 
         public void Rescale(Vector3 scale, Vector3 position, Quaternion rotation)
