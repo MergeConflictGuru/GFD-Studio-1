@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using GFDLibrary.Animations;
 using GFDLibrary.Models;
@@ -117,6 +118,54 @@ namespace GFDLibrary.Tests
             AssertQuaternionEqual( targetRotation * ( Quaternion.Inverse( sourceRotation ) * keyRotation ), key.Rotation );
         }
 
+        [TestMethod]
+        public void RetargetMapsPersonaSkeletonNamesAcrossGames()
+        {
+            var source = new Model( ResourceVersion.Persona5Royal );
+            var sourceRoot = new Node( "root" );
+            var sourceRotationRoot = new Node( "rot" );
+            var sourceBipedRoot = new Node( "Bip01" );
+            var sourcePelvis = new Node( "Bip01 Pelvis" );
+            var sourceSpine = new Node( "Bip01 Spine" );
+            var sourceLeftArm = new Node( "Bip01 L UpperArm" );
+            source.RootNode = sourceRoot;
+            sourceRoot.AddChildNode( sourceRotationRoot );
+            sourceRotationRoot.AddChildNode( sourceBipedRoot );
+            sourceBipedRoot.AddChildNode( sourcePelvis );
+            sourcePelvis.AddChildNode( sourceSpine );
+            sourceSpine.AddChildNode( sourceLeftArm );
+
+            var target = new Model( ResourceVersion.Persona5Dancing );
+            var targetRootNode = new Node( "RootNode" );
+            var targetRoot = new Node( "root" );
+            var targetHips = new Node( "Hips" );
+            var targetSpine = new Node( "Spine" );
+            var targetLeftArm = new Node( "LeftArm" );
+            target.RootNode = targetRootNode;
+            targetRootNode.AddChildNode( targetRoot );
+            targetRoot.AddChildNode( targetHips );
+            targetHips.AddChildNode( targetSpine );
+            targetSpine.AddChildNode( targetLeftArm );
+
+            var animation = new Animation( ResourceVersion.Persona5Royal );
+            animation.Controllers.Add( CreateController( "RootNode" ) );
+            animation.Controllers.Add( CreateController( "Bip01 Pelvis" ) );
+            animation.Controllers.Add( CreateController( "Bip01 Spine" ) );
+            animation.Controllers.Add( CreateController( "Bip01 L UpperArm" ) );
+            animation.Controllers.Add( CreateController( "Bip01 Footsteps" ) );
+
+            animation.Retarget( source, target, false );
+
+            CollectionAssert.AreEqual(
+                new[] { "RootNode", "Hips", "Spine", "LeftArm" },
+                animation.Controllers.Select( controller => controller.TargetName ).ToArray() );
+            Assert.AreEqual( 0, animation.Controllers[ 0 ].TargetId );
+            Assert.AreEqual( 2, animation.Controllers[ 1 ].TargetId );
+            Assert.AreEqual( 3, animation.Controllers[ 2 ].TargetId );
+            Assert.AreEqual( 4, animation.Controllers[ 3 ].TargetId );
+            Assert.AreEqual( ResourceVersion.Persona5Dancing, animation.Version );
+        }
+
         private static Animation CreateAnimation( KeyType keyType, PRSKey key )
         {
             var layer = new AnimationLayer( ResourceVersion.Persona5 )
@@ -135,6 +184,26 @@ namespace GFDLibrary.Tests
             var animation = new Animation( ResourceVersion.Persona5 );
             animation.Controllers.Add( controller );
             return animation;
+        }
+
+        private static AnimationController CreateController( string targetName )
+        {
+            var layer = new AnimationLayer( ResourceVersion.Persona5Royal )
+            {
+                KeyType = KeyType.NodeRHalf
+            };
+            layer.Keys.Add( new PRSKey( KeyType.NodeRHalf )
+            {
+                Rotation = Quaternion.Identity
+            } );
+
+            var controller = new AnimationController( ResourceVersion.Persona5Royal )
+            {
+                TargetKind = TargetKind.Node,
+                TargetName = targetName
+            };
+            controller.Layers.Add( layer );
+            return controller;
         }
 
         private static Model CreateModel( Vector3 position, Quaternion rotation )

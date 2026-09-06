@@ -259,33 +259,47 @@ namespace GFDLibrary.Animations
             Controllers.ForEach( c => c.ConvertToP5() );
         }
 
-        public void Retarget( Model originalModel, Model newModel, bool fixArms )
+        internal void SetVersion( uint version )
         {
-            Retarget( CreateNodeLookup( originalModel.Nodes ), CreateNodeLookup( newModel.Nodes ), fixArms );
-        }
-
-        internal static Dictionary<string, Node> CreateNodeLookup( IEnumerable<Node> nodes )
-        {
-            var lookup = new Dictionary<string, Node>();
-            foreach ( var node in nodes )
-            {
-                // Some models contain duplicate helper nodes. Name-based retargeting
-                // already resolves those to the first node in traversal order.
-                if ( !lookup.ContainsKey( node.Name ) )
-                    lookup.Add( node.Name, node );
-            }
-
-            return lookup;
-        }
-
-        internal void Retarget( Dictionary<string, Node> originalNodeLookup, Dictionary<string, Node> newNodeLookup, bool fixArms )
-        {
-            FixTargetIds( newNodeLookup.Values );
+            Version = version;
 
             foreach ( var controller in Controllers )
             {
-                if ( !originalNodeLookup.TryGetValue( controller.TargetName, out var originalNode ) || !newNodeLookup.TryGetValue( controller.TargetName, out var newNode ) )
+                controller.Version = version;
+                foreach ( var layer in controller.Layers )
+                {
+                    layer.Version = version;
+                }
+            }
+
+            if ( Field14 != null )
+                Field14.Version = version;
+            if ( Field1C?.Field20 != null )
+                Field1C.Field20.Version = version;
+        }
+
+        public void Retarget( Model originalModel, Model newModel, bool fixArms )
+        {
+            Retarget( AnimationRetargetMap.Create( originalModel, newModel ), fixArms );
+            SetVersion( newModel.Version );
+        }
+
+        internal void Retarget( AnimationRetargetMap retargetMap, bool fixArms )
+        {
+            foreach ( var controller in Controllers.ToList() )
+            {
+                if ( controller.TargetKind != TargetKind.Node )
                     continue;
+
+                if ( !retargetMap.TryGetTarget( controller.TargetName, out var originalNode, out var newNode ) ||
+                     !retargetMap.TryGetTargetId( newNode, out var targetId ) )
+                {
+                    Controllers.Remove( controller );
+                    continue;
+                }
+
+                controller.TargetName = newNode.Name;
+                controller.TargetId = targetId;
 
                 var nodeName                = originalNode.Name;
                 var originalNodeInvRotation = Quaternion.Inverse( originalNode.Rotation );
@@ -322,6 +336,30 @@ namespace GFDLibrary.Animations
                         }
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Remaps controller names and ids without changing key values. This is
+        /// used for blend animations, whose keys are already relative to the
+        /// target bind pose.
+        /// </summary>
+        internal void RetargetTargetIds( AnimationRetargetMap retargetMap )
+        {
+            foreach ( var controller in Controllers.ToList() )
+            {
+                if ( controller.TargetKind != TargetKind.Node )
+                    continue;
+
+                if ( !retargetMap.TryGetTarget( controller.TargetName, out _, out var targetNode ) ||
+                     !retargetMap.TryGetTargetId( targetNode, out var targetId ) )
+                {
+                    Controllers.Remove( controller );
+                    continue;
+                }
+
+                controller.TargetName = targetNode.Name;
+                controller.TargetId = targetId;
             }
         }
     }

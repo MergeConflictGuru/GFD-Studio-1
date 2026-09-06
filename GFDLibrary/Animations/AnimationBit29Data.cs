@@ -73,12 +73,21 @@ namespace GFDLibrary.Animations
             Field0C.Retarget( originalModel, newModel, fixArms );
         }
 
-        internal void Retarget( Dictionary<string, Node> originalNodeLookup, Dictionary<string, Node> newNodeLookup, bool fixArms )
+        internal void Retarget( AnimationRetargetMap retargetMap, bool fixArms )
         {
-            Field00.Retarget( originalNodeLookup, newNodeLookup, fixArms );
-            Field04.Retarget( originalNodeLookup, newNodeLookup, fixArms );
-            Field08.Retarget( originalNodeLookup, newNodeLookup, fixArms );
-            Field0C.Retarget( originalNodeLookup, newNodeLookup, fixArms );
+            Field00.Retarget( retargetMap, fixArms );
+            Field04.Retarget( retargetMap, fixArms );
+            Field08.Retarget( retargetMap, fixArms );
+            Field0C.Retarget( retargetMap, fixArms );
+        }
+
+        internal void SetVersion( uint version )
+        {
+            Version = version;
+            Field00.SetVersion( version );
+            Field04.SetVersion( version );
+            Field08.SetVersion( version );
+            Field0C.SetVersion( version );
         }
     }
 }
