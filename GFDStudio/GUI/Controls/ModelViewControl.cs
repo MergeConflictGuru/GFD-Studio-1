@@ -497,6 +497,8 @@ namespace GFDStudio.GUI.Controls
                 mCamera.ModelRotation = modelRotation;
             }
 
+            UpdateViewport();
+
             if ( Animation != null )
             {
                 // Apply previously loaded animation to new model
@@ -948,7 +950,18 @@ namespace GFDStudio.GUI.Controls
         /// <param name="e"></param>
         protected override void OnResize( EventArgs e )
         {
-            if ( !mCanRender || !mIsModelLoaded )
+            // GLControl uses its base resize handler to resize the native OpenGL
+            // window. That must happen even before a model is loaded; otherwise
+            // the initial model can be ready while the native render surface is
+            // still 0x0 until the user causes another layout pass.
+            base.OnResize( e );
+
+            UpdateViewport();
+        }
+
+        private void UpdateViewport()
+        {
+            if ( !mCanRender || mCamera == null || Width <= 0 || Height <= 0 )
                 return;
 
             mCamera.AspectRatio = (float)Width / Height;
