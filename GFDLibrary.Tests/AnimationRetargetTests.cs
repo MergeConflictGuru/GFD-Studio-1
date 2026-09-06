@@ -264,7 +264,7 @@ namespace GFDLibrary.Tests
         }
 
         [TestMethod]
-        public void StandaloneFaceBakesHeadWorldPlacementInsteadOfBodyLocalKeys()
+        public void StandaloneFaceBakesHeadRelativeToBodyWhenHierarchiesDiffer()
         {
             var root = new Node("RootNode");
             var neck = new Node("neck", new Vector3(0, 10, 0), Quaternion.Identity, Vector3.One);
@@ -275,7 +275,10 @@ namespace GFDLibrary.Tests
             var controller = CreateController("neck");
             controller.Layers[0].Keys.Add(new PRSKey(KeyType.NodeRHalf) { Time = 1, Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, .7f) });
             animation.Controllers.Add(controller);
-            var combined = new ModelPack(model.Version) { Model = model, AnimationPack = new AnimationPack(model.Version) };
+            var combined = new ModelPack(model.Version) {
+                Model = model,
+                AnimationPack = new AnimationPack(model.Version) { Flags = AnimationPackFlags.Bit3 }
+            };
             combined.AnimationPack.Animations.Add(animation);
             var faceRoot = new Node("RootNode");
             var faceHead = new Node("head", new Vector3(0, 13, 0), Quaternion.Identity, Vector3.One);
@@ -283,9 +286,15 @@ namespace GFDLibrary.Tests
             var face = new Model(model.Version) { RootNode = faceRoot };
             var exported = SplitCharacterRetargeter.ForStandalonePart(combined, face);
             foreach (var time in new[] {0f, 1f})
-                AssertTransformEqual(AnimationPoseEvaluator.Evaluate(model, animation, time)[head],
-                    AnimationPoseEvaluator.Evaluate(face, exported.Animations[0], time)[faceHead]);
+            {
+                var combinedPose = AnimationPoseEvaluator.Evaluate(model, animation, time);
+                Matrix4x4.Invert(combinedPose[neck], out var neckInverse);
+                var expectedLocal = combinedPose[head] * neckInverse;
+                var exportedPose = AnimationPoseEvaluator.Evaluate(face, exported.Animations[0], time);
+                AssertTransformEqual(expectedLocal, exportedPose[faceHead]);
+            }
             Assert.AreEqual(1, exported.Animations[0].Controllers.Single(c => c.TargetName == "head").TargetId);
+            Assert.AreEqual(AnimationPackFlags.Bit3, exported.Flags);
         }
 
         [TestMethod]

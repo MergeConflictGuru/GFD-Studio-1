@@ -90,7 +90,7 @@ if (args.Contains("--assembled")) {
     combined.Save(Path.Combine(outputDirectory, $"pc{danceId}_26_preview.GMD"));
     foreach (var (part, suffix) in new[] {(target.Model, ""), (face.Model, "_f"), (hair.Model, "_" + hairId)}) {
         var standalone = SplitCharacterRetargeter.ForStandalonePart(combined, part);
-        var standalonePath = Path.Combine(outputDirectory, "pc" + danceId + "_port_p" + suffix + ".GAP");
+        var standalonePath = Path.Combine(outputDirectory, "pc" + danceId + "_26_p" + suffix + ".GAP");
         standalone.Save(standalonePath);
         var standaloneReadback = Resource.Load<AnimationPack>(standalonePath);
         Console.SetOut(stdout);
@@ -123,6 +123,45 @@ if (args.Contains("--assembled")) {
                         Console.WriteLine($"Face clip {index}: head local P={headPosition} R={headRotation}");
                     }
                 }
+            }
+        }
+        Console.SetOut(TextWriter.Null);
+    }
+    if (args.Contains("--roundtrip")) {
+        Console.SetOut(stdout);
+        var bodySplit = Resource.Load<AnimationPack>(Path.Combine(outputDirectory, "pc" + danceId + "_26_p.GAP"));
+        var faceSplit = Resource.Load<AnimationPack>(Path.Combine(outputDirectory, "pc" + danceId + "_26_p_f.GAP"));
+        var hairSplit = Resource.Load<AnimationPack>(Path.Combine(outputDirectory, "pc" + danceId + "_26_p_" + hairId + ".GAP"));
+        for (var clip = 0; clip < bodySplit.Animations.Count; clip++) {
+            var roundtrip = SplitCharacterAnimationComposer.AddComponentTracks(
+                bodySplit.Animations[clip], faceSplit.Animations.ElementAtOrDefault(clip),
+                hairSplit.Animations.ElementAtOrDefault(clip));
+            var duplicates = roundtrip.Controllers.GroupBy(c => c.TargetName)
+                .Count(group => group.Count() > 1);
+            Console.WriteLine($"Roundtrip clip {clip}: controllers={roundtrip.Controllers.Count}, duplicate targets={duplicates}");
+            foreach (var frame in new[] { 0, 2, 4 }) {
+                var time = roundtrip.Duration * frame / 4f;
+                var sourcePose = AnimationPoseEvaluator.Evaluate(source.Model, pack.Animations[clip], time);
+                var targetPose = AnimationPoseEvaluator.Evaluate(combined.Model, roundtrip, time);
+                PoseRender.Draw(source.Model, sourcePose, combined.Model, targetPose,
+                    Path.Combine(outputDirectory, $"roundtrip-clip-{clip}-{frame}.png"),
+                    $"c{characterId} clip {clip}, {time:F2}s: original / reloaded split combined");
+            }
+            var faceAuthoritative = Resource.Load<AnimationPack>(
+                Path.Combine(outputDirectory, "pc" + danceId + "_26_p.GAP")).Animations[clip];
+            faceAuthoritative.Controllers.RemoveAll(controller =>
+                controller.TargetKind == TargetKind.Node &&
+                controller.TargetName.Equals("head", StringComparison.OrdinalIgnoreCase));
+            var faceRoundtrip = SplitCharacterAnimationComposer.AddComponentTracks(
+                faceAuthoritative, faceSplit.Animations.ElementAtOrDefault(clip),
+                hairSplit.Animations.ElementAtOrDefault(clip));
+            foreach (var frame in new[] { 0, 2, 4 }) {
+                var time = faceRoundtrip.Duration * frame / 4f;
+                var sourcePose = AnimationPoseEvaluator.Evaluate(source.Model, pack.Animations[clip], time);
+                var targetPose = AnimationPoseEvaluator.Evaluate(combined.Model, faceRoundtrip, time);
+                PoseRender.Draw(source.Model, sourcePose, combined.Model, targetPose,
+                    Path.Combine(outputDirectory, $"roundtrip-face-clip-{clip}-{frame}.png"),
+                    $"c{characterId} clip {clip}, {time:F2}s: original / split with face head track");
             }
         }
         Console.SetOut(TextWriter.Null);

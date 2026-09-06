@@ -91,7 +91,10 @@ namespace GFDStudio.GUI.DataViewNodes
                     using var save = new SaveFileDialog {
                         Filter = "Animation pack (*.GAP)|*.GAP",
                         InitialDirectory = Path.GetDirectoryName(bodyPath),
-                        FileName = Path.GetFileNameWithoutExtension(bodyPath) + "_port_p.GAP",
+                        // Keep the native Dance naming convention so the
+                        // character browser can discover the companion _f and
+                        // _hNN packs automatically.
+                        FileName = Path.GetFileNameWithoutExtension(bodyPath) + "_p.GAP",
                         Title = "Choose the output body GAP; face and hair GAPs will be placed beside it"
                     };
                     if (save.ShowDialog() != DialogResult.OK) return;
