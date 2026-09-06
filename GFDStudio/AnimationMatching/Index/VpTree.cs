@@ -1,22 +1,25 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace GFDStudio.AnimationMatching.Index;
 
 /// <summary>Exact k-nearest-neighbor search in the projected feature space.</summary>
 public sealed class VpTree
 {
+    private const int SerializedVersion = 1;
+    private const int ParallelBuildThreshold = 32768;
+
     private readonly float[] _points;
     private readonly int _dimensions;
-    private Node? _root;
-
-    private sealed class Node
-    {
-        public int Index;
-        public float Threshold;
-        public Node? Near;
-        public Node? Far;
-    }
+    private readonly int[] _pointIndex;
+    private readonly float[] _threshold;
+    private readonly int[] _near;
+    private readonly int[] _far;
+    private readonly int _root;
+    private readonly int _maxParallelDepth;
 
     private readonly record struct Pair(int Index, float DistanceSquared);
 
@@ -24,11 +27,53 @@ public sealed class VpTree
     {
         if (dimensions < 1 || packedPoints.Length % dimensions != 0)
             throw new ArgumentException("Invalid packed point array.");
+
         _points = packedPoints;
         _dimensions = dimensions;
-        var indexes = new int[packedPoints.Length / dimensions];
+        var count = packedPoints.Length / dimensions;
+        _pointIndex = new int[count];
+        _threshold = new float[count];
+        _near = new int[count];
+        _far = new int[count];
+        Array.Fill(_near, -1);
+        Array.Fill(_far, -1);
+        _root = count == 0 ? -1 : 0;
+        _maxParallelDepth = Math.Max(0, (int)Math.Ceiling(Math.Log2(Math.Max(1, Environment.ProcessorCount))));
+
+        if (count == 0)
+            return;
+
+        var indexes = new int[count];
         for (var i = 0; i < indexes.Length; i++) indexes[i] = i;
-        _root = Build(indexes, 0, indexes.Length);
+        Build(indexes, 0, indexes.Length, 0);
+    }
+
+    private VpTree(
+        float[] packedPoints,
+        int dimensions,
+        int root,
+        int[] pointIndex,
+        float[] threshold,
+        int[] near,
+        int[] far)
+    {
+        if (dimensions < 1 || packedPoints.Length % dimensions != 0)
+            throw new ArgumentException("Invalid packed point array.");
+
+        var count = packedPoints.Length / dimensions;
+        if (pointIndex.Length != count || threshold.Length != count || near.Length != count || far.Length != count)
+            throw new InvalidDataException("VP-tree cache size does not match projected point count.");
+        if (count == 0 ? root != -1 : root < 0 || root >= count)
+            throw new InvalidDataException("VP-tree cache root is invalid.");
+
+        _points = packedPoints;
+        _dimensions = dimensions;
+        _root = root;
+        _pointIndex = pointIndex;
+        _threshold = threshold;
+        _near = near;
+        _far = far;
+        _maxParallelDepth = 0;
     }
 
     public int Count => _points.Length / _dimensions;
@@ -45,44 +90,137 @@ public sealed class VpTree
         return result;
     }
 
-    private Node? Build(int[] indexes, int start, int length)
+    internal void WriteTo(BinaryWriter writer)
     {
-        if (length <= 0) return null;
-        var node = new Node { Index = indexes[start] };
-        if (length == 1) return node;
-
-        var vp = indexes[start];
-        Array.Sort(indexes, start + 1, length - 1, Comparer<int>.Create((a, b) =>
-            DistanceSquared(vp, a).CompareTo(DistanceSquared(vp, b))));
-
-        var otherCount = length - 1;
-        var nearCount = otherCount / 2;
-        var split = start + 1 + nearCount;
-        var thresholdIndex = Math.Min(split, start + length - 1);
-        node.Threshold = MathF.Sqrt(DistanceSquared(vp, indexes[thresholdIndex]));
-        node.Near = Build(indexes, start + 1, nearCount);
-        node.Far = Build(indexes, split, otherCount - nearCount);
-        return node;
+        writer.Write(SerializedVersion);
+        writer.Write(_dimensions);
+        writer.Write(_root);
+        WriteIntArray(writer, _pointIndex);
+        WriteFloatArray(writer, _threshold);
+        WriteIntArray(writer, _near);
+        WriteIntArray(writer, _far);
     }
 
-    private void Search(Node? node, ReadOnlySpan<float> query, int k, List<Pair> best)
+    internal static VpTree ReadFrom(BinaryReader reader, float[] packedPoints, int expectedDimensions)
     {
-        if (node is null) return;
-        var d2 = DistanceSquared(node.Index, query);
-        InsertBest(best, new Pair(node.Index, d2), k);
-        var d = MathF.Sqrt(d2);
-        var tau = best.Count < k ? float.PositiveInfinity : MathF.Sqrt(best[^1].DistanceSquared);
+        if (reader.ReadInt32() != SerializedVersion)
+            throw new InvalidDataException("Unsupported VP-tree cache version.");
 
-        if (node.Near is null && node.Far is null) return;
-        if (d < node.Threshold)
+        var dimensions = reader.ReadInt32();
+        if (dimensions != expectedDimensions)
+            throw new InvalidDataException("VP-tree dimensions do not match projected vectors.");
+
+        var root = reader.ReadInt32();
+        var count = packedPoints.Length / expectedDimensions;
+        var pointIndex = ReadIntArray(reader, count);
+        var threshold = ReadFloatArray(reader, count);
+        var near = ReadIntArray(reader, count);
+        var far = ReadIntArray(reader, count);
+        return new VpTree(packedPoints, dimensions, root, pointIndex, threshold, near, far);
+    }
+
+    private void Build(int[] indexes, int start, int length, int depth)
+    {
+        if (length <= 0)
+            return;
+
+        var node = start;
+        var vp = indexes[start];
+        _pointIndex[node] = vp;
+        if (length == 1)
+            return;
+
+        var otherStart = start + 1;
+        var otherCount = length - 1;
+        var nearCount = otherCount / 2;
+        var split = otherStart + nearCount;
+        SelectNthByDistance(indexes, otherStart, start + length - 1, split, vp);
+
+        _threshold[node] = MathF.Sqrt(DistanceSquared(vp, indexes[split]));
+        var farCount = otherCount - nearCount;
+        _near[node] = nearCount > 0 ? otherStart : -1;
+        _far[node] = farCount > 0 ? split : -1;
+
+        if (length >= ParallelBuildThreshold && depth < _maxParallelDepth && nearCount > 0 && farCount > 0)
         {
-            if (d - tau <= node.Threshold) Search(node.Near, query, k, best);
-            if (d + tau >= node.Threshold) Search(node.Far, query, k, best);
+            Parallel.Invoke(
+                () => Build(indexes, otherStart, nearCount, depth + 1),
+                () => Build(indexes, split, farCount, depth + 1));
         }
         else
         {
-            if (d + tau >= node.Threshold) Search(node.Far, query, k, best);
-            if (d - tau <= node.Threshold) Search(node.Near, query, k, best);
+            if (nearCount > 0)
+                Build(indexes, otherStart, nearCount, depth + 1);
+            if (farCount > 0)
+                Build(indexes, split, farCount, depth + 1);
+        }
+    }
+
+    /// <summary>
+    /// In-place nth-element selection using a three-way partition. The old implementation fully
+    /// sorted every subtree and repeatedly recomputed 24-D distances from comparer callbacks,
+    /// which made million-pose tree construction unnecessarily expensive.
+    /// </summary>
+    private void SelectNthByDistance(int[] indexes, int left, int right, int target, int vp)
+    {
+        while (left < right)
+        {
+            var pivotDistance = DistanceSquared(vp, indexes[left + ((right - left) >> 1)]);
+            var less = left;
+            var current = left;
+            var greater = right;
+
+            while (current <= greater)
+            {
+                var distance = DistanceSquared(vp, indexes[current]);
+                if (distance < pivotDistance)
+                {
+                    Swap(indexes, less++, current++);
+                }
+                else if (distance > pivotDistance)
+                {
+                    Swap(indexes, current, greater--);
+                }
+                else
+                {
+                    current++;
+                }
+            }
+
+            if (target < less)
+                right = less - 1;
+            else if (target > greater)
+                left = greater + 1;
+            else
+                return;
+        }
+    }
+
+    private void Search(int node, ReadOnlySpan<float> query, int k, List<Pair> best)
+    {
+        if (node < 0)
+            return;
+
+        var pointIndex = _pointIndex[node];
+        var d2 = DistanceSquared(pointIndex, query);
+        InsertBest(best, new Pair(pointIndex, d2), k);
+        var d = MathF.Sqrt(d2);
+        var tau = best.Count < k ? float.PositiveInfinity : MathF.Sqrt(best[^1].DistanceSquared);
+
+        var near = _near[node];
+        var far = _far[node];
+        if (near < 0 && far < 0)
+            return;
+
+        if (d < _threshold[node])
+        {
+            if (d - tau <= _threshold[node]) Search(near, query, k, best);
+            if (d + tau >= _threshold[node]) Search(far, query, k, best);
+        }
+        else
+        {
+            if (d + tau >= _threshold[node]) Search(far, query, k, best);
+            if (d - tau <= _threshold[node]) Search(near, query, k, best);
         }
     }
 
@@ -123,5 +261,46 @@ public sealed class VpTree
             sum += d * d;
         }
         return sum;
+    }
+
+    private static void Swap(int[] values, int first, int second)
+    {
+        if (first == second)
+            return;
+        (values[first], values[second]) = (values[second], values[first]);
+    }
+
+    private static void WriteIntArray(BinaryWriter writer, int[] values)
+    {
+        writer.Write(values.Length);
+        writer.Flush();
+        writer.BaseStream.Write(MemoryMarshal.AsBytes(values.AsSpan()));
+    }
+
+    private static int[] ReadIntArray(BinaryReader reader, int expectedLength)
+    {
+        var length = reader.ReadInt32();
+        if (length != expectedLength)
+            throw new InvalidDataException("VP-tree integer array length is invalid.");
+        var values = new int[length];
+        reader.BaseStream.ReadExactly(MemoryMarshal.AsBytes(values.AsSpan()));
+        return values;
+    }
+
+    private static void WriteFloatArray(BinaryWriter writer, float[] values)
+    {
+        writer.Write(values.Length);
+        writer.Flush();
+        writer.BaseStream.Write(MemoryMarshal.AsBytes(values.AsSpan()));
+    }
+
+    private static float[] ReadFloatArray(BinaryReader reader, int expectedLength)
+    {
+        var length = reader.ReadInt32();
+        if (length != expectedLength)
+            throw new InvalidDataException("VP-tree float array length is invalid.");
+        var values = new float[length];
+        reader.BaseStream.ReadExactly(MemoryMarshal.AsBytes(values.AsSpan()));
+        return values;
     }
 }
