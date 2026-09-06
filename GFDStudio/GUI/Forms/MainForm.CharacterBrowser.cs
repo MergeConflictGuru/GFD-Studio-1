@@ -1124,6 +1124,12 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             var filter = mCharacterAnimationFilterTextBox.Text?.Trim();
+            var selectedEntries = mCharacterAnimationListBox.SelectedItems
+                .Cast<object>()
+                .OfType<CharacterAnimationEntry>()
+                .ToList();
+            var wasRestoringSelection = mCharacterBrowserRestoringSelection;
+            mCharacterBrowserRestoringSelection = true;
             mCharacterAnimationListBox.BeginUpdate();
             try
             {
@@ -1134,10 +1140,25 @@ namespace GFDStudio.GUI.Forms
                         CharacterBrowserMatches(entry.DisplayName, filter))
                         mCharacterAnimationListBox.Items.Add(entry);
                 }
+
+                foreach (var selectedEntry in selectedEntries)
+                {
+                    var selectedIndex = FindCharacterBrowserAnimationIndex(
+                        mCharacterAnimationListBox,
+                        new CharacterBrowserAnimationSelection
+                        {
+                            Kind = selectedEntry.Kind,
+                            Index = selectedEntry.Index,
+                            PackPath = selectedEntry.PackPath
+                        });
+                    if (selectedIndex >= 0)
+                        mCharacterAnimationListBox.SetSelected(selectedIndex, true);
+                }
             }
             finally
             {
                 mCharacterAnimationListBox.EndUpdate();
+                mCharacterBrowserRestoringSelection = wasRestoringSelection;
             }
         }
 
@@ -1220,6 +1241,12 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             var filter = mCharacterBlendAnimationFilterTextBox.Text?.Trim();
+            var selectedEntries = mCharacterBlendAnimationListBox.SelectedItems
+                .Cast<object>()
+                .OfType<CharacterAnimationEntry>()
+                .ToList();
+            var wasRestoringSelection = mCharacterBrowserRestoringSelection;
+            mCharacterBrowserRestoringSelection = true;
             mCharacterBlendAnimationListBox.BeginUpdate();
             try
             {
@@ -1230,10 +1257,25 @@ namespace GFDStudio.GUI.Forms
                         CharacterBrowserMatches(entry.DisplayName, filter))
                         mCharacterBlendAnimationListBox.Items.Add(entry);
                 }
+
+                foreach (var selectedEntry in selectedEntries)
+                {
+                    var selectedIndex = FindCharacterBrowserAnimationIndex(
+                        mCharacterBlendAnimationListBox,
+                        new CharacterBrowserAnimationSelection
+                        {
+                            Kind = selectedEntry.Kind,
+                            Index = selectedEntry.Index,
+                            PackPath = selectedEntry.PackPath
+                        });
+                    if (selectedIndex >= 0)
+                        mCharacterBlendAnimationListBox.SetSelected(selectedIndex, true);
+                }
             }
             finally
             {
                 mCharacterBlendAnimationListBox.EndUpdate();
+                mCharacterBrowserRestoringSelection = wasRestoringSelection;
             }
         }
 
