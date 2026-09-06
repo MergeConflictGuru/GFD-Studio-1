@@ -157,13 +157,111 @@ namespace GFDLibrary.Tests
             animation.Retarget( source, target, false );
 
             CollectionAssert.AreEqual(
-                new[] { "RootNode", "Hips", "Spine", "LeftArm" },
+                new[] { "root", "Hips", "Spine", "LeftArm" },
                 animation.Controllers.Select( controller => controller.TargetName ).ToArray() );
-            Assert.AreEqual( 0, animation.Controllers[ 0 ].TargetId );
+            Assert.AreEqual( 1, animation.Controllers[ 0 ].TargetId );
             Assert.AreEqual( 2, animation.Controllers[ 1 ].TargetId );
             Assert.AreEqual( 3, animation.Controllers[ 2 ].TargetId );
             Assert.AreEqual( 4, animation.Controllers[ 3 ].TargetId );
             Assert.AreEqual( ResourceVersion.Persona5Dancing, animation.Version );
+        }
+
+        [TestMethod]
+        public void CrossGameBakePreservesBindPoseWithDifferentAxesAndParents()
+        {
+            var (source, target) = CreateDifferentSkeletons();
+            var animation = new Animation(source.Version) { Duration = 1 };
+            animation.Retarget(source, target, false);
+            var bind = AnimationPoseEvaluator.Evaluate(target, null, 0);
+            foreach (var time in new[] {0f, .43f, 1f})
+                foreach (var pair in AnimationPoseEvaluator.Evaluate(target, animation, time))
+                    AssertTransformEqual(bind[pair.Key], pair.Value);
+            Assert.AreEqual(animation.Controllers.Count, animation.Controllers.Select(c => c.TargetId).Distinct().Count());
+        }
+
+        [TestMethod]
+        public void CrossGameBakeIncludesUnmappedAncestorMotionAndKeepsTargetOffsets()
+        {
+            var (source, target) = CreateDifferentSkeletons();
+            var animation = new Animation(source.Version) { Duration = 1 };
+            var ancestor = CreateController("rot");
+            ancestor.Layers[0].Keys.Add(new PRSKey(KeyType.NodeRHalf) {
+                Time = 1, Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, .8f)
+            });
+            animation.Controllers.Add(ancestor);
+            animation.Retarget(source, target, false);
+            var pose = AnimationPoseEvaluator.Evaluate(target, animation, 1);
+            var bind = AnimationPoseEvaluator.Evaluate(target, null, 0);
+            var arm = target.Nodes.First(n => n.Name == "LeftArm");
+            Assert.IsTrue(Vector3.Distance(pose[arm].Translation, bind[arm].Translation) > 1);
+            foreach (var controller in animation.Controllers.Where(c => c.TargetName != "root"))
+                foreach (PRSKey key in controller.Layers[0].Keys)
+                    AssertVectorEqual(target.Nodes.First(n => n.Name == controller.TargetName).Translation, key.Position);
+        }
+
+        [TestMethod]
+        public void StandaloneFaceBakesHeadWorldPlacementInsteadOfBodyLocalKeys()
+        {
+            var root = new Node("RootNode");
+            var neck = new Node("neck", new Vector3(0, 10, 0), Quaternion.Identity, Vector3.One);
+            var head = new Node("head", new Vector3(0, 3, 0), Quaternion.Identity, Vector3.One);
+            root.AddChildNode(neck); neck.AddChildNode(head);
+            var model = new Model(ResourceVersion.Persona5Dancing) { RootNode = root };
+            var animation = new Animation(model.Version) { Duration = 1 };
+            var controller = CreateController("neck");
+            controller.Layers[0].Keys.Add(new PRSKey(KeyType.NodeRHalf) { Time = 1, Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, .7f) });
+            animation.Controllers.Add(controller);
+            var combined = new ModelPack(model.Version) { Model = model, AnimationPack = new AnimationPack(model.Version) };
+            combined.AnimationPack.Animations.Add(animation);
+            var faceRoot = new Node("RootNode");
+            var faceHead = new Node("head", new Vector3(0, 13, 0), Quaternion.Identity, Vector3.One);
+            faceRoot.AddChildNode(faceHead);
+            var face = new Model(model.Version) { RootNode = faceRoot };
+            var exported = SplitCharacterRetargeter.ForStandalonePart(combined, face);
+            foreach (var time in new[] {0f, 1f})
+                AssertTransformEqual(AnimationPoseEvaluator.Evaluate(model, animation, time)[head],
+                    AnimationPoseEvaluator.Evaluate(face, exported.Animations[0], time)[faceHead]);
+            Assert.AreEqual(1, exported.Animations[0].Controllers.Single(c => c.TargetName == "head").TargetId);
+        }
+
+        [TestMethod]
+        public void CrossGameAdditiveFailureDoesNotModifyBaseClips()
+        {
+            var (source, target) = CreateDifferentSkeletons();
+            var pack = new AnimationPack(source.Version);
+            var animation = new Animation(source.Version);
+            var controller = CreateController("Bip01 Pelvis");
+            animation.Controllers.Add(controller);
+            pack.Animations.Add(animation);
+            pack.BlendAnimations.Add(animation);
+            Assert.ThrowsException<NotSupportedException>(() => pack.Retarget(source, target, false));
+            Assert.AreSame(controller, animation.Controllers[0]);
+            Assert.AreEqual("Bip01 Pelvis", controller.TargetName);
+        }
+
+        private static (Model source, Model target) CreateDifferentSkeletons()
+        {
+            var source = new Model(ResourceVersion.Persona5Royal) { RootNode = new Node("RootNode") };
+            var rot = new Node("rot"); source.RootNode.AddChildNode(rot);
+            var biped = new Node("Bip01", new Vector3(0, 10, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, .7f), Vector3.One);
+            rot.AddChildNode(biped);
+            var pelvis = new Node("Bip01 Pelvis"); biped.AddChildNode(pelvis);
+            var spine = new Node("Bip01 Spine", new Vector3(4, 0, 0), Quaternion.Identity, Vector3.One); pelvis.AddChildNode(spine);
+            spine.AddChildNode(new Node("Bip01 L UpperArm", new Vector3(5, 0, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitX, .6f), Vector3.One));
+            var target = new Model(ResourceVersion.Persona5Dancing) { RootNode = new Node("RootNode") };
+            var root = new Node("root", new Vector3(0, 15, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitX, -.5f), Vector3.One);
+            target.RootNode.AddChildNode(root);
+            var hips = new Node("Hips"); root.AddChildNode(hips);
+            hips.AddChildNode(new Node("Spine", new Vector3(0, 2, 0), Quaternion.Identity, Vector3.One));
+            hips.AddChildNode(new Node("LeftArm", new Vector3(6, 3, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitY, -.8f), Vector3.One));
+            return (source, target);
+        }
+
+        private static void AssertTransformEqual(Matrix4x4 expected, Matrix4x4 actual)
+        {
+            Matrix4x4.Decompose(expected, out var es, out var er, out var ep);
+            Matrix4x4.Decompose(actual, out var s, out var r, out var p);
+            AssertVectorEqual(ep, p); AssertVectorEqual(es, s); AssertQuaternionEqual(er, r);
         }
 
         private static Animation CreateAnimation( KeyType keyType, PRSKey key )

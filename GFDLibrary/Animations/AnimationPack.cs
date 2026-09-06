@@ -149,6 +149,8 @@ namespace GFDLibrary.Animations
         public void Retarget( Model originalModel, Model newModel, bool fixArms )
         {
             var retargetMap = AnimationRetargetMap.Create( originalModel, newModel );
+            if (retargetMap.UsesDifferentHumanoidHierarchy && BlendAnimations.Any(a => a.Controllers.Count > 0))
+                throw new NotSupportedException("Cross-game additive animation retargeting requires a reference pose; export and retarget the base animation separately.");
 
             foreach ( var animation in Animations )
                 animation.Retarget( retargetMap, fixArms );
