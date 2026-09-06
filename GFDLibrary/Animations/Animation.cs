@@ -286,6 +286,11 @@ namespace GFDLibrary.Animations
 
         internal void Retarget( AnimationRetargetMap retargetMap, bool fixArms )
         {
+            if (retargetMap.UsesDifferentHumanoidHierarchy)
+            {
+                HumanoidAnimationRetargeter.Bake(this, retargetMap);
+                return;
+            }
             foreach ( var controller in Controllers.ToList() )
             {
                 if ( controller.TargetKind != TargetKind.Node )
@@ -346,6 +351,8 @@ namespace GFDLibrary.Animations
         /// </summary>
         internal void RetargetTargetIds( AnimationRetargetMap retargetMap )
         {
+            if (retargetMap.UsesDifferentHumanoidHierarchy && Controllers.Count > 0)
+                throw new System.NotSupportedException("Cross-game additive animation retargeting requires a reference pose; retarget the base animation separately.");
             foreach ( var controller in Controllers.ToList() )
             {
                 if ( controller.TargetKind != TargetKind.Node )

@@ -69,6 +69,36 @@ namespace GFDStudio.GUI.DataViewNodes
             {
                 Data.ConvertToP5();
             });
+            RegisterCustomHandler("Tools", "Retarget split Dance character (experimental)", () =>
+            {
+                if (MessageBox.Show("Select the source GMD, Dance body, face, hair, and a native Dance base GAP.\n\n" +
+                    "This exports one assembled GMD with skeletal animations and reference-based knee correction. " +
+                    "Facial expressions, unmatched hair/cloth motion and in-game compatibility are not converted or guaranteed.",
+                    "Experimental split-character retarget", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                try
+                {
+                    var source = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the original P5/P5R model.");
+                    if (source?.Model == null) return;
+                    var body = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the Dance body GMD.");
+                    if (body?.Model == null) return;
+                    var face = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the matching Dance face GMD.");
+                    if (face?.Model == null) return;
+                    var hair = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the matching Dance hair GMD.");
+                    if (hair?.Model == null) return;
+                    var native = ModuleImportUtilities.SelectImportFile<AnimationPack>("Select a native Dance base GAP (not _f, _h or costume overlay).");
+                    if (native == null || native.Animations.Count == 0) return;
+                    using var save = new SaveFileDialog { Filter = "Assembled preview (*.GMD)|*.GMD", FileName = "retargeted_character_preview.GMD" };
+                    if (save.ShowDialog() != DialogResult.OK) return;
+                    var preview = SplitCharacterRetargeter.CreatePreview(source.Model, Data, body, face, hair, native.Animations[0]);
+                    preview.Save(save.FileName);
+                    MessageBox.Show("Saved the assembled preview with embedded animations:\n" + save.FileName +
+                        "\n\nOpen that GMD to inspect all parts together. The source animation pack was not changed.", "Retarget preview saved");
+                }
+                catch (Exception exception)
+                {
+                    MessageBox.Show(exception.Message, "Retarget failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            });
             RegisterCustomHandler("Tools", "Fix IDs", () =>
             {
                 ImportModelAndFixTargetIds(Data);

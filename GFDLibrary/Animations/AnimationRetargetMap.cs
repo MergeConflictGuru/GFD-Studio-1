@@ -17,11 +17,19 @@ namespace GFDLibrary.Animations
         private readonly Dictionary<string, Node> mTargetNodesByRole;
         private readonly Dictionary<Node, int> mTargetNodeIds;
         private Node mSyntheticRootNode;
+        internal Model SourceModel { get; }
+        internal Model TargetModel { get; }
+        internal bool UsesDifferentHumanoidHierarchy { get; }
 
         private AnimationRetargetMap( Model originalModel, Model targetModel )
         {
+            SourceModel = originalModel;
+            TargetModel = targetModel;
             mOriginalNodes = CreateNodeLookup( originalModel.Nodes );
             mTargetNodes = CreateNodeLookup( targetModel.Nodes );
+            UsesDifferentHumanoidHierarchy =
+                (mOriginalNodes.ContainsKey("Bip01 Pelvis") && mTargetNodes.ContainsKey("Hips")) ||
+                (mOriginalNodes.ContainsKey("Hips") && mTargetNodes.ContainsKey("Bip01 Pelvis"));
             mTargetNodeIds = targetModel.Nodes
                 .Select( ( node, index ) => ( node, index ) )
                 .GroupBy( x => x.node )
@@ -57,6 +65,30 @@ namespace GFDLibrary.Animations
 
             if ( string.IsNullOrEmpty( sourceName ) )
                 return false;
+
+            // The Dance motion root corresponds to Bip01, not P5's axis
+            // conversion node also named root. Their extra ancestors are
+            // evaluated by the pose baker, never assigned duplicate controllers.
+            if ( UsesDifferentHumanoidHierarchy )
+            {
+                if (mOriginalNodes.ContainsKey("Bip01 Pelvis"))
+                {
+                    if (sourceName == "root" || sourceName == "rot" || sourceName == "RootNode")
+                        return false;
+                    if (sourceName == "Bip01")
+                    {
+                        sourceNode = mOriginalNodes[sourceName];
+                        return mTargetNodes.TryGetValue("root", out targetNode);
+                    }
+                }
+                else if (sourceName == "root")
+                {
+                    sourceNode = mOriginalNodes[sourceName];
+                    return mTargetNodes.TryGetValue("Bip01", out targetNode);
+                }
+                else if (sourceName == "RootNode")
+                    return false;
+            }
 
             if ( !mOriginalNodes.TryGetValue( sourceName, out sourceNode ) )
             {
@@ -109,14 +141,14 @@ namespace GFDLibrary.Animations
             if ( normalized.Equals( "root", StringComparison.OrdinalIgnoreCase ) )
                 return "root";
             if ( normalized.Equals( "rot", StringComparison.OrdinalIgnoreCase ) )
-                return "root";
+                return null;
 
             var sourceName = normalized;
             if ( sourceName.StartsWith( "Bip01 ", StringComparison.OrdinalIgnoreCase ) )
                 sourceName = sourceName.Substring( 6 );
 
             if ( sourceName.Equals( "Bip01", StringComparison.OrdinalIgnoreCase ) )
-                return "root";
+                return "motionroot";
             if ( sourceName.Equals( "Pelvis", StringComparison.OrdinalIgnoreCase ) ||
                  sourceName.Equals( "Hips", StringComparison.OrdinalIgnoreCase ) )
                 return "hips";
@@ -125,7 +157,7 @@ namespace GFDLibrary.Animations
                  sourceName.Equals( "Spine2", StringComparison.OrdinalIgnoreCase ) )
                 return sourceName.ToLowerInvariant();
             if ( sourceName.Equals( "Neck0", StringComparison.OrdinalIgnoreCase ) )
-                return "spine2";
+                return null;
             if ( sourceName.Equals( "Neck", StringComparison.OrdinalIgnoreCase ) )
                 return "neck";
             if ( sourceName.Equals( "Head", StringComparison.OrdinalIgnoreCase ) )
@@ -169,20 +201,10 @@ namespace GFDLibrary.Animations
             if ( sideName.Equals( "Toe0", StringComparison.OrdinalIgnoreCase ) ||
                  sideName.Equals( "Toe2", StringComparison.OrdinalIgnoreCase ) )
                 return side + "toe";
-            if ( sideName.StartsWith( "ThighTwist", StringComparison.OrdinalIgnoreCase ) )
-                return side + "uplegroll" + GetSuffixNumber( sideName, "ThighTwist" );
-            if ( sideName.StartsWith( "ForeTwist", StringComparison.OrdinalIgnoreCase ) )
-                return side + "forearmroll" + GetSuffixNumber( sideName, "ForeTwist" );
 
             if ( sideName.StartsWith( "Finger", StringComparison.OrdinalIgnoreCase ) )
                 return GetFingerRole( side, sideName );
 
-            // Dance models use these names for the same roll bones. Supporting
-            // them here also allows a Dance skeleton to be used as the source.
-            if ( sideName.StartsWith( "UpLeg_Roll_", StringComparison.OrdinalIgnoreCase ) )
-                return side + "uplegroll" + GetTrailingNumber( sideName );
-            if ( sideName.StartsWith( "ForeArm_Roll_", StringComparison.OrdinalIgnoreCase ) )
-                return side + "forearmroll" + GetTrailingNumber( sideName );
 
             return null;
         }
@@ -220,7 +242,7 @@ namespace GFDLibrary.Animations
         private static string GetFingerRole( string side, string name )
         {
             var digits = new string( name.Substring( 6 ).TakeWhile( char.IsDigit ).ToArray() );
-            if ( digits.Length == 0 )
+            if ( digits.Length == 0 || digits.Length > 2 )
                 return null;
             if ( name.Length != 6 + digits.Length )
                 return null;
@@ -243,12 +265,6 @@ namespace GFDLibrary.Animations
 
             var segment = digits.Length == 1 ? 1 : digits[ 1 ] - '0' + 1;
             return segment >= 1 && segment <= 3 ? side + fingerName + segment : null;
-        }
-
-        private static int GetSuffixNumber( string name, string prefix )
-        {
-            var suffix = name.Substring( prefix.Length );
-            return string.IsNullOrEmpty( suffix ) ? 1 : int.TryParse( suffix, out var number ) ? number + 1 : -1;
         }
 
         private static int GetTrailingNumber( string name )

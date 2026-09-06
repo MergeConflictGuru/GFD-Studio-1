@@ -48,6 +48,8 @@ namespace GFDLibrary.Animations
                     case KeyType.NodePRHalf:
                     case KeyType.NodePRSHalf:
                     case KeyType.NodePRHalf_2:
+                    case KeyType.NodePSHalf:
+                    case KeyType.NodeRSHalf:
                         return true;
 
                     case KeyType.Type31:
