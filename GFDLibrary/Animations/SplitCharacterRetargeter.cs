@@ -6,9 +6,18 @@ using System.Numerics;
 using GFDLibrary.Materials;
 using GFDLibrary.Models;
 using GFDLibrary.Textures;
+using GFDLibrary.Animations.Keys;
 
 namespace GFDLibrary.Animations
 {
+    public enum SplitCharacterPart
+    {
+        Generic,
+        Body,
+        Face,
+        Hair
+    }
+
     public static class SplitCharacterRetargeter
     {
         /// <summary>
@@ -48,7 +57,8 @@ namespace GFDLibrary.Animations
         /// when the face hierarchy differs, matching native Dance _f packs.
         /// These standalone packs must not be layered back onto the combined model.
         /// </summary>
-        public static AnimationPack ForStandalonePart(ModelPack combined, Model part)
+        public static AnimationPack ForStandalonePart(ModelPack combined, Model part,
+            SplitCharacterPart partKind = SplitCharacterPart.Generic)
         {
             var result = new AnimationPack(part.Version) {
                 // Native Dance component GAPs carry the same pack flags as the
@@ -58,15 +68,54 @@ namespace GFDLibrary.Animations
             };
             var combinedNodes = combined.Model.Nodes.ToDictionary(n => n.Name);
             var nodes = part.Nodes.ToArray();
+            var outputNodes = partKind == SplitCharacterPart.Hair
+                ? HairAnimationNodes(part, nodes)
+                : nodes;
+            var outputNodeSet = outputNodes.ToHashSet();
             var bind = AnimationPoseEvaluator.Evaluate(combined.Model, null, 0);
             var partBind = AnimationPoseEvaluator.Evaluate(part, null, 0);
             foreach (var source in combined.AnimationPack.Animations)
             {
                 var animation = new Animation(part.Version) { Duration = source.Duration, Speed = source.Speed };
-                var output = nodes.Select((n, id) => new AnimationController(part.Version) {
-                    TargetKind = TargetKind.Node, TargetName = n.Name, TargetId = id,
-                    Layers = { new AnimationLayer(part.Version) { KeyType = KeyType.NodePRS } }
+                var output = outputNodes.Select(n => {
+                    var controller = new AnimationController(part.Version) {
+                        TargetKind = TargetKind.Node, TargetName = n.Name,
+                        TargetId = AnimationTargetId(nodes, outputNodes, n, partKind)
+                    };
+                    if (partKind == SplitCharacterPart.Hair && n != part.RootNode)
+                    {
+                        // This is the native Dance hair layout: position,
+                        // rotation and scale are separate component layers.
+                        controller.Layers.Add(new AnimationLayer(part.Version) { KeyType = KeyType.Type31 });
+                        controller.Layers.Add(new AnimationLayer(part.Version) { KeyType = KeyType.NodeRHalf });
+                        controller.Layers.Add(new AnimationLayer(part.Version) { KeyType = KeyType.NodeSHalf });
+                    }
+                    else
+                    {
+                        controller.Layers.Add(new AnimationLayer(part.Version) { KeyType = KeyType.NodePRS });
+                    }
+                    return controller;
                 }).ToArray();
+                if (partKind == SplitCharacterPart.Hair)
+                {
+                    var rootController = output[Array.IndexOf(outputNodes, part.RootNode)];
+                    rootController.Layers[0].Keys.Add(new PRSKey(KeyType.NodePRS) {
+                        Time = 0, Position = part.RootNode.Translation,
+                        Rotation = Quaternion.Normalize(part.RootNode.Rotation), Scale = part.RootNode.Scale
+                    });
+                    foreach (var controller in output.Where(controller => controller.TargetName != part.RootNode.Name))
+                    {
+                        var node = outputNodes.First(n => n.Name == controller.TargetName);
+                        var scaleLayer = controller.Layers[2];
+                        scaleLayer.Keys.Add(new PRSKey(KeyType.NodeSHalf) {
+                            Time = 0, Scale = node.Scale
+                        });
+                        if (source.Duration > 0)
+                            scaleLayer.Keys.Add(new PRSKey(KeyType.NodeSHalf) {
+                                Time = source.Duration, Scale = node.Scale
+                            });
+                    }
+                }
                 var times = source.Controllers.SelectMany(c => c.Layers).Where(l => l.HasPRSKeyFrames)
                     .SelectMany(l => l.Keys).Select(k => k.Time).Distinct().OrderBy(t => t);
                 foreach (var time in times)
@@ -100,17 +149,65 @@ namespace GFDLibrary.Animations
                             }
                         }
                         partPose[node] = local * parent;
+                        if (!outputNodeSet.Contains(node))
+                            continue;
                         if (!Matrix4x4.Decompose(outputLocal, out var scale, out var rotation, out var position))
                             throw new InvalidOperationException("Cannot decompose standalone part pose.");
-                        output[i].Layers[0].Keys.Add(new PRSKey(KeyType.NodePRS) {
-                            Time = time, Position = position, Rotation = Quaternion.Normalize(rotation), Scale = scale
-                        });
+                        if (partKind == SplitCharacterPart.Hair && node == part.RootNode)
+                            continue;
+                        var outputIndex = Array.IndexOf(outputNodes, node);
+                        if (partKind == SplitCharacterPart.Hair)
+                        {
+                            output[outputIndex].Layers[0].Keys.Add(new KeyType31Dancing {
+                                Time = time, Position = position
+                            });
+                            output[outputIndex].Layers[1].Keys.Add(new PRSKey(KeyType.NodeRHalf) {
+                                Time = time, Rotation = Quaternion.Normalize(rotation)
+                            });
+                        }
+                        else
+                        {
+                            output[outputIndex].Layers[0].Keys.Add(new PRSKey(KeyType.NodePRS) {
+                                Time = time, Position = position, Rotation = Quaternion.Normalize(rotation), Scale = scale
+                            });
+                        }
                     }
                 }
                 animation.Controllers.AddRange(output);
                 result.Animations.Add(animation);
             }
             return result;
+        }
+
+        private static Node[] HairAnimationNodes(Model part, Node[] nodes)
+        {
+            var boneNodes = (part.Bones ?? new List<Bone>())
+                .Select(bone => bone.NodeIndex < nodes.Length ? nodes[bone.NodeIndex] : null)
+                .Where(node => node != null)
+                .ToHashSet();
+            var head = nodes.FirstOrDefault(node =>
+                node.Name.Equals("head", StringComparison.OrdinalIgnoreCase));
+            var sharedAttachmentNodes = new HashSet<Node>();
+            for (var node = head; node != null; node = node.Parent)
+                sharedAttachmentNodes.Add(node);
+
+            // Native Dance hair packs contain the root and the hair bones.
+            // The shared neck/head chain is driven by the body pack, while
+            // mesh containers are static and never receive hair controllers.
+            return nodes.Where(node => node == part.RootNode ||
+                                       (boneNodes.Contains(node) && !sharedAttachmentNodes.Contains(node)))
+                .ToArray();
+        }
+
+        private static int AnimationTargetId(Node[] nodes, Node[] outputNodes, Node node,
+            SplitCharacterPart partKind)
+        {
+            if (partKind != SplitCharacterPart.Hair)
+                return Array.IndexOf(nodes, node);
+
+            // Dance component GAPs compact the controller IDs after omitting
+            // the shared neck/head chain. The root remains ID 0.
+            return Array.IndexOf(outputNodes, node);
         }
 
         private static T Copy<T>(T resource) where T : Resource

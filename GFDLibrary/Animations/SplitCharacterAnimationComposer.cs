@@ -8,9 +8,9 @@ namespace GFDLibrary.Animations
     {
         /// <summary>
         /// Adds split face/hair tracks to a body animation while keeping the
-        /// body's shared skeleton tracks authoritative. Face and hair packs
-        /// repeat shared RootNode/head tracks because they can also be played
-        /// on their standalone models.
+        /// body's shared skeleton tracks authoritative. Native Dance hair
+        /// packs contain only RootNode and hair-bone tracks; the body remains
+        /// authoritative for the shared neck/head chain.
         /// </summary>
         public static Animation AddComponentTracks(Animation body, params Animation[] components)
         {
