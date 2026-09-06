@@ -1857,13 +1857,54 @@ namespace GFDStudio.GUI.Forms
             foreach (var candidate in mCharacterAnimations)
             {
                 candidate.IsAutoLoaded = entry != null &&
+                    !AreSamePath(candidate.PackPath, entry.PackPath) &&
                     candidate.Kind == entry.Kind &&
                     candidate.Index == entry.Index &&
-                    (AreSamePath(candidate.PackPath, entry.PackPath) ||
-                     paths.Any(path => AreSamePath(path, candidate.PackPath)));
+                    paths.Any(path => AreSamePath(path, candidate.PackPath));
             }
 
-            mCharacterAnimationListBox?.Refresh();
+            RefreshCharacterBrowserAnimationItemText();
+        }
+
+        private void RefreshCharacterBrowserAnimationItemText()
+        {
+            if (mCharacterAnimationListBox == null || mCharacterAnimationListBox.IsDisposed)
+                return;
+
+            var selectedEntries = mCharacterAnimationListBox.SelectedItems
+                .Cast<object>()
+                .OfType<CharacterAnimationEntry>()
+                .ToHashSet();
+            var items = mCharacterAnimationListBox.Items.Cast<object>().ToArray();
+            var topIndex = mCharacterAnimationListBox.TopIndex;
+            var wasRestoringSelection = mCharacterBrowserRestoringSelection;
+            mCharacterBrowserRestoringSelection = true;
+            mCharacterAnimationListBox.BeginUpdate();
+            try
+            {
+                // ListBox caches the string produced by ToString() when an item is
+                // inserted. Reinsert the same objects so the marker is visible
+                // immediately without changing the sorted/filter state.
+                mCharacterAnimationListBox.Items.Clear();
+                foreach (var item in items)
+                    mCharacterAnimationListBox.Items.Add(item);
+
+                for (var index = 0; index < mCharacterAnimationListBox.Items.Count; index++)
+                {
+                    if (selectedEntries.Contains(
+                        mCharacterAnimationListBox.Items[index] as CharacterAnimationEntry))
+                        mCharacterAnimationListBox.SetSelected(index, true);
+                }
+
+                if (mCharacterAnimationListBox.Items.Count > 0)
+                    mCharacterAnimationListBox.TopIndex = Math.Min(
+                        Math.Max(topIndex, 0), mCharacterAnimationListBox.Items.Count - 1);
+            }
+            finally
+            {
+                mCharacterAnimationListBox.EndUpdate();
+                mCharacterBrowserRestoringSelection = wasRestoringSelection;
+            }
         }
 
         private void RepackCharacterAnimations()
