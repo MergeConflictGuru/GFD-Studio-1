@@ -2324,6 +2324,21 @@ namespace GFDStudio.GUI.Forms
             if (string.IsNullOrWhiteSpace(animationKey))
                 return null;
 
+            var characterId = ExtractCharacterId(gapPath);
+            var selectedBody = mCharacterModels.FirstOrDefault(model =>
+                model.Part == CharacterModelPart.Body &&
+                AreSamePath(model.Path, mCharacterBrowserCurrentModelPath));
+            if (selectedBody != null &&
+                string.Equals(ExtractCharacterModelKey(selectedBody.Path), animationKey,
+                              StringComparison.OrdinalIgnoreCase))
+            {
+                // Generated Dance GAPs are commonly staged in a separate output
+                // directory (for example modssrc\\dayobuo), while the selected
+                // pc204_26.GMD remains under the game's p5 directory. Let the
+                // selected exact body variant identify the source in that case.
+                return selectedBody;
+            }
+
             var characterDirectory = GetCharacterDirectory(gapPath);
             var characterModels = mCharacterModels
                 .Where(model => model.Part == CharacterModelPart.Body)
@@ -2345,7 +2360,6 @@ namespace GFDStudio.GUI.Forms
             if (exactMatch != null)
                 return exactMatch;
 
-            var characterId = ExtractCharacterId(gapPath);
             if (string.IsNullOrWhiteSpace(characterId))
                 return null;
 
