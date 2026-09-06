@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using GFDStudio.AnimationMatching.Core;
@@ -15,6 +16,7 @@ public sealed class AnimationMatchingModeController : IDisposable
     private readonly AnimationMatchingModeControl _view;
     private readonly AnimationMatchOptions _options;
     private AnimationSearchDatabase? _database;
+    private string? _databaseContextSignature;
     private CancellationTokenSource? _work;
     private StitchedAnimation? _stitched;
     private IAnimationClip? _sourceForResults;
@@ -31,9 +33,29 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.ThumbnailRequested += OnThumbnailRequested;
     }
 
+    private IAnimationClip? CurrentSource => _host is IAnimationMatchingCorpusHost corpusHost
+        ? corpusHost.CurrentAnimationForMatching
+        : _host.CurrentAnimation;
+
+    private IReadOnlyList<IAnimationClip> CurrentCorpus => _host is IAnimationMatchingCorpusHost corpusHost
+        ? corpusHost.SearchableAnimationsForMatching
+        : _host.SearchableAnimations;
+
+    private string? CurrentContextSignature
+    {
+        get
+        {
+            if (_host is IAnimationMatchingCorpusHost corpusHost)
+                return corpusHost.AnimationMatchingContextSignature;
+            if (_host is IAnimationMatchingCacheHost cacheHost)
+                return cacheHost.AnimationMatchingCorpusSignature;
+            return null;
+        }
+    }
+
     public void SyncSourceFromHost()
     {
-        var source = _host.CurrentAnimation;
+        var source = CurrentSource;
         _sourceForResults = source;
         _stitched = null;
         _view.SetSource(source?.DisplayName ?? "No animation", source?.FrameCount ?? 1, source?.FramesPerSecond ?? 30f);
@@ -45,10 +67,14 @@ public sealed class AnimationMatchingModeController : IDisposable
     {
         try
         {
-            var source = _host.CurrentAnimation;
+            var source = CurrentSource;
             if (source is null) { _view.SetStatus("Open a source animation first."); return; }
             _sourceForResults = source;
-            if (_database is null) await BuildIndexAsync(force: false);
+
+            // Always let BuildIndexAsync validate the active target/corpus signature. This is cheap
+            // when nothing changed, but prevents an in-memory index for an old body/face/hair
+            // composition from surviving simply because the controller object was reused.
+            await BuildIndexAsync(force: false);
             if (_database is null) return;
 
             RestartWork();
@@ -68,19 +94,34 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async Task BuildIndexAsync(bool force)
     {
-        if (_database is not null && !force) return;
+        var contextSignature = CurrentContextSignature;
+        if (_database is not null && !force &&
+            string.Equals(_databaseContextSignature, contextSignature, StringComparison.Ordinal))
+            return;
+
+        // A changed target composition/corpus invalidates the live database as well as the disk
+        // cache. Do this before constructing the new corpus so a failed rebuild cannot accidentally
+        // leave stale results active.
+        _database = null;
+        _databaseContextSignature = null;
+
         RestartWork();
         _view.SetBusy(true, "Indexing animations…");
         try
         {
-            var corpus = new AnimationCorpus(_host.SearchableAnimations);
+            var corpus = new AnimationCorpus(CurrentCorpus);
+            if (corpus.Clips.Count == 0)
+                throw new InvalidOperationException("No animations with a resolvable source model are available for matching.");
+
             if (!force && _host is IAnimationMatchingCacheHost cacheHost)
             {
+                var cacheSignature = contextSignature ?? cacheHost.AnimationMatchingCorpusSignature;
                 _view.SetStatus("Loading animation match index…");
                 _database = await Task.Run(() => AnimationIndexCache.TryLoad(
-                    cacheHost.AnimationMatchingCachePath, corpus, _options, cacheHost.AnimationMatchingCorpusSignature), _work!.Token);
+                    cacheHost.AnimationMatchingCachePath, corpus, _options, cacheSignature), _work!.Token);
                 if (_database is not null)
                 {
+                    _databaseContextSignature = contextSignature;
                     _view.SetStatus($"Loaded {_database.SampleCount:N0} indexed poses from cache");
                     return;
                 }
@@ -88,24 +129,27 @@ public sealed class AnimationMatchingModeController : IDisposable
 
             var progress = new Progress<(int done, int total)>(p => _view.SetStatus($"Indexing {p.done:N0}/{p.total:N0} poses…"));
             _database = await AnimationSearchDatabase.BuildAsync(corpus, _options, progress, _work!.Token);
+            _databaseContextSignature = contextSignature;
+
             if (_host is IAnimationMatchingCacheHost writeCacheHost)
             {
                 try
                 {
-                    AnimationIndexCache.Save(writeCacheHost.AnimationMatchingCachePath, _database, writeCacheHost.AnimationMatchingCorpusSignature);
+                    var cacheSignature = contextSignature ?? writeCacheHost.AnimationMatchingCorpusSignature;
+                    AnimationIndexCache.Save(writeCacheHost.AnimationMatchingCachePath, _database, cacheSignature);
                 }
                 catch { /* cache failure must never make matching fail */ }
             }
             _view.SetStatus($"Indexed {_database.SampleCount:N0} poses from {corpus.Clips.Count:N0} animations");
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _view.SetStatus(ex.Message); _database = null; }
+        catch (Exception ex) { _view.SetStatus(ex.Message); _database = null; _databaseContextSignature = null; }
         finally { _view.SetBusy(false); }
     }
 
     private void OnCandidateActivated(object? sender, AnimationMatchResult result)
     {
-        var source = _sourceForResults ?? _host.CurrentAnimation;
+        var source = _sourceForResults ?? CurrentSource;
         if (source is null) return;
         var blend = _view.BlendingEnabled ? _view.BlendSeconds : 0f;
         _stitched = new StitchedAnimation(source, result.SourceFrame, result.Candidate, result.CandidateFrame, blend);

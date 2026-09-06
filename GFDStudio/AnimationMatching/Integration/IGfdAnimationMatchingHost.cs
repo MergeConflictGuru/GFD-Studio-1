@@ -7,8 +7,7 @@ using GFDStudio.AnimationMatching.Core;
 namespace GFDStudio.AnimationMatching.Integration;
 
 /// <summary>
-/// The only GFD-specific bridge the mode needs. The showroom branch can implement this with its
-/// existing GAP loader, in-memory retargeter, OpenGL model viewer and animation exporter.
+/// The GFD-specific bridge used by animation matching.
 /// </summary>
 public interface IGfdAnimationMatchingHost
 {
@@ -30,4 +29,17 @@ public interface IAnimationMatchingCacheHost
 {
     string AnimationMatchingCachePath { get; }
     string AnimationMatchingCorpusSignature { get; }
+}
+
+/// <summary>
+/// Optional correctness-oriented corpus provider. Hosts with enough source-model context should
+/// implement this instead of relying on the legacy raw Character Browser list. It lets the matcher
+/// use a canonical source identity, a corpus that has been validated/retargeted for the active
+/// target skeleton, and a context signature that also invalidates the in-memory index.
+/// </summary>
+public interface IAnimationMatchingCorpusHost
+{
+    IAnimationClip? CurrentAnimationForMatching { get; }
+    IReadOnlyList<IAnimationClip> SearchableAnimationsForMatching { get; }
+    string AnimationMatchingContextSignature { get; }
 }
