@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 
 $workspace = (Resolve-Path $PSScriptRoot).Path
 $binaryDirectory = Join-Path $workspace 'GFDStudio-binary'
+$buildDirectory = Join-Path $workspace 'GFDStudio\bin\x64\Release\net8.0-windows\win-x64'
 
 $dotnetRootCandidates = @(
     'Q:\_coding\tools\unity\editor\6000.5.7f1\Editor\Data\DotNetSdk',
@@ -60,16 +61,6 @@ else {
     Remove-Item Env:MSBuildSDKsPath -ErrorAction SilentlyContinue
 }
 $env:FBXSDKRoot = $fbxSdkRoot
-New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
-
-$runningProcesses = @(Get-Process -Name GFDStudio -ErrorAction SilentlyContinue)
-$restartAfterBuild = $runningProcesses.Count -gt 0
-if ($restartAfterBuild) {
-    $processIds = $runningProcesses.Id -join ', '
-    Write-Host "[release] Stopping GFD Studio (PID $processIds) before replacing the build..."
-    $runningProcesses | Stop-Process -Force
-    Start-Sleep -Milliseconds 250
-}
 
 function Invoke-MSBuild {
     param(
@@ -83,28 +74,76 @@ function Invoke-MSBuild {
     }
 }
 
-foreach ($outputFile in @('GFDStudio.dll', 'GFDStudio.exe')) {
-    $outputPath = Join-Path $binaryDirectory $outputFile
-    if (Test-Path -LiteralPath $outputPath) {
-        try {
-            $stream = [System.IO.File]::Open($outputPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+function Test-FileAvailable {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None)
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($null -ne $stream) {
             $stream.Dispose()
-        }
-        catch {
-            throw "Cannot update $outputPath because it is in use. Close GFD Studio and run the build again."
         }
     }
 }
 
-$mainProject = Join-Path $workspace 'GFDStudio\GFDStudio.csproj'
-$publishDirectory = $binaryDirectory.TrimEnd('\') + '\'
+function Update-BinaryDirectory {
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceDirectory,
+        [Parameter(Mandatory)]
+        [string]$DestinationDirectory
+    )
+
+    $lockedFiles = @('GFDStudio.exe', 'GFDStudio.dll') |
+        ForEach-Object {
+            $destinationPath = Join-Path $DestinationDirectory $_
+            if (-not (Test-FileAvailable -Path $destinationPath)) {
+                $destinationPath
+            }
+        }
+
+    if ($lockedFiles.Count -gt 0) {
+        $lockedNames = $lockedFiles |
+            ForEach-Object { Split-Path -Leaf $_ } |
+            Sort-Object -Unique
+        Write-Host "[release] $($lockedNames -join ', ') is in use; leaving the new build in $SourceDirectory and not updating $DestinationDirectory."
+        return $false
+    }
+
+    New-Item -ItemType Directory -Force -Path $DestinationDirectory | Out-Null
+    Copy-Item -Path (Join-Path $SourceDirectory '*') -Destination $DestinationDirectory -Recurse -Force
+    return $true
+}
+
 $application = Join-Path $binaryDirectory 'GFDStudio.exe'
+$assembly = Join-Path $binaryDirectory 'GFDStudio.dll'
+$buildApplication = Join-Path $buildDirectory 'GFDStudio.exe'
+$buildAssembly = Join-Path $buildDirectory 'GFDStudio.dll'
+$binaryDirectoryUpdated = $false
+
 $buildSucceeded = $false
 
 try {
     Write-Host '[release] Restoring the normal GFD Studio project graph...'
     Invoke-MSBuild @(
-        $mainProject,
+        (Join-Path $workspace 'GFDStudio\GFDStudio.csproj'),
         '/t:Restore',
         '/p:RuntimeIdentifier=win-x64',
         '/p:SelfContained=true',
@@ -113,37 +152,41 @@ try {
         '/verbosity:minimal'
     )
 
-    Write-Host '[release] Building the normal incremental Release graph into GFDStudio-binary...'
+    Write-Host "[release] Building the normal incremental Release graph into $buildDirectory..."
     Invoke-MSBuild @(
-        $mainProject,
-        '/t:Publish',
+        (Join-Path $workspace 'GFDStudio\GFDStudio.csproj'),
+        '/t:Build',
         '/p:Configuration=Release',
         '/p:TargetFramework=net8.0-windows',
         '/p:RuntimeIdentifier=win-x64',
         '/p:SelfContained=true',
-        "/p:PublishDir=$publishDirectory",
         '/p:Platform=x64',
         # The checked-in Scarlet projects run NetRevisionTool in pre/post-build
         # events. Those events mutate source files and defeat incremental builds.
         '/p:PreBuildEvent=',
         '/p:PostBuildEvent=',
         "/p:FBXSDKRoot=$fbxSdkRoot",
-        '/p:PublishSingleFile=false',
         '/p:DebugType=None',
         '/p:DebugSymbols=false',
         '/verbosity:minimal'
     )
 
-    $assembly = Join-Path $binaryDirectory 'GFDStudio.dll'
-    if (-not (Test-Path -LiteralPath $application) -or -not (Test-Path -LiteralPath $assembly)) {
-        throw 'The Release build completed without producing GFDStudio.exe and GFDStudio.dll.'
+    if (-not (Test-Path -LiteralPath $buildApplication) -or -not (Test-Path -LiteralPath $buildAssembly)) {
+        throw 'The Release build completed without producing GFDStudio.exe and GFDStudio.dll in the normal build output.'
     }
 
-    Write-Host "[release] Built $application"
+    $binaryDirectoryUpdated = Update-BinaryDirectory -SourceDirectory $buildDirectory -DestinationDirectory $binaryDirectory
+    if ($binaryDirectoryUpdated) {
+        Write-Host "[release] Updated $application"
+    }
+    else {
+        Write-Host "[release] Built $buildApplication; the final binary directory was left unchanged."
+    }
+
     $buildSucceeded = $true
 }
 finally {
-    if (($restartAfterBuild -or ($Run -and $buildSucceeded)) -and (Test-Path -LiteralPath $application)) {
+    if ($Run -and $buildSucceeded -and $binaryDirectoryUpdated -and (Test-Path -LiteralPath $application)) {
         $process = Start-Process -FilePath $application -WorkingDirectory $binaryDirectory -PassThru
         Write-Host "[release] Started GFD Studio (PID $($process.Id))."
     }
