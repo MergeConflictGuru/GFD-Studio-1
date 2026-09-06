@@ -207,6 +207,30 @@ namespace GFDLibrary.Tests
         }
 
         [TestMethod]
+        public void SplitAnimationComposerAddsComponentTracksWithoutReplacingBodyTracks()
+        {
+            var body = new Animation(ResourceVersion.Persona5Dancing);
+            body.Controllers.Add(CreateController("RootNode"));
+            body.Controllers.Add(CreateController("head"));
+
+            var face = new Animation(ResourceVersion.Persona5Dancing);
+            face.Controllers.Add(CreateController("RootNode"));
+            face.Controllers.Add(CreateController("head"));
+            face.Controllers.Add(CreateController("m_mouth"));
+            face.Controllers.Add(CreateController("m_mouth"));
+
+            var hair = new Animation(ResourceVersion.Persona5Dancing);
+            hair.Controllers.Add(CreateController("RootNode"));
+            hair.Controllers.Add(CreateController("L_hair_00"));
+
+            SplitCharacterAnimationComposer.AddComponentTracks(body, face, hair);
+
+            CollectionAssert.AreEqual(
+                new[] { "RootNode", "head", "m_mouth", "m_mouth", "L_hair_00" },
+                body.Controllers.Select(controller => controller.TargetName).ToArray());
+        }
+
+        [TestMethod]
         public void CrossGameBakePreservesBindPoseWithDifferentAxesAndParents()
         {
             var (source, target) = CreateDifferentSkeletons();
