@@ -1946,14 +1946,35 @@ namespace GFDStudio.GUI.Forms
                 return animation;
             }
 
+            var selectedHairPath = GetSelectedCharacterBrowserHairPath();
+            var selectedFacePath = GetSelectedCharacterBrowserFacePath();
+            var hasSplitComponents = false;
+            if (entry.Kind == CharacterAnimationListKind.Animation)
+            {
+                animation = ComposeCharacterBrowserAnimation(
+                    entry, animation, selectedFacePath, selectedHairPath, out hasSplitComponents);
+            }
+
             sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
-                entry.PackPath, sourceModelEntry, sourceModelPack);
+                entry.PackPath, selectedFacePath, selectedHairPath, sourceModelEntry, sourceModelPack);
 
             switch (entry.Kind)
             {
                 case CharacterAnimationListKind.Animation:
-                    animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false);
-                    retargetNote = "retargeted in preview";
+                    if (CanUseCharacterBrowserAnimationWithoutRetarget(
+                            entry.PackPath, sourceModelEntry, selectedFacePath, selectedHairPath))
+                    {
+                        retargetNote = hasSplitComponents
+                            ? "loaded with selected face/hair tracks"
+                            : "loaded without retargeting";
+                    }
+                    else
+                    {
+                        animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false);
+                        retargetNote = hasSplitComponents
+                            ? "retargeted in preview with selected face/hair tracks"
+                            : "retargeted in preview";
+                    }
                     break;
 
                 case CharacterAnimationListKind.BlendAnimation:
@@ -1970,8 +1991,119 @@ namespace GFDStudio.GUI.Forms
             return animation;
         }
 
+        private bool CanUseCharacterBrowserAnimationWithoutRetarget(
+            string gapPath,
+            CharacterModelEntry sourceBodyEntry,
+            string selectedFacePath,
+            string selectedHairPath)
+        {
+            if (!AreSamePath(sourceBodyEntry?.Path, mCharacterBrowserCurrentModelPath))
+                return false;
+
+            var selectedFace = FindCharacterBrowserAnimationSplitPart(
+                sourceBodyEntry.Path,
+                CharacterModelPart.Face,
+                ExtractCharacterId(sourceBodyEntry.Path),
+                null);
+            if (!AreSamePath(selectedFace?.Path, selectedFacePath))
+                return false;
+
+            var animationHairStem = GetCharacterBrowserHairModelStem(selectedHairPath) ??
+                                    GetCharacterBrowserAnimationHairStem(gapPath);
+            var selectedHair = string.IsNullOrWhiteSpace(animationHairStem)
+                ? null
+                : FindCharacterBrowserAnimationSplitPart(
+                    sourceBodyEntry.Path,
+                    CharacterModelPart.Hair,
+                    ExtractCharacterId(sourceBodyEntry.Path),
+                    animationHairStem);
+            return AreSamePath(selectedHair?.Path, selectedHairPath);
+        }
+
+        private static Animation ComposeCharacterBrowserAnimation(
+            CharacterAnimationEntry entry,
+            Animation selectedAnimation,
+            string selectedFacePath,
+            string selectedHairPath,
+            out bool hasSplitComponents)
+        {
+            hasSplitComponents = false;
+            if (selectedAnimation == null || !IsSplitDanceAnimationPath(entry.PackPath))
+                return selectedAnimation;
+
+            var basePath = GetCharacterBrowserAnimationBasePath(entry.PackPath);
+            if (string.IsNullOrWhiteSpace(basePath))
+                return selectedAnimation;
+
+            Animation bodyAnimation = selectedAnimation;
+            if (!AreSamePath(basePath, entry.PackPath))
+            {
+                try
+                {
+                    var basePack = Resource.Load<AnimationPack>(basePath);
+                    bodyAnimation = GetCharacterBrowserNormalAnimation(basePack, entry.Index);
+                }
+                catch (Exception exception)
+                {
+                    Logger.Debug($"CharacterBrowser: failed to load split body GAP {basePath}: {exception}");
+                    return selectedAnimation;
+                }
+            }
+
+            if (bodyAnimation == null)
+                return selectedAnimation;
+
+            var splitPaths = new List<string>();
+            if (!string.IsNullOrWhiteSpace(selectedFacePath))
+            {
+                splitPaths.Add(Path.Combine(
+                    Path.GetDirectoryName(basePath) ?? string.Empty,
+                    Path.GetFileNameWithoutExtension(basePath) + "_f.GAP"));
+            }
+
+            var hairStem = GetCharacterBrowserHairModelStem(selectedHairPath) ??
+                           GetCharacterBrowserAnimationHairStem(entry.PackPath);
+            if (!string.IsNullOrWhiteSpace(hairStem))
+            {
+                splitPaths.Add(Path.Combine(
+                    Path.GetDirectoryName(basePath) ?? string.Empty,
+                    Path.GetFileNameWithoutExtension(basePath) + "_" +
+                    hairStem.Substring(hairStem.LastIndexOf('_') + 1) + ".GAP"));
+            }
+
+            var components = new List<Animation>();
+            foreach (var splitPath in splitPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!File.Exists(splitPath) || AreSamePath(splitPath, basePath))
+                    continue;
+
+                try
+                {
+                    var splitPack = Resource.Load<AnimationPack>(splitPath);
+                    var splitAnimation = GetCharacterBrowserNormalAnimation(splitPack, entry.Index);
+                    if (splitAnimation != null)
+                        components.Add(splitAnimation);
+                }
+                catch (Exception exception)
+                {
+                    Logger.Debug($"CharacterBrowser: failed to load split component GAP {splitPath}: {exception}");
+                }
+            }
+
+            if (components.Count == 0)
+                return bodyAnimation;
+
+            hasSplitComponents = true;
+            return SplitCharacterAnimationComposer.AddComponentTracks(
+                bodyAnimation, components.ToArray());
+        }
+
         private ModelPack ComposeCharacterBrowserAnimationSourceModel(
-            string gapPath, CharacterModelEntry bodyEntry, ModelPack bodyPack)
+            string gapPath,
+            string selectedFacePath,
+            string selectedHairPath,
+            CharacterModelEntry bodyEntry,
+            ModelPack bodyPack)
         {
             if (!IsSplitDanceBodyPath(bodyEntry.Path))
                 return bodyPack;
@@ -1981,17 +2113,17 @@ namespace GFDStudio.GUI.Forms
                 return bodyPack;
 
             var parts = new List<CharacterModelEntry> { bodyEntry };
-            var stem = Path.GetFileNameWithoutExtension(gapPath) ?? string.Empty;
-            var hairMatch = Regex.Match(stem, @"(?:^|_)h(?<id>\d+)$", RegexOptions.IgnoreCase);
-            if (hairMatch.Success)
+            var hairStem = GetCharacterBrowserHairModelStem(selectedHairPath) ??
+                           GetCharacterBrowserAnimationHairStem(gapPath);
+            if (!string.IsNullOrWhiteSpace(hairStem))
             {
-                var hairName = "pc" + characterId + "_h" + hairMatch.Groups["id"].Value;
                 var hairEntry = FindCharacterBrowserAnimationSplitPart(
-                    bodyEntry.Path, CharacterModelPart.Hair, characterId, hairName);
+                    bodyEntry.Path, CharacterModelPart.Hair, characterId, hairStem);
                 if (hairEntry != null)
                     parts.Add(hairEntry);
             }
-            else if (Regex.IsMatch(stem, @"(?:^|_)f$", RegexOptions.IgnoreCase))
+
+            if (!string.IsNullOrWhiteSpace(selectedFacePath))
             {
                 var faceEntry = FindCharacterBrowserAnimationSplitPart(
                     bodyEntry.Path, CharacterModelPart.Face, characterId, null);
@@ -2000,6 +2132,63 @@ namespace GFDStudio.GUI.Forms
             }
 
             return parts.Count == 1 ? bodyPack : ComposeCharacterModelPack(parts);
+        }
+
+        private string GetSelectedCharacterBrowserHairPath()
+        {
+            return (mCharacterHairListBox?.SelectedItem as CharacterModelEntry)?.Path;
+        }
+
+        private string GetSelectedCharacterBrowserFacePath()
+        {
+            return (mCharacterFaceListBox?.SelectedItem as CharacterModelEntry)?.Path;
+        }
+
+        private static Animation GetCharacterBrowserNormalAnimation(AnimationPack pack, int index)
+        {
+            if (pack?.Animations == null || pack.Animations.Count == 0)
+                return null;
+
+            if (index >= 0 && index < pack.Animations.Count)
+                return pack.Animations[index];
+
+            return pack.Animations.Count == 1 ? pack.Animations[0] : null;
+        }
+
+        private static string GetCharacterBrowserAnimationBasePath(string path)
+        {
+            var directory = Path.GetDirectoryName(path);
+            var stem = Path.GetFileNameWithoutExtension(path);
+            if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(stem))
+                return null;
+
+            var baseStem = Regex.Replace(
+                stem,
+                @"_(?:f|h\d+)$",
+                string.Empty,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            return Path.Combine(directory, baseStem + ".GAP");
+        }
+
+        private static string GetCharacterBrowserAnimationHairStem(string path)
+        {
+            var stem = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+            var match = Regex.Match(stem, @"_(?<tag>h\d+)$", RegexOptions.IgnoreCase);
+            if (!match.Success)
+                return null;
+
+            var characterId = ExtractCharacterId(path);
+            return string.IsNullOrWhiteSpace(characterId)
+                ? null
+                : "pc" + characterId + "_" + match.Groups["tag"].Value;
+        }
+
+        private static string GetCharacterBrowserHairModelStem(string path)
+        {
+            var stem = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+            return Regex.IsMatch(stem, @"^pc\d+_h\d+$", RegexOptions.IgnoreCase)
+                ? stem
+                : null;
         }
 
         private CharacterModelEntry FindCharacterBrowserAnimationSplitPart(
@@ -2039,6 +2228,14 @@ namespace GFDStudio.GUI.Forms
             return Regex.IsMatch(
                 Path.GetFileNameWithoutExtension(path) ?? string.Empty,
                 @"^pc\d+_\d+$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        private static bool IsSplitDanceAnimationPath(string path)
+        {
+            return Regex.IsMatch(
+                Path.GetFileNameWithoutExtension(path) ?? string.Empty,
+                @"^pc\d+_\d+_p(?:_(?:f|h\d+))?$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
