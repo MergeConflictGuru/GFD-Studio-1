@@ -1849,14 +1849,18 @@ namespace GFDStudio.GUI.Forms
 
         private void SetCharacterBrowserAnimationAutoLoaded(
             CharacterAnimationEntry entry,
-            bool isAutoLoaded)
+            IReadOnlyCollection<string> autoLoadedPackPaths)
         {
+            var paths = autoLoadedPackPaths == null
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(autoLoadedPackPaths, StringComparer.OrdinalIgnoreCase);
             foreach (var candidate in mCharacterAnimations)
             {
-                candidate.IsAutoLoaded = isAutoLoaded && entry != null &&
+                candidate.IsAutoLoaded = entry != null &&
+                    !AreSamePath(candidate.PackPath, entry.PackPath) &&
                     candidate.Kind == entry.Kind &&
                     candidate.Index == entry.Index &&
-                    AreSamePath(candidate.PackPath, entry.PackPath);
+                    paths.Any(path => AreSamePath(path, candidate.PackPath));
             }
 
             mCharacterAnimationListBox?.Refresh();
@@ -1980,7 +1984,7 @@ namespace GFDStudio.GUI.Forms
         {
             retargetNote = null;
             if (entry?.Kind == CharacterAnimationListKind.Animation)
-                SetCharacterBrowserAnimationAutoLoaded(entry, false);
+                SetCharacterBrowserAnimationAutoLoaded(entry, null);
 
             // Always load a fresh pack because retargeting mutates the animation object in memory.
             // This keeps the cached/showroom source data untouched when switching target models.
@@ -2013,9 +2017,11 @@ namespace GFDStudio.GUI.Forms
             var hasSplitComponents = false;
             if (entry.Kind == CharacterAnimationListKind.Animation)
             {
+                IReadOnlyCollection<string> autoLoadedPackPaths;
                 animation = ComposeCharacterBrowserAnimation(
-                    entry, animation, selectedFacePath, selectedHairPath, out hasSplitComponents);
-                SetCharacterBrowserAnimationAutoLoaded(entry, hasSplitComponents);
+                    entry, animation, selectedFacePath, selectedHairPath,
+                    out hasSplitComponents, out autoLoadedPackPaths);
+                SetCharacterBrowserAnimationAutoLoaded(entry, autoLoadedPackPaths);
             }
 
             sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
@@ -2088,9 +2094,11 @@ namespace GFDStudio.GUI.Forms
             Animation selectedAnimation,
             string selectedFacePath,
             string selectedHairPath,
-            out bool hasSplitComponents)
+            out bool hasSplitComponents,
+            out IReadOnlyCollection<string> autoLoadedPackPaths)
         {
             hasSplitComponents = false;
+            autoLoadedPackPaths = Array.Empty<string>();
             if (selectedAnimation == null || !IsSplitDanceAnimationPath(entry.PackPath))
                 return selectedAnimation;
 
@@ -2098,6 +2106,7 @@ namespace GFDStudio.GUI.Forms
             if (string.IsNullOrWhiteSpace(basePath))
                 return selectedAnimation;
 
+            var loadedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             Animation bodyAnimation = selectedAnimation;
             if (!AreSamePath(basePath, entry.PackPath))
             {
@@ -2105,6 +2114,8 @@ namespace GFDStudio.GUI.Forms
                 {
                     var basePack = Resource.Load<AnimationPack>(basePath);
                     bodyAnimation = GetCharacterBrowserNormalAnimation(basePack, entry.Index);
+                    if (bodyAnimation != null)
+                        loadedPaths.Add(basePath);
                 }
                 catch (Exception exception)
                 {
@@ -2145,7 +2156,10 @@ namespace GFDStudio.GUI.Forms
                     var splitPack = Resource.Load<AnimationPack>(splitPath);
                     var splitAnimation = GetCharacterBrowserNormalAnimation(splitPack, entry.Index);
                     if (splitAnimation != null)
+                    {
                         components.Add(splitAnimation);
+                        loadedPaths.Add(splitPath);
+                    }
                 }
                 catch (Exception exception)
                 {
@@ -2154,9 +2168,13 @@ namespace GFDStudio.GUI.Forms
             }
 
             if (components.Count == 0)
+            {
+                autoLoadedPackPaths = loadedPaths.ToArray();
                 return bodyAnimation;
+            }
 
             hasSplitComponents = true;
+            autoLoadedPackPaths = loadedPaths.ToArray();
             return SplitCharacterAnimationComposer.AddComponentTracks(
                 bodyAnimation, components.ToArray());
         }
