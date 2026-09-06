@@ -15,6 +15,8 @@ var characterId = otherCharacter ? "0005" : "0004";
 var danceId = otherCharacter ? "205" : "204";
 var source = Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\c{characterId}_107_00.GMD");
 var target = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\pc{danceId}_26.GMD");
+var hairId = args.Contains("--h26") ? "h26" : "h00";
+var nativeAnimationId = otherCharacter ? "001" : "018";
 var animationPath = otherCharacter
     ? $@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\battle\ab{characterId}_051.GAP"
     : @"Q:\_coding\DaYoBuO\modssrc\dayobuo\repacked_0004_selected.GAP";
@@ -23,7 +25,7 @@ Console.SetOut(stdout);
 if (args.Contains("--native")) {
     var nativeRoot = $@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}";
     foreach (var suffix in new[] { "", "_26", "_f", "_h26" }) {
-        var native = Resource.Load<AnimationPack>(Path.Combine(nativeRoot, "pc" + danceId + "_001_p" + suffix + ".GAP"));
+        var native = Resource.Load<AnimationPack>(Path.Combine(nativeRoot, "pc" + danceId + "_" + nativeAnimationId + "_p" + suffix + ".GAP"));
         Console.WriteLine($"NATIVE {suffix}: {native.Animations.Count} clips");
         var anim = native.Animations[0];
         Console.WriteLine(string.Join(", ", anim.Controllers.Select(c => c.TargetName)));
@@ -57,7 +59,7 @@ if (args.Contains("--native")) {
     return;
 }
 if (args.Contains("--parts")) {
-    foreach (var partPath in new[] { $@"face\pc{danceId}_f1.GMD", $@"hair\pc{danceId}_h26.GMD" }) {
+    foreach (var partPath in new[] { $@"face\pc{danceId}_f1.GMD", $@"hair\pc{danceId}_{hairId}.GMD" }) {
         var part = Resource.Load<ModelPack>(Path.Combine(@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5", partPath));
         Console.WriteLine(partPath);
         foreach (var n in part.Model.Nodes) Console.WriteLine($"{n.Name} <- {n.Parent?.Name} P={n.Translation} R={n.Rotation}");
@@ -82,11 +84,11 @@ Directory.CreateDirectory(outputDirectory);
 if (args.Contains("--assembled")) {
     Console.SetOut(TextWriter.Null);
     var face = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\face\pc{danceId}_f1.GMD");
-    var hair = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\hair\pc{danceId}_h26.GMD");
-    var native = Resource.Load<AnimationPack>($@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}\pc{danceId}_001_p.GAP");
+    var hair = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\hair\pc{danceId}_{hairId}.GMD");
+    var native = Resource.Load<AnimationPack>($@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}\pc{danceId}_{nativeAnimationId}_p.GAP");
     var combined = SplitCharacterRetargeter.CreatePreview(source.Model, pack, target, face, hair, native.Animations[0]);
     combined.Save(Path.Combine(outputDirectory, $"pc{danceId}_26_preview.GMD"));
-    foreach (var (part, suffix) in new[] {(target.Model, ""), (face.Model, "_f"), (hair.Model, "_h26")}) {
+    foreach (var (part, suffix) in new[] {(target.Model, ""), (face.Model, "_f"), (hair.Model, "_" + hairId)}) {
         var standalone = SplitCharacterRetargeter.ForStandalonePart(combined, part);
         var standalonePath = Path.Combine(outputDirectory, "pc" + danceId + "_port_p" + suffix + ".GAP");
         standalone.Save(standalonePath);
@@ -94,6 +96,35 @@ if (args.Contains("--assembled")) {
         Console.SetOut(stdout);
         Console.WriteLine($"Standalone {suffix}: {standaloneReadback.Animations.Count} clips, " +
             $"first controllers={standaloneReadback.Animations.FirstOrDefault()?.Controllers.Count ?? 0}");
+        if (suffix == "_f" || suffix == "_" + hairId)
+        {
+            var partAnimation = standaloneReadback.Animations.FirstOrDefault(a => a.Duration > 0);
+            if (partAnimation != null)
+            {
+                var partTime = partAnimation.Duration / 2;
+                var partPose = AnimationPoseEvaluator.Evaluate(
+                    suffix == "_f" ? face.Model : hair.Model, partAnimation, partTime);
+                var partModel = suffix == "_f" ? face.Model : hair.Model;
+                var partLabel = suffix == "_f" ? "face" : $"{hairId} hair";
+                var partFile = suffix == "_f" ? "standalone-face-midpoint.png" : "standalone-hair-midpoint.png";
+                PoseRender.Draw(partModel, partPose, partModel, partPose,
+                    Path.Combine(outputDirectory, partFile),
+                    $"Standalone {partLabel}, clip midpoint {partTime:F2}s");
+                Console.WriteLine($"Standalone {partLabel} rendered from reloaded GAP");
+                if (suffix == "_f")
+                {
+                    var faceHead = face.Model.Nodes.First(n => n.Name == "head");
+                    foreach (var (check, index) in standaloneReadback.Animations.Select((a, i) => (a, i)))
+                    {
+                        var headPose = AnimationPoseEvaluator.Evaluate(face.Model, check, check.Duration / 2f);
+                        var headParent = faceHead.Parent == null ? Matrix4x4.Identity : headPose[faceHead.Parent];
+                        Matrix4x4.Invert(headParent, out var headParentInverse);
+                        Matrix4x4.Decompose(headPose[faceHead] * headParentInverse, out _, out var headRotation, out var headPosition);
+                        Console.WriteLine($"Face clip {index}: head local P={headPosition} R={headRotation}");
+                    }
+                }
+            }
+        }
         Console.SetOut(TextWriter.Null);
     }
     target = Resource.Load<ModelPack>(Path.Combine(outputDirectory, $"pc{danceId}_26_preview.GMD"));

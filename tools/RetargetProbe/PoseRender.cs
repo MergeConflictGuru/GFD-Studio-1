@@ -12,12 +12,25 @@ static class PoseRender
         g.Clear(Color.FromArgb(38, 42, 46));
         using var font = new Font("Arial", 14);
         g.DrawString(caption, font, Brushes.White, 20, 15);
-        DrawModel(g, source, sourcePose, 300);
-        DrawModel(g, target, targetPose, 900);
+        var sourceFocus = GetFocusPosition(source, sourcePose);
+        var targetFocus = GetFocusPosition(target, targetPose);
+        var focus = (sourceFocus + targetFocus) * .5f - new Vector3(0, 95, 0);
+        DrawModel(g, source, sourcePose, 300, focus);
+        DrawModel(g, target, targetPose, 900, focus);
         bitmap.Save(path, ImageFormat.Png);
     }
 
-    private static void DrawModel(Graphics g, Model model, Dictionary<Node, Matrix4x4> pose, float center)
+    private static Vector3 GetFocusPosition(Model model, Dictionary<Node, Matrix4x4> pose)
+    {
+        var nodes = model.Nodes.ToArray();
+        var focusNode = nodes.FirstOrDefault(n => n.Name == "Bip01") ??
+                        nodes.FirstOrDefault(n => n.Name == "root") ??
+                        nodes.FirstOrDefault(n => n.Name == "head" || n.Name == "neck") ??
+                        nodes[0];
+        return pose[focusNode].Translation;
+    }
+
+    private static void DrawModel(Graphics g, Model model, Dictionary<Node, Matrix4x4> pose, float center, Vector3 focus)
     {
         var nodes = model.Nodes.ToArray();
         var triangles = new List<(Vector3 a, Vector3 b, Vector3 c, Color color)>();
@@ -41,10 +54,6 @@ static class PoseRender
                 triangles.Add((a,b,c,Color.FromArgb(Math.Clamp(shade,0,255),Math.Clamp(shade,0,255),Math.Clamp(shade,0,255))));
             }
         }
-        // Follow the character, so root-motion clips remain visible. This is a
-        // pose comparison, not an assertion that root trajectories coincide.
-        var focusNode = nodes.FirstOrDefault(n => n.Name == "Bip01") ?? nodes.First(n => n.Name == "root");
-        var focus = pose[focusNode].Translation - new Vector3(0, 95, 0);
         PointF Project(Vector3 world) {
             var p = world - focus;
             return new(center + (p.X * .94f - p.Z * .34f) * 2.9f, 630 - (p.Y + p.X * .07f + p.Z * .18f) * 2.9f);
