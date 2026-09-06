@@ -111,13 +111,15 @@ function Update-BinaryDirectory {
         [string]$DestinationDirectory
     )
 
-    $lockedFiles = @('GFDStudio.exe', 'GFDStudio.dll') |
-        ForEach-Object {
-            $destinationPath = Join-Path $DestinationDirectory $_
-            if (-not (Test-FileAvailable -Path $destinationPath)) {
-                $destinationPath
+    $lockedFiles = @(
+        @('GFDStudio.exe', 'GFDStudio.dll') |
+            ForEach-Object {
+                $destinationPath = Join-Path $DestinationDirectory $_
+                if (-not (Test-FileAvailable -Path $destinationPath)) {
+                    $destinationPath
+                }
             }
-        }
+    )
 
     if ($lockedFiles.Count -gt 0) {
         $lockedNames = $lockedFiles |
