@@ -69,6 +69,7 @@ namespace GFDStudio.GUI.Controls
         // Animation
         private Stopwatch mTimeCounter;
         private double mLastTime;
+        private Timer mUpdateTimer;
         private AnimationPlaybackState mAnimationPlayback = AnimationPlaybackState.Stopped;
         private double mAnimationTime;
         private float mGuideArrowOpacity;
@@ -550,7 +551,8 @@ namespace GFDStudio.GUI.Controls
                 mShaderRegistry.mDefaultShader?.Dispose();
                 mShaderRegistry.mGuideArrowShader?.Dispose();
 
-                Application.Idle -= HandleApplicationIdle;
+                mUpdateTimer?.Stop();
+                mUpdateTimer?.Dispose();
 
                 if ( mIsModelLoaded )
                     UnloadModel();
@@ -568,18 +570,16 @@ namespace GFDStudio.GUI.Controls
             mTimeCounter = new Stopwatch();
             mTimeCounter.Start();
             mLastTime = mTimeCounter.Elapsed.TotalSeconds;
-            Application.Idle += HandleApplicationIdle;
-        }
-
-        private void HandleApplicationIdle( object sender, EventArgs e )
-        {
-            // Rendering directly from the idle loop follows the display refresh rate
-            // through the context swap interval without a separate timer.
-            while ( mCanRender && mCamera != null &&
-                    AnimationPlayback == AnimationPlaybackState.Playing && !IsDisposed )
+            mUpdateTimer = new Timer
             {
-                RenderFrame();
-            }
+                Interval = 16
+            };
+            mUpdateTimer.Tick += ( sender, args ) =>
+            {
+                if ( mCanRender && AnimationPlayback == AnimationPlaybackState.Playing && !IsDisposed )
+                    Invalidate();
+            };
+            mUpdateTimer.Start();
         }
 
         private void ExecuteTimedCallback( Action action )
@@ -754,53 +754,9 @@ namespace GFDStudio.GUI.Controls
         private void GetGuideArrowTargetBounds( out Vector3 center, out Vector3 extents )
         {
             var model = mModel?.ModelPack?.Model;
-            var minimum = new Vector3( float.PositiveInfinity );
-            var maximum = new Vector3( float.NegativeInfinity );
-            var hasVertices = false;
-
-            // GLModel.Draw updates GLNode.WorldTransform and rebuilds skinned
-            // GLMeshes before this method is called. Read those current vertices
-            // instead of using the bind-pose Model.BoundingBox.
-            if ( mModel != null )
-            {
-                foreach ( var node in mModel.Nodes )
-                {
-                    if ( !node.IsVisible )
-                        continue;
-
-                    foreach ( var mesh in node.Meshes )
-                    {
-                        if ( !mesh.IsVisible || mesh.VertexPositions == null )
-                            continue;
-
-                        foreach ( var vertex in mesh.VertexPositions )
-                        {
-                            var worldVertex = System.Numerics.Vector3.Transform( vertex, node.WorldTransform );
-                            minimum.X = MathF.Min( minimum.X, worldVertex.X );
-                            minimum.Y = MathF.Min( minimum.Y, worldVertex.Y );
-                            minimum.Z = MathF.Min( minimum.Z, worldVertex.Z );
-                            maximum.X = MathF.Max( maximum.X, worldVertex.X );
-                            maximum.Y = MathF.Max( maximum.Y, worldVertex.Y );
-                            maximum.Z = MathF.Max( maximum.Z, worldVertex.Z );
-                            hasVertices = true;
-                        }
-                    }
-                }
-            }
-
-            if ( hasVertices )
-            {
-                center = new Vector3(
-                    ( minimum.X + maximum.X ) * 0.5f,
-                    ( minimum.Y + maximum.Y ) * 0.5f,
-                    ( minimum.Z + maximum.Z ) * 0.5f );
-                extents = new Vector3(
-                    MathF.Max( 0.001f, ( maximum.X - minimum.X ) * 0.5f ),
-                    MathF.Max( 0.001f, ( maximum.Y - minimum.Y ) * 0.5f ),
-                    MathF.Max( 0.001f, ( maximum.Z - minimum.Z ) * 0.5f ) );
-                return;
-            }
-
+            // Keep this path constant-time. It is called for every rendered frame
+            // while animation playback is active; walking every animated vertex
+            // here starves the WinForms message loop on large character models.
             if ( model?.BoundingBox is { } bounds )
             {
                 center = new Vector3(
@@ -832,78 +788,29 @@ namespace GFDStudio.GUI.Controls
             var minimumY = float.PositiveInfinity;
             var maximumY = float.NegativeInfinity;
             var hasFrontPoint = false;
-            var hasProjectedPoint = false;
-
-            // Test the actual animated vertices, not the bind-pose box or an
-            // axis-aligned approximation. This prevents a loose box around a
-            // moving limb from hiding the marker while the visible geometry is
-            // already outside the viewport.
-            if ( mModel != null )
+            for ( var x = -1; x <= 1; x += 2 )
+            for ( var y = -1; y <= 1; y += 2 )
+            for ( var z = -1; z <= 1; z += 2 )
             {
-                foreach ( var node in mModel.Nodes )
-                {
-                    if ( !node.IsVisible )
-                        continue;
+                var point = center + new Vector3( extents.X * x, extents.Y * y, extents.Z * z );
+                var viewPosition = Vector4.TransformRow( new Vector4( point, 1.0f ), mCamera.View );
+                if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
+                    continue;
 
-                    foreach ( var mesh in node.Meshes )
-                    {
-                        if ( !mesh.IsVisible || mesh.VertexPositions == null )
-                            continue;
+                hasFrontPoint = true;
+                var clipPosition = Vector4.TransformRow( viewPosition, mCamera.Projection );
+                if ( clipPosition.W <= 0.0001f )
+                    continue;
 
-                        foreach ( var vertex in mesh.VertexPositions )
-                        {
-                            var point = System.Numerics.Vector3.Transform( vertex, node.WorldTransform );
-                            var viewPosition = Vector4.TransformRow( new Vector4( point.X, point.Y, point.Z, 1.0f ), mCamera.View );
-                            if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
-                                continue;
-
-                            hasFrontPoint = true;
-                            var clipPosition = Vector4.TransformRow( viewPosition, mCamera.Projection );
-                            if ( clipPosition.W <= 0.0001f )
-                                continue;
-
-                            var normalizedX = clipPosition.X / clipPosition.W;
-                            var normalizedY = clipPosition.Y / clipPosition.W;
-                            minimumX = MathF.Min( minimumX, normalizedX );
-                            maximumX = MathF.Max( maximumX, normalizedX );
-                            minimumY = MathF.Min( minimumY, normalizedY );
-                            maximumY = MathF.Max( maximumY, normalizedY );
-                            hasProjectedPoint = true;
-                        }
-                    }
-                }
+                var normalizedX = clipPosition.X / clipPosition.W;
+                var normalizedY = clipPosition.Y / clipPosition.W;
+                minimumX = MathF.Min( minimumX, normalizedX );
+                maximumX = MathF.Max( maximumX, normalizedX );
+                minimumY = MathF.Min( minimumY, normalizedY );
+                maximumY = MathF.Max( maximumY, normalizedY );
             }
 
-            // A primitive or an unusual model may not expose CPU vertices. Keep
-            // a conservative fallback for that case rather than disabling the
-            // locator completely.
-            if ( !hasProjectedPoint )
-            {
-                for ( var x = -1; x <= 1; x += 2 )
-                for ( var y = -1; y <= 1; y += 2 )
-                for ( var z = -1; z <= 1; z += 2 )
-                {
-                    var point = center + new Vector3( extents.X * x, extents.Y * y, extents.Z * z );
-                    var viewPosition = Vector4.TransformRow( new Vector4( point, 1.0f ), mCamera.View );
-                    if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
-                        continue;
-
-                    hasFrontPoint = true;
-                    var clipPosition = Vector4.TransformRow( viewPosition, mCamera.Projection );
-                    if ( clipPosition.W <= 0.0001f )
-                        continue;
-
-                    var normalizedX = clipPosition.X / clipPosition.W;
-                    var normalizedY = clipPosition.Y / clipPosition.W;
-                    minimumX = MathF.Min( minimumX, normalizedX );
-                    maximumX = MathF.Max( maximumX, normalizedX );
-                    minimumY = MathF.Min( minimumY, normalizedY );
-                    maximumY = MathF.Max( maximumY, normalizedY );
-                    hasProjectedPoint = true;
-                }
-            }
-
-            if ( !hasFrontPoint || !hasProjectedPoint )
+            if ( !hasFrontPoint )
                 return false;
 
             // The projected AABB is intentionally conservative: if any portion of
