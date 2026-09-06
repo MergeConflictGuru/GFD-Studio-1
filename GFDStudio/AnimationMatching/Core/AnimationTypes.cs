@@ -64,6 +64,16 @@ public interface IAnimationClip
     void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination);
 }
 
+/// <summary>
+/// Optional lifecycle hook for clips backed by large decoded resources. Index construction calls
+/// this after metadata inspection and after each clip's sampling batch so adapters can discard
+/// decoded GAP/retargeted animation data while keeping cheap metadata resident.
+/// </summary>
+public interface IAnimationClipResourceOwner
+{
+    void ReleaseResources();
+}
+
 public sealed class AnimationCorpus
 {
     public AnimationCorpus(IReadOnlyList<IAnimationClip> clips) => Clips = clips;

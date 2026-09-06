@@ -91,18 +91,31 @@ public sealed class AnimationSearchDatabase
             if (featureBones[i].Length != commonBoneCount)
                 featureBones[i] = featureBones[i][..commonBoneCount];
 
-        // FrameCount can be a lazy GAP load in the GFD adapter. Warm those clips concurrently instead
-        // of serially opening thousands of packs before descriptor extraction can even begin.
+        // FrameCount may require decoding/retargeting a GAP. Read it concurrently, cache the cheap
+        // integer in the adapter, then immediately release the decoded animation. Previously every
+        // clip's Lazy<Animation> remained live here, so a 20k-animation corpus stayed resident before
+        // descriptor extraction had even begun.
         var frameCounts = new int[corpus.Clips.Count];
         Parallel.For(0, corpus.Clips.Count, new ParallelOptions { CancellationToken = cancellationToken }, clipIndex =>
         {
-            frameCounts[clipIndex] = corpus.Clips[clipIndex].FrameCount;
+            var clip = corpus.Clips[clipIndex];
+            try
+            {
+                frameCounts[clipIndex] = clip.FrameCount;
+            }
+            finally
+            {
+                if (clip is IAnimationClipResourceOwner resourceOwner)
+                    resourceOwner.ReleaseResources();
+            }
         });
 
         var dimensions = extractor.GetDescriptorLength(commonBoneCount);
         var addresses = new List<FrameAddress>();
+        var clipSampleStarts = new int[corpus.Clips.Count + 1];
         for (var clipIndex = 0; clipIndex < corpus.Clips.Count; clipIndex++)
         {
+            clipSampleStarts[clipIndex] = addresses.Count;
             var clip = corpus.Clips[clipIndex];
             var minContinuationFrames = Math.Max(1, (int)MathF.Ceiling(options.MinimumContinuationSeconds * clip.FramesPerSecond));
             if (frameCounts[clipIndex] <= minContinuationFrames) continue;
@@ -110,19 +123,45 @@ public sealed class AnimationSearchDatabase
             for (var frame = 0; frame <= last; frame += options.IndexStride)
                 addresses.Add(new FrameAddress(clipIndex, frame));
         }
+        clipSampleStarts[corpus.Clips.Count] = addresses.Count;
 
         var addressArray = addresses.ToArray();
         if (addressArray.Length == 0)
             throw new InvalidOperationException("No animation has enough frames to provide a searchable continuation.");
+
         var packed = new float[addressArray.Length * dimensions];
         var completed = 0;
-        Parallel.For(0, addressArray.Length, new ParallelOptions { CancellationToken = cancellationToken }, sampleIndex =>
+
+        // Process all frames of one animation together. That keeps at most roughly one decoded GAP
+        // per worker alive, instead of scheduling individual frames from thousands of clips and
+        // permanently retaining every Lazy<Animation>. The clip is released as soon as its slice is done.
+        Parallel.For(0, corpus.Clips.Count, new ParallelOptions { CancellationToken = cancellationToken }, clipIndex =>
         {
-            var address = addressArray[sampleIndex];
-            var clip = corpus.Clips[address.ClipIndex];
-            extractor.Extract(clip, address.FrameIndex, featureBones[address.ClipIndex], packed.AsSpan(sampleIndex * dimensions, dimensions));
-            var now = Interlocked.Increment(ref completed);
-            if ((now & 127) == 0 || now == addressArray.Length) progress?.Report((now, addressArray.Length));
+            var clip = corpus.Clips[clipIndex];
+            var firstSample = clipSampleStarts[clipIndex];
+            var lastSampleExclusive = clipSampleStarts[clipIndex + 1];
+            try
+            {
+                for (var sampleIndex = firstSample; sampleIndex < lastSampleExclusive; sampleIndex++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var address = addressArray[sampleIndex];
+                    extractor.Extract(
+                        clip,
+                        address.FrameIndex,
+                        featureBones[clipIndex],
+                        packed.AsSpan(sampleIndex * dimensions, dimensions));
+
+                    var now = Interlocked.Increment(ref completed);
+                    if ((now & 127) == 0 || now == addressArray.Length)
+                        progress?.Report((now, addressArray.Length));
+                }
+            }
+            finally
+            {
+                if (clip is IAnimationClipResourceOwner resourceOwner)
+                    resourceOwner.ReleaseResources();
+            }
         });
 
         var mean = new float[dimensions];
