@@ -247,6 +247,8 @@ namespace GFDStudio.GUI.Forms
             mCharacterHairListBox.SelectedIndexChanged += CharacterModelListBox_SelectedIndexChanged;
             mCharacterAnimationListBox.SelectedIndexChanged += CharacterAnimationListBox_SelectedIndexChanged;
             mCharacterBlendAnimationListBox.SelectedIndexChanged += CharacterBlendAnimationListBox_SelectedIndexChanged;
+            mCharacterAnimationListBox.DrawMode = DrawMode.OwnerDrawFixed;
+            mCharacterAnimationListBox.DrawItem += CharacterAnimationListBox_DrawItem;
             mCharacterAnimationListBox.SelectionMode = SelectionMode.MultiExtended;
             // A blend slot is applied as one overlay at a time. Normal animations
             // remain multi-selectable for repacking.
@@ -1854,16 +1856,23 @@ namespace GFDStudio.GUI.Forms
             var paths = autoLoadedPackPaths == null
                 ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 : new HashSet<string>(autoLoadedPackPaths, StringComparer.OrdinalIgnoreCase);
+            var changed = false;
             foreach (var candidate in mCharacterAnimations)
             {
-                candidate.IsAutoLoaded = entry != null &&
+                var isAutoLoaded = entry != null &&
                     !AreSamePath(candidate.PackPath, entry.PackPath) &&
                     candidate.Kind == entry.Kind &&
                     candidate.Index == entry.Index &&
                     paths.Any(path => AreSamePath(path, candidate.PackPath));
+                if (candidate.IsAutoLoaded != isAutoLoaded)
+                {
+                    candidate.IsAutoLoaded = isAutoLoaded;
+                    changed = true;
+                }
             }
 
-            RefreshCharacterBrowserAnimationItemText();
+            if (changed)
+                RefreshCharacterBrowserAnimationItemText();
         }
 
         private void RefreshCharacterBrowserAnimationItemText()
@@ -1871,40 +1880,32 @@ namespace GFDStudio.GUI.Forms
             if (mCharacterAnimationListBox == null || mCharacterAnimationListBox.IsDisposed)
                 return;
 
-            var selectedEntries = mCharacterAnimationListBox.SelectedItems
-                .Cast<object>()
-                .OfType<CharacterAnimationEntry>()
-                .ToHashSet();
-            var items = mCharacterAnimationListBox.Items.Cast<object>().ToArray();
-            var topIndex = mCharacterAnimationListBox.TopIndex;
-            var wasRestoringSelection = mCharacterBrowserRestoringSelection;
-            mCharacterBrowserRestoringSelection = true;
-            mCharacterAnimationListBox.BeginUpdate();
-            try
-            {
-                // ListBox caches the string produced by ToString() when an item is
-                // inserted. Reinsert the same objects so the marker is visible
-                // immediately without changing the sorted/filter state.
-                mCharacterAnimationListBox.Items.Clear();
-                foreach (var item in items)
-                    mCharacterAnimationListBox.Items.Add(item);
+            // Owner-draw reads ToString() during painting, so marker changes are
+            // visible immediately without mutating the ListBox item collection.
+            mCharacterAnimationListBox.Refresh();
+        }
 
-                for (var index = 0; index < mCharacterAnimationListBox.Items.Count; index++)
-                {
-                    if (selectedEntries.Contains(
-                        mCharacterAnimationListBox.Items[index] as CharacterAnimationEntry))
-                        mCharacterAnimationListBox.SetSelected(index, true);
-                }
+        private static void CharacterAnimationListBox_DrawItem(
+            object sender,
+            DrawItemEventArgs e)
+        {
+            if (e.Index < 0 || sender is not ListBox listBox ||
+                e.Index >= listBox.Items.Count)
+                return;
 
-                if (mCharacterAnimationListBox.Items.Count > 0)
-                    mCharacterAnimationListBox.TopIndex = Math.Min(
-                        Math.Max(topIndex, 0), mCharacterAnimationListBox.Items.Count - 1);
-            }
-            finally
-            {
-                mCharacterAnimationListBox.EndUpdate();
-                mCharacterBrowserRestoringSelection = wasRestoringSelection;
-            }
+            e.DrawBackground();
+            var text = listBox.Items[e.Index]?.ToString() ?? string.Empty;
+            var color = (e.State & DrawItemState.Selected) != 0
+                ? SystemColors.HighlightText
+                : listBox.ForeColor;
+            TextRenderer.DrawText(
+                e.Graphics,
+                text,
+                listBox.Font,
+                e.Bounds,
+                color,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            e.DrawFocusRectangle();
         }
 
         private void RepackCharacterAnimations()
