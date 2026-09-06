@@ -44,13 +44,18 @@ namespace GFDLibrary.Animations
 
         /// <summary>
         /// Bakes a combined character's world motion into a standalone part's
-        /// hierarchy and IDs. In particular, face head and hair neck need world
-        /// placement, not the body's local neck/head keys. These standalone packs
-        /// must not be layered back onto the combined model.
+        /// hierarchy and IDs. Face head keys use the body head's local transform
+        /// when the face hierarchy differs, matching native Dance _f packs.
+        /// These standalone packs must not be layered back onto the combined model.
         /// </summary>
         public static AnimationPack ForStandalonePart(ModelPack combined, Model part)
         {
-            var result = new AnimationPack(part.Version);
+            var result = new AnimationPack(part.Version) {
+                // Native Dance component GAPs carry the same pack flags as the
+                // body pack. In particular, Bit3 is present on the _f/_h
+                // files even though they do not contain blend animations.
+                Flags = combined.AnimationPack?.Flags ?? AnimationPackFlags.Bit3
+            };
             var combinedNodes = combined.Model.Nodes.ToDictionary(n => n.Name);
             var nodes = part.Nodes.ToArray();
             var bind = AnimationPoseEvaluator.Evaluate(combined.Model, null, 0);
@@ -73,14 +78,29 @@ namespace GFDLibrary.Animations
                         var node = nodes[i];
                         var parent = node.Parent == null ? Matrix4x4.Identity : partPose[node.Parent];
                         var local = node.LocalTransform;
+                        var outputLocal = local;
                         if (combinedNodes.TryGetValue(node.Name, out var shared))
                         {
                             Matrix4x4.Invert(bind[shared], out var inverseBind);
                             Matrix4x4.Invert(parent, out var inverseParent);
                             local = partBind[node] * inverseBind * pose[shared] * inverseParent;
+
+                            // The face GMD has head directly below RootNode,
+                            // while the combined Dance skeleton has head below
+                            // neck. Dance _f animations use the latter's local
+                            // head transform (relative to the body), not the
+                            // face file's absolute world transform.
+                            outputLocal = local;
+                            if (node.Name.Equals("head", StringComparison.OrdinalIgnoreCase) &&
+                                node.Parent != null && shared.Parent != null &&
+                                !node.Parent.Name.Equals(shared.Parent.Name, StringComparison.OrdinalIgnoreCase))
+                            {
+                                Matrix4x4.Invert(pose[shared.Parent], out var inverseSharedParent);
+                                outputLocal = pose[shared] * inverseSharedParent;
+                            }
                         }
                         partPose[node] = local * parent;
-                        if (!Matrix4x4.Decompose(local, out var scale, out var rotation, out var position))
+                        if (!Matrix4x4.Decompose(outputLocal, out var scale, out var rotation, out var position))
                             throw new InvalidOperationException("Cannot decompose standalone part pose.");
                         output[i].Layers[0].Keys.Add(new PRSKey(KeyType.NodePRS) {
                             Time = time, Position = position, Rotation = Quaternion.Normalize(rotation), Scale = scale
