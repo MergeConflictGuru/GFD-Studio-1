@@ -49,7 +49,10 @@ namespace GFDStudio.GUI.Forms
             public int Index { get; init; }
             public string DisplayName { get; init; }
             public IReadOnlyCollection<string> BodyTargetNames { get; init; }
-            public override string ToString() => DisplayName;
+            public bool IsAutoLoaded { get; set; }
+            public override string ToString() => IsAutoLoaded
+                ? $"{DisplayName} (auto loaded)"
+                : DisplayName;
         }
 
         private const string CharacterBrowserSelectionFormat = "paths-v1";
@@ -1844,6 +1847,21 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
+        private void SetCharacterBrowserAnimationAutoLoaded(
+            CharacterAnimationEntry entry,
+            bool isAutoLoaded)
+        {
+            foreach (var candidate in mCharacterAnimations)
+            {
+                candidate.IsAutoLoaded = isAutoLoaded && entry != null &&
+                    candidate.Kind == entry.Kind &&
+                    candidate.Index == entry.Index &&
+                    AreSamePath(candidate.PackPath, entry.PackPath);
+            }
+
+            mCharacterAnimationListBox?.Refresh();
+        }
+
         private void RepackCharacterAnimations()
         {
             var entries = mCharacterAnimationListBox.SelectedItems
@@ -1961,6 +1979,8 @@ namespace GFDStudio.GUI.Forms
         private Animation PrepareCharacterBrowserAnimation(CharacterAnimationEntry entry, out string retargetNote)
         {
             retargetNote = null;
+            if (entry?.Kind == CharacterAnimationListKind.Animation)
+                SetCharacterBrowserAnimationAutoLoaded(entry, false);
 
             // Always load a fresh pack because retargeting mutates the animation object in memory.
             // This keeps the cached/showroom source data untouched when switching target models.
@@ -1995,6 +2015,7 @@ namespace GFDStudio.GUI.Forms
             {
                 animation = ComposeCharacterBrowserAnimation(
                     entry, animation, selectedFacePath, selectedHairPath, out hasSplitComponents);
+                SetCharacterBrowserAnimationAutoLoaded(entry, hasSplitComponents);
             }
 
             sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
@@ -2007,14 +2028,14 @@ namespace GFDStudio.GUI.Forms
                             entry.PackPath, sourceModelEntry, selectedFacePath, selectedHairPath))
                     {
                         retargetNote = hasSplitComponents
-                            ? "loaded with selected face/hair tracks"
+                            ? "auto loaded"
                             : "loaded without retargeting";
                     }
                     else
                     {
                         animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false);
                         retargetNote = hasSplitComponents
-                            ? "retargeted in preview with selected face/hair tracks"
+                            ? "auto loaded"
                             : "retargeted in preview";
                     }
                     break;
