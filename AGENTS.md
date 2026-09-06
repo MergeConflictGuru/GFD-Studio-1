@@ -28,3 +28,8 @@ The script uses Visual Studio MSBuild and the normal `GFDStudio\GFDStudio.csproj
 The normal graph includes the managed libraries, OpenGL renderer, Assimp conversion library, and native FBX C++/CLI project. The self-contained `win-x64` Release publish is written to `GFDStudio-binary`, so the published executable carries the .NET runtime with it. Close any running GFD Studio process before replacing the binaries.
 
 NuGet and .NET CLI state uses the normal user profile cache. Do not set `DOTNET_CLI_HOME` to a directory in the repository.
+
+
+# Retargeting
+
+You must check this visually with multiple different characters and animations if there is a chance of breaking something. Its not enough to just code it and say, yes, fixed, moving on without RIGOROUS exhaustive testing on different data.
