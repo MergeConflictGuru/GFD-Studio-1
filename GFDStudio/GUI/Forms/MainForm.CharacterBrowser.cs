@@ -644,7 +644,10 @@ namespace GFDStudio.GUI.Forms
                             var parsedSnapshot = parsedCount;
                             var failedSnapshot = failedCount;
 
-                            Invoke(new Action(() =>
+                            // Do not make the indexing worker wait for every UI batch. The old
+                            // synchronous Invoke made the foreground window appear hung while
+                            // the worker was waiting for sorted ListBox insertion to finish.
+                            BeginInvoke(new Action(() =>
                             {
                                 if (token.IsCancellationRequested || generation != mCharacterBrowserScanGeneration)
                                     return;
@@ -652,18 +655,13 @@ namespace GFDStudio.GUI.Forms
                                 mCharacterBrowserRestoringSelection = true;
                                 try
                                 {
-                                    AddCharacterAnimationBatch(toAdd);
+                                    AppendCharacterAnimationScanBatch(toAdd);
                                 }
                                 finally
                                 {
                                     mCharacterBrowserRestoringSelection = false;
                                 }
-                                if (parsedSnapshot == files.gaps.Count)
-                                    FinalizeCharacterBrowserAnimationLists();
-
-                                var restored = parsedSnapshot == files.gaps.Count &&
-                                               RestoreCharacterBrowserSelection();
-                                if (!restored)
+                                if (parsedSnapshot != files.gaps.Count)
                                     SetCharacterBrowserStatus(
                                         $"{mCharacterModels.Count:N0} models | " +
                                         $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations | " +
@@ -672,22 +670,31 @@ namespace GFDStudio.GUI.Forms
                             }));
                         }
                     }
+
+                    if (!token.IsCancellationRequested && generation == mCharacterBrowserScanGeneration)
+                    {
+                        var finalFailedCount = failedCount;
+
+                        // This Invoke runs on the indexing worker, so it waits for all earlier
+                        // BeginInvoke batches in the UI queue before finalizing the lists.
+                        Invoke(new Action(() =>
+                        {
+                            if (token.IsCancellationRequested || generation != mCharacterBrowserScanGeneration)
+                                return;
+
+                            FinalizeCharacterBrowserAnimationLists();
+                            RefreshCharacterAnimationList();
+                            RefreshCharacterBlendAnimationList();
+                            mCharacterBrowserSelectionRestoredForScan = RestoreCharacterBrowserSelection();
+                            if (!mCharacterBrowserSelectionRestoredForScan)
+                                SetCharacterBrowserStatus(
+                                    $"Ready: {mCharacterModels.Count:N0} models, " +
+                                    $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations" +
+                                    (finalFailedCount == 0 ? string.Empty : $" ({finalFailedCount:N0} GAP files failed to parse)"));
+                        }));
+                    }
                 }, token);
 
-                if (!token.IsCancellationRequested && generation == mCharacterBrowserScanGeneration)
-                {
-                    if (remainingGapPaths.Count == 0)
-                    {
-                        FinalizeCharacterBrowserAnimationLists();
-                        mCharacterBrowserSelectionRestoredForScan = RestoreCharacterBrowserSelection();
-                    }
-
-                    if (!mCharacterBrowserSelectionRestoredForScan)
-                        SetCharacterBrowserStatus(
-                            $"Ready: {mCharacterModels.Count:N0} models, " +
-                            $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations" +
-                            (failedCount == 0 ? string.Empty : $" ({failedCount:N0} GAP files failed to parse)"));
-                }
             }
             catch (OperationCanceledException)
             {
@@ -729,6 +736,48 @@ namespace GFDStudio.GUI.Forms
             finally
             {
                 mCharacterBrowserRestoringSelection = false;
+            }
+        }
+
+        private void AppendCharacterAnimationScanBatch(
+            IEnumerable<CharacterAnimationEntry> entries)
+        {
+            var filter = mCharacterAnimationFilterTextBox.Text?.Trim();
+            var blendFilter = mCharacterBlendAnimationFilterTextBox.Text?.Trim();
+            var addDirectly = string.IsNullOrEmpty(filter);
+            var addBlendDirectly = string.IsNullOrEmpty(blendFilter);
+
+            mCharacterAnimationListBox.BeginUpdate();
+            mCharacterBlendAnimationListBox.BeginUpdate();
+            try
+            {
+                foreach (var entry in entries)
+                {
+                    var destination = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? mCharacterBlendAnimations
+                        : mCharacterAnimations;
+                    var destinationListBox = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? mCharacterBlendAnimationListBox
+                        : mCharacterAnimationListBox;
+                    var destinationFilter = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? blendFilter
+                        : filter;
+                    var destinationAddDirectly = entry.Kind == CharacterAnimationListKind.BlendAnimation
+                        ? addBlendDirectly
+                        : addDirectly;
+
+                    // Scan paths are already ordered. Appending keeps each UI callback cheap;
+                    // the complete lists are sorted and refreshed once at the end of the scan.
+                    destination.Add(entry);
+                    if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
+                        (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
+                        destinationListBox.Items.Add(entry);
+                }
+            }
+            finally
+            {
+                mCharacterAnimationListBox.EndUpdate();
+                mCharacterBlendAnimationListBox.EndUpdate();
             }
         }
 
