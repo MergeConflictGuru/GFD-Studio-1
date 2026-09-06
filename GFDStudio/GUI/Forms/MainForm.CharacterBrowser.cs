@@ -76,6 +76,7 @@ namespace GFDStudio.GUI.Forms
         private sealed class CharacterAnimationScanItem
         {
             public CharacterAnimationEntry Entry { get; init; }
+            public string DisplayNameSuffix { get; init; }
             public byte[] SerializedDefinition { get; init; }
         }
 
@@ -104,6 +105,13 @@ namespace GFDStudio.GUI.Forms
             public int Cached { get; set; }
             public int Rescanned { get; set; }
         }
+
+        private const int CharacterAnimationScanCacheMagic = 0x43415343; // "CASC"
+        private const int CharacterAnimationScanCacheVersion = 2;
+        private const int CharacterAnimationScanCacheMaxFiles = 250000;
+        private const int CharacterAnimationScanCacheMaxItemsPerFile = 100000;
+        private const int CharacterAnimationScanCacheMaxBodyTargets = 100000;
+        private const int CharacterAnimationScanCacheMaxDefinitionBytes = 256 * 1024 * 1024;
 
         private const string CharacterBrowserSelectionFormat = "paths-v1";
         private const string CharacterBrowserFilterFormat = "filters-v1";
@@ -164,6 +172,7 @@ namespace GFDStudio.GUI.Forms
         private readonly object mCharacterAnimationScanCacheLock = new object();
         private readonly Dictionary<string, CharacterAnimationScanCacheEntry> mCharacterAnimationScanCache =
             new Dictionary<string, CharacterAnimationScanCacheEntry>(StringComparer.OrdinalIgnoreCase);
+        private bool mCharacterAnimationScanCacheLoaded;
 
         private CancellationTokenSource mCharacterBrowserScanCancellation;
         private string mCharacterBrowserRoot;
@@ -194,6 +203,12 @@ namespace GFDStudio.GUI.Forms
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "GFDStudio",
                 "character_browser_filters.txt");
+
+        private string CharacterAnimationScanCachePath =>
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "GFDStudio",
+                "character_browser_animation_scan.bin");
 
         protected override void OnShown(EventArgs e)
         {
@@ -605,6 +620,7 @@ namespace GFDStudio.GUI.Forms
                 else
                     RestoreLegacyCharacterBrowserModel(priorityModelPaths.FirstOrDefault());
 
+                EnsureCharacterAnimationScanCacheLoaded();
                 PurgeMissingCharacterAnimationScanCacheEntries();
 
                 var animationDefinitions = new CharacterAnimationDefinitionSet();
@@ -674,7 +690,7 @@ namespace GFDStudio.GUI.Forms
                         foreach (var item in scan.Items)
                         {
                             if (animationDefinitions.Add(item.SerializedDefinition))
-                                batch.Add(CloneCharacterAnimationEntry(item.Entry));
+                                batch.Add(CloneCharacterAnimationEntry(item, root));
                         }
 
                         parsedCount++;
@@ -685,6 +701,8 @@ namespace GFDStudio.GUI.Forms
                             batch.Clear();
                             var parsedSnapshot = parsedCount;
                             var failedSnapshot = failedCount;
+                            var cachedSnapshot = cachedCount;
+                            var rescannedSnapshot = rescannedCount;
 
                             // Do not make the indexing worker wait for every UI batch. The old
                             // synchronous Invoke made the foreground window appear hung while
@@ -708,6 +726,7 @@ namespace GFDStudio.GUI.Forms
                                         $"{mCharacterModels.Count:N0} models | " +
                                         $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations | " +
                                         $"GAP {parsedSnapshot:N0}/{files.gaps.Count:N0}" +
+                                        $" | {cachedSnapshot:N0} cached, {rescannedSnapshot:N0} rescanned" +
                                         (failedSnapshot == 0 ? string.Empty : $" | {failedSnapshot:N0} failed"));
                             }));
                         }
@@ -715,6 +734,7 @@ namespace GFDStudio.GUI.Forms
 
                     if (!token.IsCancellationRequested && generation == mCharacterBrowserScanGeneration)
                     {
+                        SaveCharacterAnimationScanCache();
                         var finalFailedCount = failedCount;
                         var finalCachedCount = cachedCount;
                         var finalRescannedCount = rescannedCount;
@@ -736,7 +756,8 @@ namespace GFDStudio.GUI.Forms
                             if (!mCharacterBrowserSelectionRestoredForScan)
                                 SetCharacterBrowserStatus(
                                     $"Ready: {mCharacterModels.Count:N0} models, " +
-                                    $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations" +
+                                    $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations " +
+                                    $"({finalCachedCount:N0} cached, {finalRescannedCount:N0} rescanned)" +
                                     (finalFailedCount == 0 ? string.Empty : $" ({finalFailedCount:N0} GAP files failed to parse)"));
                         }));
                     }
@@ -1042,7 +1063,7 @@ namespace GFDStudio.GUI.Forms
                 foreach (var item in scan.Items)
                 {
                     if (animationDefinitions.Add(item.SerializedDefinition))
-                        result.Entries.Add(CloneCharacterAnimationEntry(item.Entry));
+                        result.Entries.Add(CloneCharacterAnimationEntry(item, root));
                 }
             }
 
@@ -1097,6 +1118,182 @@ namespace GFDStudio.GUI.Forms
                 StoreCharacterAnimationScanCache(normalizedPath, stamp, result);
                 return result;
             }
+        }
+
+        private void EnsureCharacterAnimationScanCacheLoaded()
+        {
+            lock (mCharacterAnimationScanCacheLock)
+            {
+                if (mCharacterAnimationScanCacheLoaded)
+                    return;
+
+                mCharacterAnimationScanCacheLoaded = true;
+                try
+                {
+                    if (!File.Exists(CharacterAnimationScanCachePath))
+                        return;
+
+                    using var stream = File.OpenRead(CharacterAnimationScanCachePath);
+                    using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
+                    if (reader.ReadInt32() != CharacterAnimationScanCacheMagic ||
+                        reader.ReadInt32() != CharacterAnimationScanCacheVersion)
+                        return;
+
+                    var fileCount = ReadCharacterAnimationScanCacheCount(
+                        reader,
+                        CharacterAnimationScanCacheMaxFiles,
+                        "file");
+                    var loaded = new Dictionary<string, CharacterAnimationScanCacheEntry>(
+                        fileCount,
+                        StringComparer.OrdinalIgnoreCase);
+
+                    for (var fileIndex = 0; fileIndex < fileCount; fileIndex++)
+                    {
+                        var path = NormalizeCharacterAnimationPath(reader.ReadString());
+                        var stamp = new CharacterAnimationFileStamp(
+                            reader.ReadInt64(),
+                            reader.ReadInt64());
+                        var failed = reader.ReadInt32();
+                        var itemCount = ReadCharacterAnimationScanCacheCount(
+                            reader,
+                            CharacterAnimationScanCacheMaxItemsPerFile,
+                            "item");
+                        var items = new List<CharacterAnimationScanItem>(itemCount);
+
+                        for (var itemIndex = 0; itemIndex < itemCount; itemIndex++)
+                        {
+                            var kindValue = reader.ReadInt32();
+                            if (!Enum.IsDefined(typeof(CharacterAnimationListKind), kindValue))
+                                throw new InvalidDataException("Unknown animation list kind in scan cache.");
+
+                            var index = reader.ReadInt32();
+                            var displayName = reader.ReadString();
+                            var displayNameSuffix = reader.ReadString();
+                            var bodyTargetCount = ReadCharacterAnimationScanCacheCount(
+                                reader,
+                                CharacterAnimationScanCacheMaxBodyTargets,
+                                "body target");
+                            var bodyTargetNames = new string[bodyTargetCount];
+                            for (var targetIndex = 0; targetIndex < bodyTargetCount; targetIndex++)
+                                bodyTargetNames[targetIndex] = reader.ReadString();
+
+                            var definitionLength = reader.ReadInt32();
+                            if (definitionLength < 0 ||
+                                definitionLength > CharacterAnimationScanCacheMaxDefinitionBytes)
+                                throw new InvalidDataException("Animation definition is too large in scan cache.");
+
+                            var serializedDefinition = reader.ReadBytes(definitionLength);
+                            if (serializedDefinition.Length != definitionLength)
+                                throw new EndOfStreamException();
+
+                            items.Add(new CharacterAnimationScanItem
+                            {
+                                Entry = new CharacterAnimationEntry
+                                {
+                                    PackPath = path,
+                                    Kind = (CharacterAnimationListKind)kindValue,
+                                    Index = index,
+                                    DisplayName = displayName,
+                                    BodyTargetNames = bodyTargetNames
+                                },
+                                DisplayNameSuffix = displayNameSuffix,
+                                SerializedDefinition = serializedDefinition
+                            });
+                        }
+
+                        loaded[path] = new CharacterAnimationScanCacheEntry(stamp, items, failed);
+                    }
+
+                    mCharacterAnimationScanCache.Clear();
+                    foreach (var pair in loaded)
+                        mCharacterAnimationScanCache.Add(pair.Key, pair.Value);
+                }
+                catch (Exception ex)
+                {
+                    mCharacterAnimationScanCache.Clear();
+                    Logger.Debug("CharacterBrowser: failed to load animation scan cache: " + ex);
+                }
+            }
+        }
+
+        private void SaveCharacterAnimationScanCache()
+        {
+            PurgeMissingCharacterAnimationScanCacheEntries();
+
+            KeyValuePair<string, CharacterAnimationScanCacheEntry>[] snapshot;
+            lock (mCharacterAnimationScanCacheLock)
+                snapshot = mCharacterAnimationScanCache.ToArray();
+
+            var cachePath = CharacterAnimationScanCachePath;
+            var temporaryPath = cachePath + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                var directory = Path.GetDirectoryName(Path.GetFullPath(cachePath));
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+
+                using (var stream = File.Create(temporaryPath))
+                using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+                {
+                    writer.Write(CharacterAnimationScanCacheMagic);
+                    writer.Write(CharacterAnimationScanCacheVersion);
+                    writer.Write(snapshot.Length);
+
+                    foreach (var pair in snapshot)
+                    {
+                        writer.Write(pair.Key);
+                        writer.Write(pair.Value.Stamp.Length);
+                        writer.Write(pair.Value.Stamp.LastWriteTimeUtcTicks);
+                        writer.Write(pair.Value.Failed);
+                        writer.Write(pair.Value.Items.Count);
+
+                        foreach (var item in pair.Value.Items)
+                        {
+                            writer.Write((int)item.Entry.Kind);
+                            writer.Write(item.Entry.Index);
+                            writer.Write(item.Entry.DisplayName ?? string.Empty);
+                            writer.Write(item.DisplayNameSuffix ?? string.Empty);
+
+                            var bodyTargetNames = item.Entry.BodyTargetNames ?? Array.Empty<string>();
+                            writer.Write(bodyTargetNames.Count);
+                            foreach (var bodyTargetName in bodyTargetNames)
+                                writer.Write(bodyTargetName ?? string.Empty);
+
+                            writer.Write(item.SerializedDefinition.Length);
+                            writer.Write(item.SerializedDefinition);
+                        }
+                    }
+
+                    writer.Flush();
+                    stream.Flush(true);
+                }
+
+                File.Move(temporaryPath, cachePath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("CharacterBrowser: failed to save animation scan cache: " + ex);
+                try
+                {
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+                }
+                catch
+                {
+                    // A cache write failure must never make the character browser scan fail.
+                }
+            }
+        }
+
+        private static int ReadCharacterAnimationScanCacheCount(
+            BinaryReader reader,
+            int maximum,
+            string itemName)
+        {
+            var count = reader.ReadInt32();
+            if (count < 0 || count > maximum)
+                throw new InvalidDataException($"Invalid animation scan cache {itemName} count.");
+            return count;
         }
 
         private static string NormalizeCharacterAnimationPath(string path)
@@ -1179,15 +1376,28 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
-        private static CharacterAnimationEntry CloneCharacterAnimationEntry(CharacterAnimationEntry entry)
+        private static CharacterAnimationEntry CloneCharacterAnimationEntry(
+            CharacterAnimationScanItem item,
+            string root)
         {
+            var displayName = item.Entry.DisplayName;
+            try
+            {
+                var relative = Path.GetRelativePath(root, item.Entry.PackPath);
+                displayName = Path.ChangeExtension(relative, null) + item.DisplayNameSuffix;
+            }
+            catch
+            {
+                // Keep the cached display name if the current root cannot be resolved.
+            }
+
             return new CharacterAnimationEntry
             {
-                PackPath = entry.PackPath,
-                Kind = entry.Kind,
-                Index = entry.Index,
-                DisplayName = entry.DisplayName,
-                BodyTargetNames = entry.BodyTargetNames,
+                PackPath = item.Entry.PackPath,
+                Kind = item.Entry.Kind,
+                Index = item.Entry.Index,
+                DisplayName = displayName,
+                BodyTargetNames = item.Entry.BodyTargetNames,
                 IsAutoLoaded = false
             };
         }
@@ -1198,9 +1408,6 @@ namespace GFDStudio.GUI.Forms
             string gapPath,
             AnimationPack pack)
         {
-            var relative = Path.GetRelativePath(root, gapPath);
-            var stem = Path.ChangeExtension(relative, null);
-
             var normalCount = pack.Animations?.Count(AnimationAnalysis.HasBodyMotion) ?? 0;
             var extraCount = pack.METAPHOR_AnimArray3?.Count(AnimationAnalysis.HasBodyMotion) ?? 0;
             var normalAndExtraCount = normalCount + extraCount;
@@ -1216,10 +1423,11 @@ namespace GFDStudio.GUI.Forms
                     AddAnimationScanItem(
                         output,
                         animation,
+                        root,
                         gapPath,
                         CharacterAnimationListKind.Animation,
                         i,
-                        normalAndExtraCount == 1 ? stem : $"{stem}  #{i + 1}");
+                        normalAndExtraCount == 1 ? string.Empty : $"  #{i + 1}");
                 }
             }
 
@@ -1234,10 +1442,11 @@ namespace GFDStudio.GUI.Forms
                     AddAnimationScanItem(
                         output,
                         animation,
+                        root,
                         gapPath,
                         CharacterAnimationListKind.BlendAnimation,
                         i,
-                        $"{stem}  [blend {i + 1}]");
+                        $"  [blend {i + 1}]");
                 }
             }
 
@@ -1252,10 +1461,11 @@ namespace GFDStudio.GUI.Forms
                     AddAnimationScanItem(
                         output,
                         animation,
+                        root,
                         gapPath,
                         CharacterAnimationListKind.ExtraAnimation,
                         i,
-                        $"{stem}  [extra {i + 1}]");
+                        $"  [extra {i + 1}]");
                 }
             }
         }
@@ -1263,11 +1473,14 @@ namespace GFDStudio.GUI.Forms
         private static void AddAnimationScanItem(
             List<CharacterAnimationScanItem> output,
             Animation animation,
+            string root,
             string gapPath,
             CharacterAnimationListKind kind,
             int index,
-            string displayName)
+            string displayNameSuffix)
         {
+            var relative = Path.GetRelativePath(root, gapPath);
+            var stem = Path.ChangeExtension(relative, null);
             output.Add(new CharacterAnimationScanItem
             {
                 Entry = new CharacterAnimationEntry
@@ -1275,9 +1488,10 @@ namespace GFDStudio.GUI.Forms
                     PackPath = gapPath,
                     Kind = kind,
                     Index = index,
-                    DisplayName = displayName,
+                    DisplayName = stem + displayNameSuffix,
                     BodyTargetNames = AnimationAnalysis.GetBodyTargetNames(animation)
                 },
+                DisplayNameSuffix = displayNameSuffix,
                 SerializedDefinition = SerializeAnimation(animation)
             });
         }
