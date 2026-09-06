@@ -3,12 +3,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using CSharpImageLibrary;
-using CSharpImageLibrary.Headers;
 using GFDLibrary.Textures.DDS;
 using GFDLibrary.Textures.GNF;
 using GFDLibrary.Textures.Swizzle;
-using static CSharpImageLibrary.Headers.DDS_Header;
 using BCnEncoder.Decoder;
 using BCnEncoder.ImageSharp;
 using BCnEncoder.Shared;
@@ -39,147 +36,87 @@ namespace GFDLibrary.Textures
 
         public static byte[] DecodeToDDS( FieldTexturePS3 texture )
         {
-            var surfaceFormat = ImageEngineFormat.DDS_DXT1;
+            var surfaceFormat = DDSPixelFormatFourCC.DXT1;
             if ( texture.Flags.HasFlag( FieldTextureFlags.DXT3 ) )
             {
-                surfaceFormat = ImageEngineFormat.DDS_DXT3;
+                surfaceFormat = DDSPixelFormatFourCC.DXT3;
             }
             else if ( texture.Flags.HasFlag( FieldTextureFlags.DXT5 ) )
             {
-                surfaceFormat = ImageEngineFormat.DDS_DXT5;
+                surfaceFormat = DDSPixelFormatFourCC.DXT5;
             }
 
-            var ddsBytes = new byte[0x80 + texture.DataLength];
+            var ddsHeader = new DDSHeader( texture.Width, texture.Height, surfaceFormat )
+            {
+                MipMapCount = texture.MipMapCount
+            };
+            if ( texture.MipMapCount > 1 )
+                ddsHeader.Flags |= DDSHeaderFlags.MipMapCount;
 
-            // create & write header
-            var ddsHeader = new DDS_Header( texture.MipMapCount, texture.Height, texture.Width, surfaceFormat );
-            ddsHeader.WriteToArray( ddsBytes, 0 );
-
-            // write pixel data
-            Array.Copy( texture.Data, 0, ddsBytes, 0x80, texture.DataLength );
-
-            return ddsBytes;
+            using var ddsStream = ddsHeader.Save();
+            ddsStream.Write( texture.Data, 0, texture.DataLength );
+            return ddsStream.ToArray();
         }
 
         public static byte[] DecodeToDDS( GNFTexture texture )
         {
-            var imageFormat = ImageEngineFormat.DDS_DXT5;
-            var dx10ImageFormat = DDS_Header.DXGI_FORMAT.DXGI_FORMAT_UNKNOWN;
+            var imageFormat = DDSPixelFormatFourCC.DXT5;
+            var dx10ImageFormat = DDSDxgiFormat.UNKNOWN;
             switch ( texture.SurfaceFormat )
             {
                 case GNF.SurfaceFormat.BC1:
-                    imageFormat = ImageEngineFormat.DDS_DXT1;
+                    imageFormat = DDSPixelFormatFourCC.DXT1;
                     break;
                 case GNF.SurfaceFormat.BC2:
-                    imageFormat = ImageEngineFormat.DDS_DXT2;
+                    imageFormat = DDSPixelFormatFourCC.DXT2;
                     break;
                 case GNF.SurfaceFormat.BC3:
-                    imageFormat = ImageEngineFormat.DDS_DXT5;
+                    imageFormat = DDSPixelFormatFourCC.DXT5;
                     break;
                 case GNF.SurfaceFormat.BC4:
-                    imageFormat = ImageEngineFormat.DDS_ATI1;
+                    imageFormat = DDSPixelFormatFourCC.ATI1;
                     break;
                 case GNF.SurfaceFormat.BC5:
-                    imageFormat = ImageEngineFormat.DDS_ATI2_3Dc;
+                    imageFormat = DDSPixelFormatFourCC.ATI2N_3Dc;
                     break;
                 case GNF.SurfaceFormat.BC6:
-                    imageFormat = ImageEngineFormat.DDS_DX10;
-                    dx10ImageFormat = DDS_Header.DXGI_FORMAT.DXGI_FORMAT_BC6H_UF16;
+                    imageFormat = DDSPixelFormatFourCC.DX10;
+                    dx10ImageFormat = DDSDxgiFormat.BC6H_UF16;
                     break;
                 case GNF.SurfaceFormat.BC7:
-                    imageFormat = ImageEngineFormat.DDS_DX10;
+                    imageFormat = DDSPixelFormatFourCC.DX10;
 
                     switch ( texture.ChannelType )
                     {
                         case ChannelType.Srgb:
-                            dx10ImageFormat = DDS_Header.DXGI_FORMAT.DXGI_FORMAT_BC7_UNORM_SRGB;
+                            dx10ImageFormat = DDSDxgiFormat.BC7_UNORM_SRGB;
                             break;
                         default:
-                            dx10ImageFormat = DDS_Header.DXGI_FORMAT.DXGI_FORMAT_BC7_UNORM;
+                            dx10ImageFormat = DDSDxgiFormat.BC7_UNORM;
                             break;
                     }
                     break;
             }
 
-            var ddsHeaderSize = 0x80;
-            if ( dx10ImageFormat != DDS_Header.DXGI_FORMAT.DXGI_FORMAT_UNKNOWN )
-                ddsHeaderSize += 20;
-
-            var ddsBytes = new byte[ddsHeaderSize + texture.Data.Length];
-
-            // create & write header
-            var ddsHeader = new DDS_Header( texture.LastMipLevel, texture.Height, texture.Width, imageFormat, dx10ImageFormat ); //Mips:1 => texture.LastMipLevel
-            ddsHeader.dwPitchOrLinearSize = DDSFormatDetails.CalculatePitchOrLinearSize( texture.Width, texture.Height, ImageEngineFormat2FourCC(ddsHeader.Format), out DDSHeaderFlags additionalFlags );
-            ddsHeader.dwFlags |= (DDSdwFlags)additionalFlags;
-            ddsHeader.dwDepth = texture.Depth;
-            ddsHeader.WriteToArray( ddsBytes, 0 );        
+            var ddsHeader = new DDSHeader( texture.Width, texture.Height, imageFormat )
+            {
+                MipMapCount = texture.LastMipLevel,
+                Depth = texture.Depth,
+                DxgiFormat = dx10ImageFormat,
+                D3D10ResourceDimension = DDSD3D10ResourceDimension.TEXTURE2D,
+                ArraySize = 1
+            };
+            if ( texture.LastMipLevel > 1 )
+                ddsHeader.Flags |= DDSHeaderFlags.MipMapCount;
+            if ( dx10ImageFormat != DDSDxgiFormat.UNKNOWN )
+                ddsHeader.Size += sizeof( uint ) * 5;
 
             // unswizzle
-            var data = Swizzler.UnSwizzle( texture.Data, texture.Width, texture.Height, imageFormat == ImageEngineFormat.DDS_DXT1 ? 8 : 16, SwizzleType.PS4 );
+            var data = Swizzler.UnSwizzle( texture.Data, texture.Width, texture.Height, imageFormat == DDSPixelFormatFourCC.DXT1 ? 8 : 16, SwizzleType.PS4 );
 
-            // write pixel data
-            Array.Copy( data, 0, ddsBytes, ddsHeaderSize, texture.Data.Length );
-
-            return ddsBytes;
-        }
-
-        /// <summary>
-        /// Cast ImageEngineFormat to DDSPixelFormatFourCC for easier calculation of PitchOrLinearSize.
-        /// </summary>
-        public static DDSPixelFormatFourCC ImageEngineFormat2FourCC( ImageEngineFormat format )
-        {
-            switch ( format )
-            {
-                case ImageEngineFormat.Unknown:
-                case ImageEngineFormat.JPG:
-                case ImageEngineFormat.PNG:
-                case ImageEngineFormat.BMP:
-                case ImageEngineFormat.TGA:
-                case ImageEngineFormat.GIF:
-                case ImageEngineFormat.TIF:
-                case ImageEngineFormat.DDS_CUSTOM:
-                    return DDSPixelFormatFourCC.Unknown;
-                case ImageEngineFormat.DDS_DXT1:
-                    return DDSPixelFormatFourCC.DXT1;
-                case ImageEngineFormat.DDS_DXT2:
-                    return DDSPixelFormatFourCC.DXT2;
-                case ImageEngineFormat.DDS_DXT3:
-                    return DDSPixelFormatFourCC.DXT3;
-                case ImageEngineFormat.DDS_DXT4:
-                    return DDSPixelFormatFourCC.DXT4;
-                case ImageEngineFormat.DDS_DXT5:
-                    return DDSPixelFormatFourCC.DXT5;
-                case ImageEngineFormat.DDS_DX10:
-                    return DDSPixelFormatFourCC.DX10;
-                case ImageEngineFormat.DDS_ABGR_8:
-                    return DDSPixelFormatFourCC.A8B8G8R8;
-                case ImageEngineFormat.DDS_ATI1:
-                    return DDSPixelFormatFourCC.ATI1;
-                case ImageEngineFormat.DDS_V8U8:
-                    return DDSPixelFormatFourCC.V8U8;
-                case ImageEngineFormat.DDS_G8_L8:
-                    return DDSPixelFormatFourCC.L8;
-                case ImageEngineFormat.DDS_A8L8:
-                    return DDSPixelFormatFourCC.A8L8;
-                case ImageEngineFormat.DDS_RGB_8:
-                    return DDSPixelFormatFourCC.R8G8B8;
-                case ImageEngineFormat.DDS_ATI2_3Dc:
-                    return DDSPixelFormatFourCC.ATI2N_3Dc;
-                case ImageEngineFormat.DDS_ARGB_8:
-                    return DDSPixelFormatFourCC.A8R8G8B8;
-                case ImageEngineFormat.DDS_R5G6B5:
-                    return DDSPixelFormatFourCC.R5G6B5;
-                case ImageEngineFormat.DDS_ARGB_4:
-                    return DDSPixelFormatFourCC.A4R4G4B4;
-                case ImageEngineFormat.DDS_A8:
-                    return DDSPixelFormatFourCC.A8;
-                case ImageEngineFormat.DDS_G16_R16:
-                    return DDSPixelFormatFourCC.G16R16;
-                case ImageEngineFormat.DDS_ARGB_32F:
-                    return DDSPixelFormatFourCC.A32B32G32R32F;
-            }
-
-            return 0;
+            using var ddsStream = ddsHeader.Save();
+            ddsStream.Write( data, 0, data.Length );
+            return ddsStream.ToArray();
         }
 
         public static Bitmap Decode( byte[] data, TextureFormat format )
@@ -252,11 +189,9 @@ namespace GFDLibrary.Textures
                 // :02Shrug:
             }
 
-
             try
             {
-                // Image engine SUCKS at alpha handling, but its better than nothing
-                return DecodeDDSWithImageEngine( data );
+                return DDSCodec.DecompressImage( data );
             }
             catch ( Exception )
             {
@@ -265,30 +200,6 @@ namespace GFDLibrary.Textures
             // RIP
             Trace.WriteLine( "Failed to decode DDS texture" );
             return new Bitmap( 32, 32, PixelFormat.Format32bppArgb );
-        }
-
-        private static Bitmap DecodeDDSWithImageEngine( byte[] data )
-        {
-            var ddsImage = new ImageEngineImage( data );
-            return ImageEngineImageToBitmap( ddsImage );
-        }
-
-        private static Bitmap ImageEngineImageToBitmap( ImageEngineImage image )
-        {
-            // save the image to bmp
-            var bitmapStream = new MemoryStream();
-
-            try
-            {
-                image.Save( bitmapStream, new ImageFormats.ImageEngineFormatDetails( ImageEngineFormat.PNG ), MipHandling.KeepTopOnly, 0, 0, false );
-            }
-            catch ( NullReferenceException /* good library */ )
-            {
-                image.Save( bitmapStream, new ImageFormats.ImageEngineFormatDetails( ImageEngineFormat.PNG ), MipHandling.KeepTopOnly );
-            }
-
-            // load the saved bmp into a new bitmap
-            return new Bitmap( bitmapStream );
         }
 
         private static Bitmap DecodeTMX( byte[] data )

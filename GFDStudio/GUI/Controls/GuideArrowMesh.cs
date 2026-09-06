@@ -2,12 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using GFDLibrary.Rendering.OpenGL;
-using OpenTK;
-using OpenTK.Graphics.OpenGL;
-using Matrix4 = OpenTK.Matrix4;
+using OpenTK.Mathematics;
+using OpenTK.Graphics.OpenGL4;
+using Matrix4 = OpenTK.Mathematics.Matrix4;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = System.Numerics.Vector3;
-using Vector4 = OpenTK.Vector4;
+using Vector4 = OpenTK.Mathematics.Vector4;
+using OpenTKVector3 = OpenTK.Mathematics.Vector3;
 
 namespace GFDStudio.GUI.Controls
 {
@@ -41,19 +42,19 @@ namespace GFDStudio.GUI.Controls
 
             DrawPart( shader, mBody, model,
                 new Vector4( 0.90f, 0.92f, 0.94f, 1.0f ),
-                OpenTK.Vector3.Zero, 0.0f );
+                OpenTKVector3.Zero, 0.0f );
 
             DrawPart( shader, mInset, model,
                 new Vector4( 0.18f, 0.21f, 0.25f, 1.0f ),
-                OpenTK.Vector3.Zero, 0.0f );
+                OpenTKVector3.Zero, 0.0f );
 
             DrawPart( shader, mGlow, model,
                 new Vector4( 0.18f, 0.70f, 0.94f, 1.0f ),
-                new OpenTK.Vector3( 0.16f, 0.72f, 1.0f ), 0.72f );
+                new OpenTKVector3( 0.16f, 0.72f, 1.0f ), 0.72f );
         }
 
         private static void DrawPart( GLShaderProgram shader, GLMesh mesh, Matrix4 model,
-                                      Vector4 baseColor, OpenTK.Vector3 glowColor, float glowStrength )
+                                      Vector4 baseColor, OpenTKVector3 glowColor, float glowStrength )
         {
             shader.SetUniform( "uBaseColor", baseColor );
             shader.SetUniform( "uGlowColor", glowColor );

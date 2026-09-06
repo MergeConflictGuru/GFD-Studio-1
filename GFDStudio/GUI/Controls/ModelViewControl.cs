@@ -8,19 +8,18 @@ using System.Windows.Forms;
 using GFDLibrary;
 using GFDLibrary.Common;
 using GFDLibrary.Textures;
-using OpenTK;
-using OpenTK.Graphics.OpenGL;
+using OpenTK.Mathematics;
+using OpenTK.Graphics.OpenGL4;
 using GFDLibrary.Animations;
 using GFDLibrary.Models;
 using GFDLibrary.Rendering.OpenGL;
 using GFDStudio.DataManagement;
 using Color = System.Drawing.Color;
-using Quaternion = OpenTK.Quaternion;
-using Vector3 = OpenTK.Vector3;
-using Vector4 = OpenTK.Vector4;
-using OpenTK.Graphics;
-using OpenTK.Input;
-using Key = OpenTK.Input.Key;
+using Quaternion = OpenTK.Mathematics.Quaternion;
+using Vector3 = OpenTK.Mathematics.Vector3;
+using Vector4 = OpenTK.Mathematics.Vector4;
+using OpenTK.GLControl;
+using OpenTK.Windowing.Common;
 using GFDLibrary.Materials;
 using GFDLibrary.Shaders;
 
@@ -134,15 +133,20 @@ namespace GFDStudio.GUI.Controls
         public event EventHandler<AnimationPlaybackState> AnimationPlaybackStateChanged;
         public event EventHandler<double> AnimationTimeChanged;
 
-        private ModelViewControl() : base(
-            new GraphicsMode( 32, 24, 0, 4 ),
-            3,
-            3,
+        private ModelViewControl() : base( new GLControlSettings
+        {
+            APIVersion = new Version( 3, 3, 0, 0 ),
+            Flags =
 #if GL_DEBUG
-            GraphicsContextFlags.Debug | GraphicsContextFlags.ForwardCompatible )
+                ContextFlags.Debug | ContextFlags.ForwardCompatible,
 #else
-            GraphicsContextFlags.ForwardCompatible )
+                ContextFlags.ForwardCompatible,
 #endif
+            Profile = ContextProfile.Core,
+            NumberOfSamples = 4,
+            DepthBits = 24,
+            StencilBits = 0
+        } )
         {
             InitializeComponent();
 
@@ -151,9 +155,7 @@ namespace GFDStudio.GUI.Controls
 
             // required to use GL in the context of this control
             MakeCurrent();
-            // Let SwapBuffers pace the preview to the display refresh rate instead of
-            // imposing a separate 60 Hz timer on the showroom/editor viewport.
-            VSync = true;
+            Context.SwapInterval = 1;
             LogGLInfo();
 
             if ( !InitializeShaders() )
@@ -571,11 +573,10 @@ namespace GFDStudio.GUI.Controls
 
         private void HandleApplicationIdle( object sender, EventArgs e )
         {
-            // With VSync enabled, SwapBuffers blocks until the next display refresh.
-            // Rendering directly from the idle loop therefore follows 60/120/144 Hz
-            // displays without relying on a coarse WinForms timer.
+            // Rendering directly from the idle loop follows the display refresh rate
+            // through the context swap interval without a separate timer.
             while ( mCanRender && mCamera != null &&
-                    AnimationPlayback == AnimationPlaybackState.Playing && IsIdle )
+                    AnimationPlayback == AnimationPlaybackState.Playing && !IsDisposed )
             {
                 RenderFrame();
             }
@@ -716,7 +717,7 @@ namespace GFDStudio.GUI.Controls
 
         private float GetGuideArrowScale( Vector3 anchor )
         {
-            var viewAnchor = Vector4.Transform( new Vector4( anchor, 1.0f ), mCamera.View );
+            var viewAnchor = Vector4.TransformRow( new Vector4( anchor, 1.0f ), mCamera.View );
             var viewDepth = MathF.Max( 0.25f, -viewAnchor.Z );
             var focalLength = MathF.Max( 0.1f, MathF.Abs( mCamera.Projection.M22 ) );
 
@@ -852,12 +853,12 @@ namespace GFDStudio.GUI.Controls
                         foreach ( var vertex in mesh.VertexPositions )
                         {
                             var point = System.Numerics.Vector3.Transform( vertex, node.WorldTransform );
-                            var viewPosition = Vector4.Transform( new Vector4( point.X, point.Y, point.Z, 1.0f ), mCamera.View );
+                            var viewPosition = Vector4.TransformRow( new Vector4( point.X, point.Y, point.Z, 1.0f ), mCamera.View );
                             if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
                                 continue;
 
                             hasFrontPoint = true;
-                            var clipPosition = Vector4.Transform( viewPosition, mCamera.Projection );
+                            var clipPosition = Vector4.TransformRow( viewPosition, mCamera.Projection );
                             if ( clipPosition.W <= 0.0001f )
                                 continue;
 
@@ -883,12 +884,12 @@ namespace GFDStudio.GUI.Controls
                 for ( var z = -1; z <= 1; z += 2 )
                 {
                     var point = center + new Vector3( extents.X * x, extents.Y * y, extents.Z * z );
-                    var viewPosition = Vector4.Transform( new Vector4( point, 1.0f ), mCamera.View );
+                    var viewPosition = Vector4.TransformRow( new Vector4( point, 1.0f ), mCamera.View );
                     if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
                         continue;
 
                     hasFrontPoint = true;
-                    var clipPosition = Vector4.Transform( viewPosition, mCamera.Projection );
+                    var clipPosition = Vector4.TransformRow( viewPosition, mCamera.Projection );
                     if ( clipPosition.W <= 0.0001f )
                         continue;
 
@@ -918,7 +919,7 @@ namespace GFDStudio.GUI.Controls
             // actual target direction, while keeping that broad face toward the
             // camera so the marker remains visually readable at steep angles.
             var inverseView = Matrix4.Invert( mCamera.View );
-            var cameraDirection = Vector4.Transform( new Vector4( 0.0f, 0.0f, 1.0f, 0.0f ), inverseView );
+            var cameraDirection = Vector4.TransformRow( new Vector4( 0.0f, 0.0f, 1.0f, 0.0f ), inverseView );
             var faceNormal = new Vector3( cameraDirection.X, cameraDirection.Y, cameraDirection.Z );
             if ( faceNormal.LengthSquared < 0.0001f )
                 faceNormal = Vector3.UnitY;
@@ -928,7 +929,7 @@ namespace GFDStudio.GUI.Controls
             var up = faceNormal - forward * Vector3.Dot( faceNormal, forward );
             if ( up.LengthSquared < 0.0001f )
             {
-                var cameraUp = Vector4.Transform( new Vector4( 0.0f, 1.0f, 0.0f, 0.0f ), inverseView );
+                var cameraUp = Vector4.TransformRow( new Vector4( 0.0f, 1.0f, 0.0f, 0.0f ), inverseView );
                 up = new Vector3( cameraUp.X, cameraUp.Y, cameraUp.Z );
                 up -= forward * Vector3.Dot( up, forward );
             }
@@ -981,15 +982,15 @@ namespace GFDStudio.GUI.Controls
                 fallbackX * viewDepth / MathF.Max( 0.1f, MathF.Abs( mCamera.Projection.M11 ) ),
                 fallbackY * viewDepth / MathF.Max( 0.1f, MathF.Abs( mCamera.Projection.M22 ) ),
                 -viewDepth, 1.0f );
-            var worldAnchor = Vector4.Transform( viewSpaceAnchor, inverseView );
+            var worldAnchor = Vector4.TransformRow( viewSpaceAnchor, inverseView );
             return new Vector3( worldAnchor.X, worldAnchor.Y, worldAnchor.Z );
         }
 
         private Vector4 ProjectGuideArrowPoint( Vector3 worldPosition, out bool inFrontOfCamera )
         {
-            var viewPosition = Vector4.Transform( new Vector4( worldPosition, 1.0f ), mCamera.View );
+            var viewPosition = Vector4.TransformRow( new Vector4( worldPosition, 1.0f ), mCamera.View );
             inFrontOfCamera = viewPosition.Z < 0.0f;
-            return Vector4.Transform( viewPosition, mCamera.Projection );
+            return Vector4.TransformRow( viewPosition, mCamera.Projection );
         }
 
         private static bool IsGuideArrowPointOnScreen( Vector4 clipPosition, float margin )
@@ -1069,7 +1070,7 @@ namespace GFDStudio.GUI.Controls
         {
             GL.ClearColor( ClearColor );
             GL.FrontFace( FrontFaceDirection.Ccw );
-            GL.CullFace( CullFaceMode.Back );
+            GL.CullFace( TriangleFace.Back );
             GL.Enable( EnableCap.CullFace );
             GL.Enable( EnableCap.DepthTest );
 
@@ -1152,13 +1153,11 @@ namespace GFDStudio.GUI.Controls
         protected internal float CalculateMultiplier( float baseValue = 0.5f )
         {
             float multiplier = baseValue;
-            var keyboardState = Keyboard.GetState();
-
-            if ( keyboardState.IsKeyDown( Key.ShiftLeft ) )
+            if ( ( ModifierKeys & Keys.Shift ) == Keys.Shift )
             {
                 multiplier *= 10f;
             }
-            else if ( keyboardState.IsKeyDown( Key.ControlLeft ) )
+            else if ( ( ModifierKeys & Keys.Control ) == Keys.Control )
             {
                 multiplier /= 2f;
             }

@@ -2,8 +2,8 @@
 using System.Linq;
 using System.Reflection;
 using GFDLibrary.Materials;
-using OpenTK;
-using OpenTK.Graphics.OpenGL;
+using OpenTK.Mathematics;
+using OpenTK.Graphics.OpenGL4;
 
 namespace GFDLibrary.Rendering.OpenGL
 {
@@ -177,7 +177,7 @@ namespace GFDLibrary.Rendering.OpenGL
             }
             if ( RenderWireframe )
             {
-                GL.PolygonMode( MaterialFace.FrontAndBack, PolygonMode.Line );
+                GL.PolygonMode( TriangleFace.FrontAndBack, PolygonMode.Line );
             }
 
             if ( !EnableBackfaceCulling )
@@ -194,7 +194,7 @@ namespace GFDLibrary.Rendering.OpenGL
 
             if ( RenderWireframe )
             {
-                GL.PolygonMode( MaterialFace.FrontAndBack, PolygonMode.Fill );
+                GL.PolygonMode( TriangleFace.FrontAndBack, PolygonMode.Fill );
             }
         }
 
