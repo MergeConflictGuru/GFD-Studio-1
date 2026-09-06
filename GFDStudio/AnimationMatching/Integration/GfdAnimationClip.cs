@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
 using GFDLibrary.Animations;
 using GFDLibrary.Models;
 using GFDStudio.AnimationMatching.Core;
@@ -11,12 +12,16 @@ namespace GFDStudio.AnimationMatching.Integration;
 /// <summary>
 /// Adapts a GFD animation + target model to the matcher without involving the OpenGL renderer.
 /// Each corpus clip can lazy-load and retarget its GAP animation on a worker thread.
+/// Large decoded animations are releasable so indexing does not retain the entire corpus in RAM.
 /// </summary>
-public sealed class GfdAnimationClip : IAnimationClip
+public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwner
 {
     private readonly Model _model;
     private readonly Node[] _nodes;
-    private readonly Lazy<Animation> _animation;
+    private readonly Func<Animation> _animationLoader;
+    private readonly object _animationSync = new();
+    private Animation _animation;
+    private int _frameCount;
 
     public GfdAnimationClip(
         string id,
@@ -32,26 +37,70 @@ public sealed class GfdAnimationClip : IAnimationClip
         _nodes = model.Nodes.ToArray();
         Skeleton = skeleton ?? throw new ArgumentNullException(nameof(skeleton));
         FramesPerSecond = MathF.Max(1f, framesPerSecond);
-        _animation = new Lazy<Animation>(
-            () => animationLoader() ?? throw new InvalidOperationException($"Could not load animation {displayName}."),
-            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+        _animationLoader = animationLoader ?? throw new ArgumentNullException(nameof(animationLoader));
     }
 
     public string Id { get; }
     public string DisplayName { get; }
     public SkeletonDefinition Skeleton { get; }
     public float FramesPerSecond { get; }
-    public Animation Animation => _animation.Value;
-    public int FrameCount => Math.Max(1, (int)MathF.Ceiling(Animation.Duration * FramesPerSecond) + 1);
+
+    public Animation Animation
+    {
+        get
+        {
+            lock (_animationSync)
+            {
+                _animation ??= _animationLoader() ??
+                    throw new InvalidOperationException($"Could not load animation {DisplayName}.");
+                return _animation;
+            }
+        }
+    }
+
+    public int FrameCount
+    {
+        get
+        {
+            var cached = Volatile.Read(ref _frameCount);
+            if (cached > 0)
+                return cached;
+
+            var animation = Animation;
+            var calculated = Math.Max(1, (int)MathF.Ceiling(animation.Duration * FramesPerSecond) + 1);
+            Interlocked.CompareExchange(ref _frameCount, calculated, 0);
+            return Volatile.Read(ref _frameCount);
+        }
+    }
+
+    /// <summary>
+    /// Drops the decoded/retargeted animation while retaining its inexpensive duration metadata.
+    /// A later preview/export can transparently load it again.
+    /// </summary>
+    public void ReleaseResources()
+    {
+        lock (_animationSync)
+            _animation = null;
+    }
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
     {
         if (destination.Length < Skeleton.BoneCount)
             throw new ArgumentException("Destination pose buffer is too small.", nameof(destination));
 
-        var clamped = Math.Clamp(frameIndex, 0, FrameCount - 1);
+        // Hold a local reference so ReleaseResources cannot affect an in-flight sample.
+        var animation = Animation;
+        var frameCount = Volatile.Read(ref _frameCount);
+        if (frameCount <= 0)
+        {
+            frameCount = Math.Max(1, (int)MathF.Ceiling(animation.Duration * FramesPerSecond) + 1);
+            Interlocked.CompareExchange(ref _frameCount, frameCount, 0);
+            frameCount = Volatile.Read(ref _frameCount);
+        }
+
+        var clamped = Math.Clamp(frameIndex, 0, frameCount - 1);
         var time = clamped / FramesPerSecond;
-        var transforms = AnimationPoseEvaluator.Evaluate(_model, Animation, time);
+        var transforms = AnimationPoseEvaluator.Evaluate(_model, animation, time);
 
         for (var i = 0; i < _nodes.Length && i < destination.Length; i++)
         {
