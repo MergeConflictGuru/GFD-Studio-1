@@ -1857,10 +1857,10 @@ namespace GFDStudio.GUI.Forms
             foreach (var candidate in mCharacterAnimations)
             {
                 candidate.IsAutoLoaded = entry != null &&
-                    !AreSamePath(candidate.PackPath, entry.PackPath) &&
                     candidate.Kind == entry.Kind &&
                     candidate.Index == entry.Index &&
-                    paths.Any(path => AreSamePath(path, candidate.PackPath));
+                    (AreSamePath(candidate.PackPath, entry.PackPath) ||
+                     paths.Any(path => AreSamePath(path, candidate.PackPath)));
             }
 
             mCharacterAnimationListBox?.Refresh();
@@ -2021,7 +2021,8 @@ namespace GFDStudio.GUI.Forms
                 animation = ComposeCharacterBrowserAnimation(
                     entry, animation, selectedFacePath, selectedHairPath,
                     out hasSplitComponents, out autoLoadedPackPaths);
-                SetCharacterBrowserAnimationAutoLoaded(entry, autoLoadedPackPaths);
+                SetCharacterBrowserAnimationAutoLoaded(
+                    entry, hasSplitComponents ? autoLoadedPackPaths : null);
             }
 
             sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
@@ -2034,14 +2035,14 @@ namespace GFDStudio.GUI.Forms
                             entry.PackPath, sourceModelEntry, selectedFacePath, selectedHairPath))
                     {
                         retargetNote = hasSplitComponents
-                            ? "auto loaded"
+                            ? "loaded with selected face/hair tracks"
                             : "loaded without retargeting";
                     }
                     else
                     {
                         animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false);
                         retargetNote = hasSplitComponents
-                            ? "auto loaded"
+                            ? "retargeted in preview with selected face/hair tracks"
                             : "retargeted in preview";
                     }
                     break;
@@ -2114,8 +2115,6 @@ namespace GFDStudio.GUI.Forms
                 {
                     var basePack = Resource.Load<AnimationPack>(basePath);
                     bodyAnimation = GetCharacterBrowserNormalAnimation(basePack, entry.Index);
-                    if (bodyAnimation != null)
-                        loadedPaths.Add(basePath);
                 }
                 catch (Exception exception)
                 {
@@ -2126,6 +2125,8 @@ namespace GFDStudio.GUI.Forms
 
             if (bodyAnimation == null)
                 return selectedAnimation;
+
+            loadedPaths.Add(basePath);
 
             var splitPaths = new List<string>();
             if (!string.IsNullOrWhiteSpace(selectedFacePath))
@@ -2169,7 +2170,7 @@ namespace GFDStudio.GUI.Forms
 
             if (components.Count == 0)
             {
-                autoLoadedPackPaths = loadedPaths.ToArray();
+                autoLoadedPackPaths = Array.Empty<string>();
                 return bodyAnimation;
             }
 
