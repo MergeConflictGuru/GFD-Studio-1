@@ -1,5 +1,6 @@
 ﻿using System;
 using System.ComponentModel;
+using System.IO;
 using System.Windows.Forms;
 using GFDLibrary;
 using GFDLibrary.Animations;
@@ -69,30 +70,58 @@ namespace GFDStudio.GUI.DataViewNodes
             {
                 Data.ConvertToP5();
             });
-            RegisterCustomHandler("Tools", "Retarget split Dance character (experimental)", () =>
+            RegisterCustomHandler("Tools", "Export split Dance GAPs (body/face/hair)", () =>
             {
                 if (MessageBox.Show("Select the source GMD, Dance body, face, hair, and a native Dance base GAP.\n\n" +
-                    "This exports one assembled GMD with skeletal animations and reference-based knee correction. " +
+                    "This exports three Dance animation files with skeletal animation and reference-based knee correction. " +
                     "Facial expressions, unmatched hair/cloth motion and in-game compatibility are not converted or guaranteed.",
-                    "Experimental split-character retarget", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                    "Split-character retarget", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
                 try
                 {
-                    var source = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the original P5/P5R model.");
+                    var source = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the original P5/P5R model.", out _);
                     if (source?.Model == null) return;
-                    var body = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the Dance body GMD.");
+                    var body = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the Dance body GMD.", out var bodyPath);
                     if (body?.Model == null) return;
-                    var face = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the matching Dance face GMD.");
+                    var face = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the matching Dance face GMD.", out _);
                     if (face?.Model == null) return;
-                    var hair = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the matching Dance hair GMD.");
+                    var hair = ModuleImportUtilities.SelectImportFile<ModelPack>("Select the matching Dance hair GMD.", out var hairPath);
                     if (hair?.Model == null) return;
-                    var native = ModuleImportUtilities.SelectImportFile<AnimationPack>("Select a native Dance base GAP (not _f, _h or costume overlay).");
+                    var native = ModuleImportUtilities.SelectImportFile<AnimationPack>("Select a native Dance base GAP (not _f, _h or costume overlay).", out _);
                     if (native == null || native.Animations.Count == 0) return;
-                    using var save = new SaveFileDialog { Filter = "Assembled preview (*.GMD)|*.GMD", FileName = "retargeted_character_preview.GMD" };
+                    using var save = new SaveFileDialog {
+                        Filter = "Animation pack (*.GAP)|*.GAP",
+                        InitialDirectory = Path.GetDirectoryName(bodyPath),
+                        FileName = Path.GetFileNameWithoutExtension(bodyPath) + "_port_p.GAP",
+                        Title = "Choose the output body GAP; face and hair GAPs will be placed beside it"
+                    };
                     if (save.ShowDialog() != DialogResult.OK) return;
                     var preview = SplitCharacterRetargeter.CreatePreview(source.Model, Data, body, face, hair, native.Animations[0]);
-                    preview.Save(save.FileName);
-                    MessageBox.Show("Saved the assembled preview with embedded animations:\n" + save.FileName +
-                        "\n\nOpen that GMD to inspect all parts together. The source animation pack was not changed.", "Retarget preview saved");
+                    var outputDirectory = Path.GetDirectoryName(save.FileName);
+                    var outputStem = Path.GetFileNameWithoutExtension(save.FileName);
+                    var hairName = Path.GetFileNameWithoutExtension(hairPath);
+                    var hairTag = "h00";
+                    var hairMarker = hairName.LastIndexOf("_h", StringComparison.OrdinalIgnoreCase);
+                    if (hairMarker >= 0 && hairMarker + 3 <= hairName.Length)
+                    {
+                        var candidate = hairName.Substring(hairMarker + 1);
+                        var hasOnlyDigits = candidate.Length > 1;
+                        for (var i = 1; hasOnlyDigits && i < candidate.Length; i++)
+                            hasOnlyDigits = char.IsDigit(candidate[i]);
+                        if (hasOnlyDigits)
+                            hairTag = candidate;
+                    }
+                    var facePath = Path.Combine(outputDirectory, outputStem + "_f.GAP");
+                    var hairOutputPath = Path.Combine(outputDirectory, outputStem + "_" + hairTag + ".GAP");
+                    if (File.Exists(save.FileName) || File.Exists(facePath) || File.Exists(hairOutputPath))
+                    {
+                        if (MessageBox.Show("One or more output files already exist. Overwrite them?", "Confirm overwrite",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                    }
+                    SplitCharacterRetargeter.ForStandalonePart(preview, body.Model).Save(save.FileName);
+                    SplitCharacterRetargeter.ForStandalonePart(preview, face.Model).Save(facePath);
+                    SplitCharacterRetargeter.ForStandalonePart(preview, hair.Model).Save(hairOutputPath);
+                    MessageBox.Show("Saved three Dance animation packs:\n" + save.FileName + "\n" + facePath + "\n" + hairOutputPath +
+                        "\n\nThe source animation pack was not changed.", "Split retarget saved");
                 }
                 catch (Exception exception)
                 {

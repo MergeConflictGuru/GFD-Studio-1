@@ -167,6 +167,46 @@ namespace GFDLibrary.Tests
         }
 
         [TestMethod]
+        public void RetargetMapsDanceHairFamilyNamesAcrossHairRigs()
+        {
+            var sourceRoot = new Node("RootNode");
+            sourceRoot.AddChildNode(new Node("L_B_longhair_00"));
+            var source = new Model(ResourceVersion.Persona5Dancing) { RootNode = sourceRoot };
+
+            var targetRoot = new Node("RootNode");
+            targetRoot.AddChildNode(new Node("L_hair_00"));
+            var target = new Model(ResourceVersion.Persona5Dancing) { RootNode = targetRoot };
+
+            var animation = new Animation(source.Version);
+            animation.Controllers.Add(CreateController("L_B_longhair_00"));
+
+            animation.Retarget(source, target, false);
+
+            Assert.AreEqual("L_hair_00", animation.Controllers.Single().TargetName);
+            Assert.AreEqual(1, animation.Controllers.Single().TargetId);
+        }
+
+        [TestMethod]
+        public void RetargetMapsP5RoyalHairToDanceLongHairFamily()
+        {
+            var sourceRoot = new Node("RootNode");
+            sourceRoot.AddChildNode(new Node("b l hair01"));
+            var source = new Model(ResourceVersion.Persona5Royal) { RootNode = sourceRoot };
+
+            var targetRoot = new Node("RootNode");
+            targetRoot.AddChildNode(new Node("L_B_longhair_00"));
+            var target = new Model(ResourceVersion.Persona5Royal) { RootNode = targetRoot };
+
+            var animation = new Animation(source.Version);
+            animation.Controllers.Add(CreateController("b l hair01"));
+
+            animation.Retarget(source, target, false);
+
+            Assert.AreEqual("L_B_longhair_00", animation.Controllers.Single().TargetName);
+            Assert.AreEqual(1, animation.Controllers.Single().TargetId);
+        }
+
+        [TestMethod]
         public void CrossGameBakePreservesBindPoseWithDifferentAxesAndParents()
         {
             var (source, target) = CreateDifferentSkeletons();

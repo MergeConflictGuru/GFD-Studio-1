@@ -1932,23 +1932,10 @@ namespace GFDStudio.GUI.Forms
             if (targetModelPack?.Model == null)
                 return animation;
 
-            var currentModelPath = GetCurrentCharacterBrowserModelPath();
-            if (AreSameCharacter(entry.PackPath, currentModelPath))
-            {
-                retargetNote = "same character";
-                return animation;
-            }
-
             var sourceModelEntry = FindCharacterModelForAnimation(entry.PackPath);
             if (sourceModelEntry == null)
             {
                 retargetNote = "source model not found; preview uses original animation";
-                return animation;
-            }
-
-            if (AreSamePath(sourceModelEntry.Path, currentModelPath))
-            {
-                retargetNote = "source model";
                 return animation;
             }
 
@@ -1958,6 +1945,9 @@ namespace GFDStudio.GUI.Forms
                 retargetNote = "source model has no model data; preview uses original animation";
                 return animation;
             }
+
+            sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
+                entry.PackPath, sourceModelEntry, sourceModelPack);
 
             switch (entry.Kind)
             {
@@ -1980,16 +1970,76 @@ namespace GFDStudio.GUI.Forms
             return animation;
         }
 
-        private string GetCurrentCharacterBrowserModelPath()
+        private ModelPack ComposeCharacterBrowserAnimationSourceModel(
+            string gapPath, CharacterModelEntry bodyEntry, ModelPack bodyPack)
         {
-            if (!string.IsNullOrWhiteSpace(mCharacterBrowserCurrentModelPath))
-                return mCharacterBrowserCurrentModelPath;
+            if (!IsSplitDanceBodyPath(bodyEntry.Path))
+                return bodyPack;
 
-            if (!string.IsNullOrWhiteSpace(LastOpenedFilePath) &&
-                string.Equals(Path.GetExtension(LastOpenedFilePath), ".GMD", StringComparison.OrdinalIgnoreCase))
-                return LastOpenedFilePath;
+            var characterId = ExtractCharacterId(bodyEntry.Path);
+            if (string.IsNullOrWhiteSpace(characterId))
+                return bodyPack;
 
-            return mCharacterBrowserCurrentModelPath;
+            var parts = new List<CharacterModelEntry> { bodyEntry };
+            var stem = Path.GetFileNameWithoutExtension(gapPath) ?? string.Empty;
+            var hairMatch = Regex.Match(stem, @"(?:^|_)h(?<id>\d+)$", RegexOptions.IgnoreCase);
+            if (hairMatch.Success)
+            {
+                var hairName = "pc" + characterId + "_h" + hairMatch.Groups["id"].Value;
+                var hairEntry = FindCharacterBrowserAnimationSplitPart(
+                    bodyEntry.Path, CharacterModelPart.Hair, characterId, hairName);
+                if (hairEntry != null)
+                    parts.Add(hairEntry);
+            }
+            else if (Regex.IsMatch(stem, @"(?:^|_)f$", RegexOptions.IgnoreCase))
+            {
+                var faceEntry = FindCharacterBrowserAnimationSplitPart(
+                    bodyEntry.Path, CharacterModelPart.Face, characterId, null);
+                if (faceEntry != null)
+                    parts.Add(faceEntry);
+            }
+
+            return parts.Count == 1 ? bodyPack : ComposeCharacterModelPack(parts);
+        }
+
+        private CharacterModelEntry FindCharacterBrowserAnimationSplitPart(
+            string bodyPath, CharacterModelPart part, string characterId, string fileStem)
+        {
+            var matchingModels = mCharacterModels
+                .Where(model => model.Part == part)
+                .Where(model => string.Equals(ExtractCharacterId(model.Path), characterId,
+                                              StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(fileStem))
+            {
+                matchingModels = matchingModels.Where(model =>
+                    string.Equals(Path.GetFileNameWithoutExtension(model.Path), fileStem,
+                                  StringComparison.OrdinalIgnoreCase));
+            }
+
+            var indexedMatch = matchingModels
+                .OrderBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (indexedMatch != null)
+                return indexedMatch;
+
+            var bodyDirectory = Path.GetDirectoryName(bodyPath);
+            if (string.IsNullOrWhiteSpace(bodyDirectory))
+                return null;
+
+            var partDirectory = part == CharacterModelPart.Hair ? "hair" : "face";
+            var candidateStem = fileStem ?? "pc" + characterId + "_f1";
+            var candidatePath = Path.Combine(bodyDirectory, partDirectory, candidateStem + ".GMD");
+            return File.Exists(candidatePath)
+                ? new CharacterModelEntry { Path = candidatePath, Part = part, DisplayName = candidatePath }
+                : null;
+        }
+
+        private static bool IsSplitDanceBodyPath(string path)
+        {
+            return Regex.IsMatch(
+                Path.GetFileNameWithoutExtension(path) ?? string.Empty,
+                @"^pc\d+_\d+$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
         private static bool AreSamePath(string firstPath, string secondPath)
@@ -2006,14 +2056,6 @@ namespace GFDStudio.GUI.Forms
             {
                 return string.Equals(firstPath, secondPath, StringComparison.OrdinalIgnoreCase);
             }
-        }
-
-        private static bool AreSameCharacter(string firstPath, string secondPath)
-        {
-            var firstCharacterId = ExtractCharacterId(firstPath);
-            var secondCharacterId = ExtractCharacterId(secondPath);
-            return !string.IsNullOrWhiteSpace(firstCharacterId) &&
-                   string.Equals(firstCharacterId, secondCharacterId, StringComparison.OrdinalIgnoreCase);
         }
 
         private CharacterModelEntry FindCharacterModelForAnimation(string gapPath)

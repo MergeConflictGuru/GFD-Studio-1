@@ -67,6 +67,12 @@ namespace GFDLibrary.Animations
                         var position = target.Translation;
                         if (target == motionRoot)
                         {
+                            // Preserve the target rig's bind position and apply
+                            // the source's animated world-space displacement.
+                            // The evaluated model poses already include each
+                            // game's coordinate-conversion ancestors; applying
+                            // those rotations again would rotate root motion a
+                            // second time and lift some Dance poses.
                             var worldPosition = targetBind[target].Translation +
                                 (sourcePose[source].Translation - sourceBind[source].Translation) * heightRatio;
                             Matrix4x4.Invert(parentWorld, out var inverseParent);

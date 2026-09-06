@@ -89,6 +89,15 @@ namespace GFDStudio.FormatModules
         /// <returns></returns>
         public static T SelectImportFile<T>( string title = "Select file to import" ) where T : class
         {
+            return SelectImportFile<T>( title, out _ );
+        }
+
+        /// <summary>
+        /// Selects and imports a file while also returning its original path.
+        /// </summary>
+        public static T SelectImportFile<T>( string title, out string filePath ) where T : class
+        {
+            filePath = null;
             using ( var dialog = new OpenFileDialog() )
             {
                 dialog.Filter             = ModuleFilterGenerator.GenerateFilter( new[] { FormatModuleUsageFlags.Import }, typeof( T ) ).Filter;
@@ -101,6 +110,7 @@ namespace GFDStudio.FormatModules
                 if ( dialog.ShowDialog() != DialogResult.OK )
                     return null;
 
+                filePath = dialog.FileName;
                 return ImportFile<T>( dialog.FileName );
             }
         }
