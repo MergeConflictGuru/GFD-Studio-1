@@ -396,58 +396,30 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
-        Task<Image> IGfdAnimationMatchingHost.RenderCandidateThumbnailAsync(
+        async Task<IReadOnlyList<Image>> IGfdAnimationMatchingHost.RenderCandidateThumbnailAsync(
             IAnimationClip clip,
             int frame,
             int width,
             int height,
             CancellationToken cancellationToken)
         {
-            return Task.Run(() => DrawAnimationMatchPoseThumbnail(clip, frame, width, height, cancellationToken), cancellationToken);
-        }
+            var targetPack = GetAnimationMatchingTargetModelPack();
+            if (targetPack?.Model == null)
+                return null;
 
-        private static Image DrawAnimationMatchPoseThumbnail(
-            IAnimationClip clip,
-            int frame,
-            int width,
-            int height,
-            CancellationToken cancellationToken)
-        {
+            const int previewFrameCount = 8;
+            var availableFrames = Math.Max(1, clip.FrameCount - Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1)));
+            var frameCount = Math.Min(previewFrameCount, availableFrames);
+            var firstFrame = Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1));
+            var baked = await Task.Run(() => GfdAnimationClipBaker.BakeRange(
+                clip, targetPack.Model, targetPack.Version, firstFrame, frameCount, cancellationToken), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            width = Math.Max(32, width);
-            height = Math.Max(32, height);
-            var pose = new BoneTransform[clip.Skeleton.BoneCount];
-            clip.SampleGlobalPose(frame, pose);
 
-            var minX = pose.Min(transform => transform.Position.X);
-            var maxX = pose.Max(transform => transform.Position.X);
-            var minY = pose.Min(transform => transform.Position.Y);
-            var maxY = pose.Max(transform => transform.Position.Y);
-            var spanX = Math.Max(0.001f, maxX - minX);
-            var spanY = Math.Max(0.001f, maxY - minY);
-            var scale = Math.Min((width - 12f) / spanX, (height - 12f) / spanY);
-            var centerX = (minX + maxX) * 0.5f;
-            var centerY = (minY + maxY) * 0.5f;
-
-            PointF Project(System.Numerics.Vector3 point) => new(
-                width * 0.5f + (point.X - centerX) * scale,
-                height * 0.5f - (point.Y - centerY) * scale);
-
-            var bitmap = new Bitmap(width, height);
-            using var graphics = Graphics.FromImage(bitmap);
-            graphics.Clear(Color.FromArgb(24, 24, 24));
-            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using var bonePen = new Pen(Color.FromArgb(190, 210, 220), 1.5f);
-            using var jointBrush = new SolidBrush(Color.FromArgb(225, 225, 225));
-            for (var i = 0; i < pose.Length; i++)
-            {
-                var point = Project(pose[i].Position);
-                var parent = clip.Skeleton.Parents[i];
-                if (parent >= 0 && parent < pose.Length)
-                    graphics.DrawLine(bonePen, point, Project(pose[parent].Position));
-                graphics.FillEllipse(jointBrush, point.X - 1.5f, point.Y - 1.5f, 3f, 3f);
-            }
-            return bitmap;
+            var times = Enumerable.Range(0, frameCount)
+                .Select(index => index / (double)AnimationMatchingFramesPerSecond)
+                .ToArray();
+            var bitmaps = ModelViewControl.Instance.RenderAnimationThumbnails(baked, times, width, height);
+            return bitmaps.Cast<Image>().ToArray();
         }
 
         async Task IGfdAnimationMatchingHost.ExportAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken)

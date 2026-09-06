@@ -20,6 +20,7 @@ public sealed class AnimationMatchingModeController : IDisposable
     private CancellationTokenSource? _work;
     private StitchedAnimation? _stitched;
     private IAnimationClip? _sourceForResults;
+    private readonly SemaphoreSlim _thumbnailGate = new(1, 1);
 
     public AnimationMatchingModeController(IGfdAnimationMatchingHost host, AnimationMatchingModeControl view, AnimationMatchOptions? options = null)
     {
@@ -174,12 +175,20 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async void OnThumbnailRequested(object? sender, ThumbnailRequest request)
     {
+        var entered = false;
         try
         {
-            var image = await _host.RenderCandidateThumbnailAsync(request.Result.Candidate, request.Result.CandidateFrame, request.Width, request.Height, CancellationToken.None);
-            request.Complete(image);
+            await _thumbnailGate.WaitAsync();
+            entered = true;
+            var frames = await _host.RenderCandidateThumbnailAsync(request.Result.Candidate, request.Result.CandidateFrame, request.Width, request.Height, CancellationToken.None);
+            request.Complete(frames);
         }
         catch { request.Complete(null); }
+        finally
+        {
+            if (entered)
+                _thumbnailGate.Release();
+        }
     }
 
     private void RestartWork()

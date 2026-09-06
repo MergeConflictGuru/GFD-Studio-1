@@ -17,8 +17,8 @@ public interface IGfdAnimationMatchingHost
     /// <summary>Displays a clip in the existing left model viewer and seeks to frame zero.</summary>
     void PreviewAnimation(IAnimationClip clip, int transitionFrame = -1);
 
-    /// <summary>Produces a small same-model preview for a candidate result. May return null.</summary>
-    Task<Image?> RenderCandidateThumbnailAsync(IAnimationClip clip, int frame, int width, int height, CancellationToken cancellationToken);
+    /// <summary>Produces animated small same-model frames for a candidate result. May return null.</summary>
+    Task<IReadOnlyList<Image>> RenderCandidateThumbnailAsync(IAnimationClip clip, int frame, int width, int height, CancellationToken cancellationToken);
 
     /// <summary>Exports a stitched/resampled clip using the normal GFD Studio animation export path.</summary>
     Task ExportAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken);

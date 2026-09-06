@@ -12,11 +12,27 @@ namespace GFDStudio.AnimationMatching.Integration;
 public static class GfdAnimationClipBaker
 {
     public static Animation Bake(IAnimationClip clip, Model targetModel, uint version, CancellationToken cancellationToken = default)
+        => BakeRange(clip, targetModel, version, 0, clip?.FrameCount ?? 0, cancellationToken);
+
+    public static Animation BakeRange(
+        IAnimationClip clip,
+        Model targetModel,
+        uint version,
+        int firstFrame,
+        int frameCount,
+        CancellationToken cancellationToken = default)
     {
         if (clip == null)
             throw new ArgumentNullException(nameof(clip));
         if (targetModel == null)
             throw new ArgumentNullException(nameof(targetModel));
+        if (clip.FrameCount <= 0)
+            throw new ArgumentException("The animation clip has no frames.", nameof(clip));
+        if (frameCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(frameCount));
+
+        firstFrame = Math.Clamp(firstFrame, 0, clip.FrameCount - 1);
+        frameCount = Math.Min(frameCount, clip.FrameCount - firstFrame);
 
         var nodes = targetModel.Nodes.ToArray();
         if (nodes.Length == 0)
@@ -32,7 +48,7 @@ public static class GfdAnimationClipBaker
 
         var animation = new Animation(version)
         {
-            Duration = Math.Max(0f, (clip.FrameCount - 1) / clip.FramesPerSecond)
+            Duration = Math.Max(0f, (frameCount - 1) / clip.FramesPerSecond)
         };
 
         var layers = new AnimationLayer[nodes.Length];
@@ -60,10 +76,10 @@ public static class GfdAnimationClipBaker
 
         var pose = new BoneTransform[clip.Skeleton.BoneCount];
         var globals = new Matrix4x4[nodes.Length];
-        for (var frame = 0; frame < clip.FrameCount; frame++)
+        for (var frame = 0; frame < frameCount; frame++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            clip.SampleGlobalPose(frame, pose);
+            clip.SampleGlobalPose(firstFrame + frame, pose);
             var time = frame / clip.FramesPerSecond;
 
             for (var i = 0; i < nodes.Length; i++)
@@ -116,4 +132,12 @@ public static class GfdAnimationClipBaker
 
         return animation;
     }
+
+    public static Animation BakeFrame(
+        IAnimationClip clip,
+        Model targetModel,
+        uint version,
+        int frame,
+        CancellationToken cancellationToken = default)
+        => BakeRange(clip, targetModel, version, frame, 1, cancellationToken);
 }
