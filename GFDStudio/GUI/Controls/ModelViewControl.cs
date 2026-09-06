@@ -527,6 +527,116 @@ namespace GFDStudio.GUI.Controls
             }
         }
 
+        /// <summary>
+        /// Renders animation frames through the same loaded target model and OpenGL materials used by
+        /// the main viewport. The current viewport animation is restored before returning.
+        /// Must be called on the UI thread that owns this GL control.
+        /// </summary>
+        public IReadOnlyList<Bitmap> RenderAnimationThumbnails(Animation animation, IReadOnlyList<double> times, int width, int height)
+        {
+            if ( animation == null )
+                throw new ArgumentNullException( nameof( animation ) );
+            if ( times == null || times.Count == 0 )
+                throw new ArgumentException( "At least one thumbnail time is required.", nameof( times ) );
+            if ( !mCanRender || !mIsModelLoaded || mModel == null || mCamera == null )
+                throw new InvalidOperationException( "The model viewport is not ready." );
+
+            width = Math.Max( 32, width );
+            height = Math.Max( 32, height );
+            MakeCurrent();
+
+            var oldAnimation = Animation;
+            var oldAnimationOverlay = AnimationOverlay;
+            var oldAnimationTime = mAnimationTime;
+            var oldAspectRatio = mCamera.AspectRatio;
+            var frames = new List<Bitmap>( times.Count );
+            try
+            {
+                Animation = animation;
+                AnimationOverlay = null;
+                mModel.LoadAnimation( animation );
+
+                foreach ( var time in times )
+                {
+                    mAnimationTime = Math.Max( 0d, time );
+                    frames.Add( RenderModelThumbnail( width, height, oldAspectRatio ) );
+                }
+
+                return frames;
+            }
+            catch
+            {
+                foreach ( var frame in frames )
+                    frame.Dispose();
+                throw;
+            }
+            finally
+            {
+                Animation = oldAnimation;
+                AnimationOverlay = oldAnimationOverlay;
+                mAnimationTime = oldAnimationTime;
+                mCamera.AspectRatio = oldAspectRatio;
+                if ( oldAnimation != null )
+                    mModel.LoadAnimation( oldAnimation );
+                else
+                    mModel.UnloadAnimation();
+                if ( oldAnimationOverlay != null )
+                    mModel.LoadBlendAnimation( oldAnimationOverlay );
+                Invalidate();
+            }
+        }
+
+        private Bitmap RenderModelThumbnail( int width, int height, float oldAspectRatio )
+        {
+            var viewport = new int[4];
+            GL.GetInteger( GetPName.Viewport, viewport );
+            try
+            {
+                mCamera.AspectRatio = (float)width / height;
+                GL.Viewport( 0, 0, width, height );
+                GL.Enable( EnableCap.DepthTest );
+                GL.DepthMask( true );
+                GL.Disable( EnableCap.Blend );
+                GL.Clear( ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit );
+                mModel.Draw( new DrawContext
+                {
+                    ShaderRegistry = mShaderRegistry,
+                    Camera = mCamera,
+                    AnimationTime = mAnimationTime,
+                    SelectedMaterial = null,
+                    SelectedMesh = null
+                } );
+                GL.Flush();
+
+                var pixels = new byte[width * height * 4];
+                GL.ReadPixels( 0, 0, width, height, PixelFormat.Bgra, PixelType.UnsignedByte, pixels );
+                var bitmap = new Bitmap( width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb );
+                var data = bitmap.LockBits(
+                    new Rectangle( 0, 0, width, height ),
+                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb );
+                try
+                {
+                    for ( var y = 0; y < height; y++ )
+                    {
+                        var sourceOffset = y * width * 4;
+                        var destination = IntPtr.Add( data.Scan0, ( height - 1 - y ) * data.Stride );
+                        Marshal.Copy( pixels, sourceOffset, destination, width * 4 );
+                    }
+                }
+                finally
+                {
+                    bitmap.UnlockBits( data );
+                }
+                return bitmap;
+            }
+            finally
+            {
+                GL.Viewport( viewport[0], viewport[1], viewport[2], viewport[3] );
+                mCamera.AspectRatio = oldAspectRatio;
+            }
+        }
+
         public void LoadAnimationOverlay( Animation animation )
         {
             AnimationOverlay = animation;

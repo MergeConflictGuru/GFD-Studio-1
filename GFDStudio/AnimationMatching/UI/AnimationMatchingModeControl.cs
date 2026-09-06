@@ -10,9 +10,9 @@ public delegate void AnimationMatchResultEventHandler(object? sender, AnimationM
 
 public sealed class ThumbnailRequest : EventArgs
 {
-    private readonly Action<Image?> _complete;
+    private readonly Action<IReadOnlyList<Image>> _complete;
 
-    public ThumbnailRequest(AnimationMatchResult result, int width, int height, Action<Image?> complete)
+    public ThumbnailRequest(AnimationMatchResult result, int width, int height, Action<IReadOnlyList<Image>> complete)
     {
         Result = result;
         Width = width;
@@ -23,7 +23,79 @@ public sealed class ThumbnailRequest : EventArgs
     public AnimationMatchResult Result { get; }
     public int Width { get; }
     public int Height { get; }
-    public void Complete(Image? image) => _complete(image);
+    public void Complete(IReadOnlyList<Image> frames) => _complete(frames);
+}
+
+/// <summary>Displays the target-model thumbnail frames as a lightweight looping animation.</summary>
+internal sealed class AnimationThumbnailControl : Control
+{
+    private readonly Timer _timer;
+    private IReadOnlyList<Image> _frames;
+    private int _frameIndex;
+
+    public AnimationThumbnailControl()
+    {
+        DoubleBuffered = true;
+        BackColor = Color.FromArgb(24, 24, 24);
+        _timer = new Timer { Interval = 90 };
+        _timer.Tick += (_, _) =>
+        {
+            if (_frames == null || _frames.Count < 2)
+                return;
+            _frameIndex = (_frameIndex + 1) % _frames.Count;
+            Invalidate();
+        };
+    }
+
+    public void SetFrames(IReadOnlyList<Image> frames)
+    {
+        DisposeFrames();
+        _frames = frames;
+        _frameIndex = 0;
+        _timer.Enabled = _frames != null && _frames.Count > 1;
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(BackColor);
+        if (_frames == null || _frames.Count == 0 || _frames[_frameIndex] == null)
+            return;
+
+        var image = _frames[_frameIndex];
+        var scale = Math.Min((float)ClientSize.Width / image.Width, (float)ClientSize.Height / image.Height);
+        if (scale <= 0)
+            return;
+
+        var width = image.Width * scale;
+        var height = image.Height * scale;
+        var destination = new RectangleF(
+            (ClientSize.Width - width) * 0.5f,
+            (ClientSize.Height - height) * 0.5f,
+            width,
+            height);
+        e.Graphics.DrawImage(image, destination);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _timer.Stop();
+            _timer.Dispose();
+            DisposeFrames();
+        }
+        base.Dispose(disposing);
+    }
+
+    private void DisposeFrames()
+    {
+        if (_frames == null)
+            return;
+        foreach (var frame in _frames)
+            frame?.Dispose();
+        _frames = null;
+    }
 }
 
 /// <summary>
@@ -244,13 +316,12 @@ public sealed class AnimationMatchingModeControl : UserControl
             Cursor = Cursors.Hand,
             Tag = result
         };
-        var image = new PictureBox
+        var image = new AnimationThumbnailControl
         {
             Left = 4,
             Top = 4,
             Width = cardWidth - 10,
             Height = 88,
-            SizeMode = PictureBoxSizeMode.Zoom,
             BackColor = Color.FromArgb(24, 24, 24)
         };
         var title = new Label
@@ -290,19 +361,19 @@ public sealed class AnimationMatchingModeControl : UserControl
         title.Click += Activate;
         detail.Click += Activate;
 
-        ThumbnailRequested?.Invoke(this, new ThumbnailRequest(result, image.Width, image.Height, thumb =>
+        ThumbnailRequested?.Invoke(this, new ThumbnailRequest(result, image.Width, image.Height, frames =>
         {
             if (IsDisposed || image.IsDisposed)
             {
-                thumb?.Dispose();
+                if (frames != null)
+                    foreach (var frame in frames)
+                        frame?.Dispose();
                 return;
             }
 
             void Apply()
             {
-                var old = image.Image;
-                image.Image = thumb;
-                old?.Dispose();
+                image.SetFrames(frames);
             }
 
             if (InvokeRequired)
