@@ -24,7 +24,7 @@ var pack = Resource.Load<AnimationPack>(animationPath);
 Console.SetOut(stdout);
 if (args.Contains("--native")) {
     var nativeRoot = $@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}";
-    foreach (var suffix in new[] { "", "_26", "_f", "_h26" }) {
+    foreach (var suffix in new[] { "", "_26", "_f", "_h00" }) {
         var native = Resource.Load<AnimationPack>(Path.Combine(nativeRoot, "pc" + danceId + "_" + nativeAnimationId + "_p" + suffix + ".GAP"));
         Console.WriteLine($"NATIVE {suffix}: {native.Animations.Count} clips");
         var anim = native.Animations[0];
@@ -66,6 +66,41 @@ if (args.Contains("--parts")) {
     }
     return;
 }
+if (args.Contains("--compare-hair")) {
+    var hairPath = $@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\hair\pc{danceId}_{hairId}.GMD";
+    var nativeHairPath = $@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}\pc{danceId}_{nativeAnimationId}_p_{hairId}.GAP";
+    var generatedHairPath = Path.GetFullPath($"artifacts/retarget-{characterId}-{danceId}-assembled/pc{danceId}_26_p_{hairId}.GAP");
+    var hair = Resource.Load<ModelPack>(hairPath);
+    var nativeHair = Resource.Load<AnimationPack>(nativeHairPath);
+    var generatedHair = Resource.Load<AnimationPack>(generatedHairPath);
+    Console.WriteLine("BONES");
+    foreach (var (bone, index) in hair.Model.Bones.Select((bone, index) => (bone, index)))
+        Console.WriteLine($"  {index}: node={hair.Model.Nodes.ElementAt(bone.NodeIndex).Name} nodeId={bone.NodeIndex}");
+    foreach (var (label, animationPack) in new[] { ("NATIVE", nativeHair), ("GENERATED", generatedHair) }) {
+        var animation = animationPack.Animations[0];
+        Console.WriteLine($"{label}: flags={animationPack.Flags} duration={animation.Duration} speed={animation.Speed} controllers={animation.Controllers.Count}");
+        foreach (var controller in animation.Controllers) {
+            Console.WriteLine($"  {controller.TargetName} id={controller.TargetId} layers=" +
+                string.Join("; ", controller.Layers.Select(layer => $"{layer.KeyType}:{layer.Keys.Count}:PScale={layer.PositionScale}")));
+        }
+    }
+    var nativeAnimation = nativeHair.Animations[0];
+    var generatedAnimation = generatedHair.Animations[0];
+    foreach (var timeFraction in new[] { 0f, .5f, 1f }) {
+        var nativeTime = nativeAnimation.Duration * timeFraction;
+        var generatedTime = generatedAnimation.Duration * timeFraction;
+        var nativePose = AnimationPoseEvaluator.Evaluate(hair.Model, nativeAnimation, nativeTime);
+        var generatedPose = AnimationPoseEvaluator.Evaluate(hair.Model, generatedAnimation, generatedTime);
+        Console.WriteLine($"POSE fraction={timeFraction:F1} nativeTime={nativeTime} generatedTime={generatedTime}");
+        foreach (var name in new[] { "R_hair_00", "R_hair_01", "R_hair_02", "R_hair_03", "R_hair02_01", "L_hair_00", "L_hair_01", "L_hair_02", "L_hair_03", "L_hair02_01", "F_hair_00", "F_hair_01" }) {
+            var node = hair.Model.Nodes.First(n => n.Name == name);
+            Matrix4x4.Decompose(nativePose[node], out _, out var nativeRotation, out var nativePosition);
+            Matrix4x4.Decompose(generatedPose[node], out _, out var generatedRotation, out var generatedPosition);
+            Console.WriteLine($"  {name}: N.P={nativePosition} G.P={generatedPosition} N.R={nativeRotation} G.R={generatedRotation}");
+        }
+    }
+    return;
+}
 if (args.Contains("--nodes")) foreach (var (label, model) in new[] { ("SOURCE", source.Model), ("TARGET", target.Model) }) {
     Console.WriteLine($"{label}: nodes={model.Nodes.Count()} meshes={model.Meshes.Count()}");
     foreach (var n in model.Nodes.Where(n => n.Name.StartsWith("Bip01") || !n.HasAttachments && label == "TARGET" || n.Name == "root" || n.Name == "rot")) {
@@ -89,7 +124,9 @@ if (args.Contains("--assembled")) {
     var combined = SplitCharacterRetargeter.CreatePreview(source.Model, pack, target, face, hair, native.Animations[0]);
     combined.Save(Path.Combine(outputDirectory, $"pc{danceId}_26_preview.GMD"));
     foreach (var (part, suffix) in new[] {(target.Model, ""), (face.Model, "_f"), (hair.Model, "_" + hairId)}) {
-        var standalone = SplitCharacterRetargeter.ForStandalonePart(combined, part);
+        var partKind = suffix == "" ? SplitCharacterPart.Body :
+            suffix == "_f" ? SplitCharacterPart.Face : SplitCharacterPart.Hair;
+        var standalone = SplitCharacterRetargeter.ForStandalonePart(combined, part, partKind);
         var standalonePath = Path.Combine(outputDirectory, "pc" + danceId + "_26_p" + suffix + ".GAP");
         standalone.Save(standalonePath);
         var standaloneReadback = Resource.Load<AnimationPack>(standalonePath);
@@ -141,11 +178,12 @@ if (args.Contains("--assembled")) {
             Console.WriteLine($"Roundtrip clip {clip}: controllers={roundtrip.Controllers.Count}, duplicate targets={duplicates}");
             foreach (var frame in new[] { 0, 2, 4 }) {
                 var time = roundtrip.Duration * frame / 4f;
-                var sourcePose = AnimationPoseEvaluator.Evaluate(source.Model, pack.Animations[clip], time);
+                var referencePose = AnimationPoseEvaluator.Evaluate(
+                    combined.Model, combined.AnimationPack.Animations[clip], time);
                 var targetPose = AnimationPoseEvaluator.Evaluate(combined.Model, roundtrip, time);
-                PoseRender.Draw(source.Model, sourcePose, combined.Model, targetPose,
+                PoseRender.Draw(combined.Model, referencePose, combined.Model, targetPose,
                     Path.Combine(outputDirectory, $"roundtrip-clip-{clip}-{frame}.png"),
-                    $"c{characterId} clip {clip}, {time:F2}s: original / reloaded split combined");
+                    $"c{characterId} clip {clip}, {time:F2}s: combined / reloaded split combined");
             }
             var faceAuthoritative = Resource.Load<AnimationPack>(
                 Path.Combine(outputDirectory, "pc" + danceId + "_26_p.GAP")).Animations[clip];
@@ -157,11 +195,12 @@ if (args.Contains("--assembled")) {
                 hairSplit.Animations.ElementAtOrDefault(clip));
             foreach (var frame in new[] { 0, 2, 4 }) {
                 var time = faceRoundtrip.Duration * frame / 4f;
-                var sourcePose = AnimationPoseEvaluator.Evaluate(source.Model, pack.Animations[clip], time);
+                var referencePose = AnimationPoseEvaluator.Evaluate(
+                    combined.Model, combined.AnimationPack.Animations[clip], time);
                 var targetPose = AnimationPoseEvaluator.Evaluate(combined.Model, faceRoundtrip, time);
-                PoseRender.Draw(source.Model, sourcePose, combined.Model, targetPose,
+                PoseRender.Draw(combined.Model, referencePose, combined.Model, targetPose,
                     Path.Combine(outputDirectory, $"roundtrip-face-clip-{clip}-{frame}.png"),
-                    $"c{characterId} clip {clip}, {time:F2}s: original / split with face head track");
+                    $"c{characterId} clip {clip}, {time:F2}s: combined / split with face head track");
             }
         }
         Console.SetOut(TextWriter.Null);

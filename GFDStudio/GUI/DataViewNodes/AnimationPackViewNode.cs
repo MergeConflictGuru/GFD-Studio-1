@@ -120,9 +120,9 @@ namespace GFDStudio.GUI.DataViewNodes
                         if (MessageBox.Show("One or more output files already exist. Overwrite them?", "Confirm overwrite",
                             MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
                     }
-                    SplitCharacterRetargeter.ForStandalonePart(preview, body.Model).Save(save.FileName);
-                    SplitCharacterRetargeter.ForStandalonePart(preview, face.Model).Save(facePath);
-                    SplitCharacterRetargeter.ForStandalonePart(preview, hair.Model).Save(hairOutputPath);
+                    SplitCharacterRetargeter.ForStandalonePart(preview, body.Model, SplitCharacterPart.Body).Save(save.FileName);
+                    SplitCharacterRetargeter.ForStandalonePart(preview, face.Model, SplitCharacterPart.Face).Save(facePath);
+                    SplitCharacterRetargeter.ForStandalonePart(preview, hair.Model, SplitCharacterPart.Hair).Save(hairOutputPath);
                     MessageBox.Show("Saved three Dance animation packs:\n" + save.FileName + "\n" + facePath + "\n" + hairOutputPath +
                         "\n\nThe source animation pack was not changed.", "Split retarget saved");
                 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using GFDLibrary.Animations;
@@ -294,6 +295,75 @@ namespace GFDLibrary.Tests
                 AssertTransformEqual(expectedLocal, exportedPose[faceHead]);
             }
             Assert.AreEqual(1, exported.Animations[0].Controllers.Single(c => c.TargetName == "head").TargetId);
+            Assert.AreEqual(AnimationPackFlags.Bit3, exported.Flags);
+        }
+
+        [TestMethod]
+        public void StandaloneHairExportsOnlyRelativeHairBones()
+        {
+            var combinedRoot = new Node("RootNode");
+            var combinedNeck = new Node("neck", new Vector3(0, 10, 0), Quaternion.Identity, Vector3.One);
+            var combinedHead = new Node("head", new Vector3(0, 3, 0), Quaternion.Identity, Vector3.One);
+            var combinedHair = new Node("strand", new Vector3(0, 4, 0), Quaternion.Identity, Vector3.One);
+            var combinedMesh = new Node("mesh_grp");
+            combinedRoot.AddChildNode(combinedNeck); combinedNeck.AddChildNode(combinedHead);
+            combinedHead.AddChildNode(combinedHair); combinedRoot.AddChildNode(combinedMesh);
+            var combinedModel = new Model(ResourceVersion.Persona5Dancing) {
+                RootNode = combinedRoot,
+                Bones = new List<Bone> {
+                    new Bone(2, Matrix4x4.Identity), new Bone(3, Matrix4x4.Identity)
+                }
+            };
+            var animation = new Animation(combinedModel.Version) { Duration = 1 };
+            foreach (var (name, angle) in new[] { ("head", .4f), ("strand", -.7f) })
+            {
+                var controller = CreateController(name);
+                controller.Layers[0].Keys.Add(new PRSKey(KeyType.NodeRHalf) {
+                    Time = 1, Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, angle)
+                });
+                animation.Controllers.Add(controller);
+            }
+            var combined = new ModelPack(combinedModel.Version) {
+                Model = combinedModel,
+                AnimationPack = new AnimationPack(combinedModel.Version) {
+                    Flags = AnimationPackFlags.Bit3,
+                    Animations = new List<Animation> { animation }
+                }
+            };
+
+            var hairRoot = new Node("RootNode");
+            var hairNeck = new Node("neck", new Vector3(0, 10, 0), Quaternion.Identity, Vector3.One);
+            var hairHead = new Node("head", new Vector3(0, 3, 0), Quaternion.Identity, Vector3.One);
+            var hairBone = new Node("strand", new Vector3(0, 4, 0), Quaternion.Identity, Vector3.One);
+            var hairMesh = new Node("mesh_grp");
+            hairRoot.AddChildNode(hairNeck); hairNeck.AddChildNode(hairHead);
+            hairHead.AddChildNode(hairBone); hairRoot.AddChildNode(hairMesh);
+            var hair = new Model(combinedModel.Version) {
+                RootNode = hairRoot,
+                Bones = new List<Bone> {
+                    new Bone(2, Matrix4x4.Identity), new Bone(3, Matrix4x4.Identity)
+                }
+            };
+
+            var exported = SplitCharacterRetargeter.ForStandalonePart(
+                combined, hair, SplitCharacterPart.Hair);
+            CollectionAssert.AreEqual(new[] { "RootNode", "strand" },
+                exported.Animations[0].Controllers.Select(controller => controller.TargetName).ToArray());
+            Assert.AreEqual(0, exported.Animations[0].Controllers[0].TargetId);
+            Assert.AreEqual(1, exported.Animations[0].Controllers[1].TargetId);
+            CollectionAssert.AreEqual(new[] { KeyType.Type31, KeyType.NodeRHalf, KeyType.NodeSHalf },
+                exported.Animations[0].Controllers[1].Layers.Select(layer => layer.KeyType).ToArray());
+
+            var combinedPose = AnimationPoseEvaluator.Evaluate(combinedModel, animation, 1);
+            Matrix4x4.Invert(combinedPose[combinedHead], out var headInverse);
+            var expectedLocal = combinedPose[combinedHair] * headInverse;
+            var layers = exported.Animations[0].Controllers.Single(c => c.TargetName == "strand").Layers;
+            var position = ((PRSKey)layers[0].Keys.Single(k => k.Time == 1)).Position;
+            var rotation = ((PRSKey)layers[1].Keys.Single(k => k.Time == 1)).Rotation;
+            var scale = ((PRSKey)layers[2].Keys.Single(k => k.Time == 1)).Scale;
+            var actualLocal = Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateScale(scale);
+            actualLocal.Translation = position;
+            AssertTransformEqual(expectedLocal, actualLocal);
             Assert.AreEqual(AnimationPackFlags.Bit3, exported.Flags);
         }
 
