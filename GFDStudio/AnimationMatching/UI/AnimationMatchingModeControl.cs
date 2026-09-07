@@ -335,7 +335,7 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     private Control CreateResultCard(AnimationMatchResult result)
     {
-        const int cardWidth = 200;
+        const int cardWidth = 164;
         const int cardHeight = 166;
         var card = new Panel
         {
@@ -366,7 +366,7 @@ public sealed class AnimationMatchingModeControl : UserControl
             UseCompatibleTextRendering = true,
             ForeColor = Color.Gainsboro,
             Text = AddTitleBreakPoints(result.Candidate.DisplayName),
-            Font = new Font(Font, FontStyle.Bold)
+            Font = new Font(Font, FontStyle.Regular)
         };
         var detail = new Label
         {
@@ -378,11 +378,11 @@ public sealed class AnimationMatchingModeControl : UserControl
             AutoSize = false,
             UseCompatibleTextRendering = true,
             ForeColor = Color.Silver,
-            Text = $"{result.Score:0.0}% · source f{result.SourceFrame}\n→ candidate f{result.CandidateFrame}"
+            Text = $"{result.Score:0.0}% · f{result.SourceFrame} → f{result.CandidateFrame}"
         };
         var titleToolTip = new ToolTip();
         titleToolTip.SetToolTip(title, result.Candidate.DisplayName);
-        titleToolTip.SetToolTip(detail, $"{result.Score:0.0}% · source frame {result.SourceFrame} → candidate frame {result.CandidateFrame}");
+        titleToolTip.SetToolTip(detail, $"{result.Score:0.0}% · f{result.SourceFrame} → f{result.CandidateFrame}");
         card.Disposed += (_, _) => titleToolTip.Dispose();
         card.Controls.AddRange(new Control[] { image, title, detail });
 
