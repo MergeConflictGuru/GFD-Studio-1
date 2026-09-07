@@ -168,6 +168,29 @@ namespace GFDLibrary.Tests
         }
 
         [TestMethod]
+        public void ResolveMotionRootUsesSemanticRigRootBeforeFileRoot()
+        {
+            var p5FileRoot = new Node("RootNode");
+            var p5MotionRoot = new Node("root");
+            p5FileRoot.AddChildNode(p5MotionRoot);
+            var p5Model = new Model { RootNode = p5FileRoot };
+
+            var dancingFileRoot = new Node("RootNode");
+            var dancingAxisRoot = new Node("root");
+            var dancingMotionRoot = new Node("Bip01");
+            dancingFileRoot.AddChildNode(dancingAxisRoot);
+            dancingAxisRoot.AddChildNode(dancingMotionRoot);
+            var dancingModel = new Model { RootNode = dancingFileRoot };
+
+            var fallbackRoot = new Node("RootNode");
+            var fallbackModel = new Model { RootNode = fallbackRoot };
+
+            Assert.AreSame(p5MotionRoot, AnimationSkeletonRoles.ResolveMotionRoot(p5Model));
+            Assert.AreSame(dancingMotionRoot, AnimationSkeletonRoles.ResolveMotionRoot(dancingModel));
+            Assert.AreSame(fallbackRoot, AnimationSkeletonRoles.ResolveMotionRoot(fallbackModel));
+        }
+
+        [TestMethod]
         public void RetargetMapsDanceHairFamilyNamesAcrossHairRigs()
         {
             var sourceRoot = new Node("RootNode");
