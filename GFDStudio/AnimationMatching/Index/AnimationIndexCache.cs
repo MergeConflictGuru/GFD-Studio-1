@@ -469,7 +469,7 @@ public static class AnimationIndexCache
     {
         var remainder = writer.BaseStream.Position % SectionAlignment;
         if (remainder == 0) return;
-        writer.Write(new byte[SectionAlignment - remainder]);
+        writer.Write(new byte[(int)(SectionAlignment - remainder)]);
     }
 
     private static void WriteAddresses(BinaryWriter writer, AnimationSearchDatabase database)
