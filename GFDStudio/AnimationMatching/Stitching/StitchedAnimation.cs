@@ -9,6 +9,7 @@ namespace GFDStudio.AnimationMatching.Stitching;
 /// <summary>
 /// Runtime stitched clip for preview/export. When alignment is enabled, candidate root motion is
 /// rigidly translated and yaw-aligned so its first emitted frame lands on the source continuation.
+/// Static hierarchy ancestors above the motion root remain in the target model's axis space.
 /// Optional crossfade blends global transforms, then the candidate owns the rest of the clip.
 /// </summary>
 public sealed class StitchedAnimation : IAnimationClip
@@ -22,6 +23,7 @@ public sealed class StitchedAnimation : IAnimationClip
     private readonly Vector3 _translationAlignment;
     private readonly Quaternion _matchYawAlignment;
     private readonly Vector3 _matchTranslationAlignment;
+    private readonly bool[] _motionSubtree;
 
     public StitchedAnimation(
         IAnimationClip source,
@@ -41,6 +43,7 @@ public sealed class StitchedAnimation : IAnimationClip
         _sourceFrame = Math.Clamp(sourceFrame, 0, source.FrameCount - 1);
         _candidateFrame = Math.Clamp(candidateFrame, 0, candidate.FrameCount - 1);
         _blendFrames = Math.Max(0, (int)MathF.Round(blendSeconds * source.FramesPerSecond));
+        _motionSubtree = StitchAlignment.BuildMotionSubtree(Skeleton);
 
         AlignPositionAndYaw = alignPositionAndYaw;
         if (alignPositionAndYaw)
@@ -174,18 +177,56 @@ public sealed class StitchedAnimation : IAnimationClip
     }
 
     private void AlignCandidate(Span<BoneTransform> pose)
-    {
-        for (var i = 0; i < pose.Length; i++)
-        {
-            var p = Vector3.Transform(pose[i].Position, _yawAlignment) + _translationAlignment;
-            var r = Quaternion.Normalize(_yawAlignment * pose[i].Rotation);
-            pose[i] = new BoneTransform(p, r, pose[i].Scale);
-        }
-    }
+        => StitchAlignment.ApplyRigidTransform(pose, _motionSubtree, _yawAlignment, _translationAlignment);
 
     private static float SmoothStep(float t)
     {
         t = Math.Clamp(t, 0f, 1f);
         return t * t * (3f - 2f * t);
+    }
+}
+
+internal static class StitchAlignment
+{
+    public static bool[] BuildMotionSubtree(SkeletonDefinition skeleton)
+    {
+        var result = new bool[skeleton.BoneCount];
+        for (var i = 0; i < result.Length; i++)
+        {
+            var current = i;
+            var visited = 0;
+            while ((uint)current < (uint)result.Length && visited++ <= result.Length)
+            {
+                if (current == skeleton.RootBoneIndex)
+                {
+                    result[i] = true;
+                    break;
+                }
+
+                current = skeleton.Parents[current];
+            }
+        }
+
+        return result;
+    }
+
+    public static void ApplyRigidTransform(
+        Span<BoneTransform> pose,
+        ReadOnlySpan<bool> motionSubtree,
+        Quaternion rotation,
+        Vector3 translation)
+    {
+        if (motionSubtree.Length < pose.Length)
+            throw new ArgumentException("Motion subtree mask is too small.", nameof(motionSubtree));
+
+        for (var i = 0; i < pose.Length; i++)
+        {
+            if (!motionSubtree[i])
+                continue;
+
+            var position = Vector3.Transform(pose[i].Position, rotation) + translation;
+            var boneRotation = Quaternion.Normalize(rotation * pose[i].Rotation);
+            pose[i] = new BoneTransform(position, boneRotation, pose[i].Scale);
+        }
     }
 }

@@ -16,6 +16,7 @@ public sealed class StitchedAnimationPart : IAnimationClip
     private readonly int _frameCount;
     private readonly Quaternion _rotation;
     private readonly Vector3 _translation;
+    private readonly bool[] _motionSubtree;
 
     public StitchedAnimationPart(
         IAnimationClip clip,
@@ -33,6 +34,7 @@ public sealed class StitchedAnimationPart : IAnimationClip
         _frameCount = Math.Clamp(frameCount, 1, clip.FrameCount - _startFrame);
         _rotation = Quaternion.Normalize(rotation);
         _translation = translation;
+        _motionSubtree = StitchAlignment.BuildMotionSubtree(Skeleton);
         DisplayName = string.IsNullOrWhiteSpace(displayName)
             ? throw new ArgumentException("A display name is required.", nameof(displayName))
             : displayName;
@@ -50,11 +52,6 @@ public sealed class StitchedAnimationPart : IAnimationClip
         var localFrame = Math.Clamp(frameIndex, 0, _frameCount - 1);
         _clip.SampleGlobalPose(_startFrame + localFrame, destination);
 
-        for (var i = 0; i < Skeleton.BoneCount; i++)
-        {
-            var position = Vector3.Transform(destination[i].Position, _rotation) + _translation;
-            var rotation = Quaternion.Normalize(_rotation * destination[i].Rotation);
-            destination[i] = new BoneTransform(position, rotation, destination[i].Scale);
-        }
+        StitchAlignment.ApplyRigidTransform(destination[..Skeleton.BoneCount], _motionSubtree, _rotation, _translation);
     }
 }
