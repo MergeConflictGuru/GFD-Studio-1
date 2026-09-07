@@ -4,6 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Version>0.10.3</Version>
     <Authors>TGE</Authors>
     <Company>TGE</Company>
@@ -117,7 +118,7 @@
     <None Update="Presets\Metaphor\Metaphor_Field.yml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="Presets\Metaphor\Metaphor_Lambert.yml">
+    <None Update="Presets\Metaphor\Metaphor_Character_Lambert.yml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Presets\Metaphor\Metaphor_Water.yml">
