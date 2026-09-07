@@ -2,9 +2,12 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using GFDLibrary.Animations;
+using GFDLibrary.Models;
 using GFDStudio.AnimationMatching.Core;
 using GFDStudio.AnimationMatching.Features;
 using GFDStudio.AnimationMatching.Index;
+using GFDStudio.AnimationMatching.Integration;
 using GFDStudio.AnimationMatching.Search;
 using GFDStudio.AnimationMatching.Stitching;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -112,6 +115,71 @@ public sealed class AnimationMatcherTests
         tail.SampleGlobalPose(tail.FrameCount - 1, pose);
         candidate.SampleGlobalPose(candidate.FrameCount - 1, candidatePose);
         Assert.AreEqual(candidatePose[0].Position, pose[0].Position);
+    }
+
+    [TestMethod]
+    public void StitchCanAlignOrPreserveCandidateWorldPositionAndYaw()
+    {
+        var source = new FakeClip("source", new Vector3(2f, 3f, -4f), 0.35f);
+        var candidate = new FakeClip("candidate", new Vector3(-8f, 6f, 12f), -1.1f);
+        var aligned = new StitchedAnimation(source, 5, candidate, 5, 0f, alignPositionAndYaw: true);
+        var unaligned = new StitchedAnimation(source, 5, candidate, 5, 0f, alignPositionAndYaw: false);
+        var sourcePose = new BoneTransform[source.Skeleton.BoneCount];
+        var candidatePose = new BoneTransform[source.Skeleton.BoneCount];
+        var stitchedPose = new BoneTransform[source.Skeleton.BoneCount];
+
+        source.SampleGlobalPose(6, sourcePose);
+        candidate.SampleGlobalPose(6, candidatePose);
+        aligned.SampleGlobalPose(6, stitchedPose);
+
+        Assert.IsTrue(aligned.AlignPositionAndYaw);
+        AssertPositionEqual(sourcePose[0].Position, stitchedPose[0].Position);
+        AssertRotationEqual(sourcePose[0].Rotation, stitchedPose[0].Rotation);
+
+        unaligned.SampleGlobalPose(6, stitchedPose);
+        Assert.IsFalse(unaligned.AlignPositionAndYaw);
+        AssertPositionEqual(candidatePose[0].Position, stitchedPose[0].Position);
+        AssertRotationEqual(candidatePose[0].Rotation, stitchedPose[0].Rotation);
+    }
+
+    [TestMethod]
+    public void FullSkeletonPreviewUsesAnimatedMotionRootForStitchAlignment()
+    {
+        var fileRoot = new Node("RootNode");
+        var axisRoot = new Node("root");
+        var motionRoot = new Node("Bip01");
+        fileRoot.AddChildNode(axisRoot);
+        axisRoot.AddChildNode(motionRoot);
+        var model = new Model { RootNode = fileRoot };
+        var clip = new GfdTargetAnimationClip("preview", "preview", model, new Animation(), 30f);
+
+        Assert.AreEqual(2, clip.Skeleton.RootBoneIndex,
+            "Bip01 carries locomotion on dancing-style rigs and must win over static RootNode/root ancestors.");
+    }
+
+    [TestMethod]
+    public void FullSkeletonPreviewFallsBackToPersonaMotionRoot()
+    {
+        var fileRoot = new Node("RootNode");
+        fileRoot.AddChildNode(new Node("root"));
+        var model = new Model { RootNode = fileRoot };
+        var clip = new GfdTargetAnimationClip("preview", "preview", model, new Animation(), 30f);
+
+        Assert.AreEqual(1, clip.Skeleton.RootBoneIndex,
+            "Persona-style rigs carry locomotion on root rather than the static file-level RootNode.");
+    }
+
+    private static void AssertPositionEqual(Vector3 expected, Vector3 actual)
+    {
+        Assert.AreEqual(expected.X, actual.X, 1e-4f);
+        Assert.AreEqual(expected.Y, actual.Y, 1e-4f);
+        Assert.AreEqual(expected.Z, actual.Z, 1e-4f);
+    }
+
+    private static void AssertRotationEqual(Quaternion expected, Quaternion actual)
+    {
+        var dot = MathF.Abs(Quaternion.Dot(Quaternion.Normalize(expected), Quaternion.Normalize(actual)));
+        Assert.AreEqual(1f, dot, 1e-4f);
     }
 
     private static AnimationMatchOptions CreateOptions() => new()

@@ -117,6 +117,15 @@ public sealed class AnimationMatchingModeControl : UserControl
     private readonly Button _back = MakeButton("Back");
     private readonly Button _reindex = MakeButton("Reindex");
     private readonly Button _export = MakeButton("Export…");
+    private readonly CheckBox _alignPositionAndYaw = new()
+    {
+        Text = "Align pos/yaw",
+        Checked = true,
+        AutoSize = true,
+        ForeColor = Color.Gainsboro,
+        BackColor = Color.Transparent,
+        Anchor = AnchorStyles.Left
+    };
     private readonly CheckBox _blend = new()
     {
         Text = "Blend",
@@ -181,7 +190,7 @@ public sealed class AnimationMatchingModeControl : UserControl
             BackColor = Color.FromArgb(30, 30, 30)
         };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -193,14 +202,22 @@ public sealed class AnimationMatchingModeControl : UserControl
         rootBar.Controls.Add(_root, 0, 0);
         rootBar.Controls.Add(_browse, 1, 0);
 
-        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 7, RowCount = 1, Margin = Padding.Empty };
+        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, Margin = Padding.Empty };
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 58));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 24));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+
+        var stitchOptions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
 
         var ms = new Label
         {
@@ -211,6 +228,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         };
         _back.Margin = new Padding(0, 3, 2, 3);
         _source.Margin = new Padding(5, 0, 4, 0);
+        _alignPositionAndYaw.Margin = new Padding(2, 0, 0, 0);
         _blend.Margin = new Padding(2, 0, 0, 0);
         _blendMs.Margin = new Padding(2, 5, 1, 3);
         _reindex.Margin = new Padding(2, 3, 2, 3);
@@ -218,11 +236,14 @@ public sealed class AnimationMatchingModeControl : UserControl
 
         actionBar.Controls.Add(_back, 0, 0);
         actionBar.Controls.Add(_source, 1, 0);
-        actionBar.Controls.Add(_blend, 2, 0);
-        actionBar.Controls.Add(_blendMs, 3, 0);
-        actionBar.Controls.Add(ms, 4, 0);
-        actionBar.Controls.Add(_reindex, 5, 0);
-        actionBar.Controls.Add(_export, 6, 0);
+        actionBar.Controls.Add(_reindex, 2, 0);
+        actionBar.Controls.Add(_export, 3, 0);
+        stitchOptions.Controls.Add(_alignPositionAndYaw);
+        stitchOptions.Controls.Add(_blend);
+        stitchOptions.Controls.Add(_blendMs);
+        stitchOptions.Controls.Add(ms);
+        actionBar.Controls.Add(stitchOptions, 0, 1);
+        actionBar.SetColumnSpan(stitchOptions, 4);
 
         layout.Controls.Add(rootBar, 0, 0);
         layout.Controls.Add(actionBar, 0, 1);
@@ -234,11 +255,13 @@ public sealed class AnimationMatchingModeControl : UserControl
         _back.Click += (_, _) => BackRequested?.Invoke(this, EventArgs.Empty);
         _reindex.Click += (_, _) => ReindexRequested?.Invoke(this, EventArgs.Empty);
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
+        _alignPositionAndYaw.CheckedChanged += (_, _) => ReactivateSelected();
         _blend.CheckedChanged += (_, _) => ReactivateSelected();
         _blendMs.ValueChanged += (_, _) => ReactivateSelected();
     }
 
     public (int start, int end)? Selection => _selection;
+    public bool AlignPositionAndYaw => _alignPositionAndYaw.Checked;
     public bool BlendingEnabled => _blend.Checked;
     public float BlendSeconds => (float)_blendMs.Value / 1000f;
 
