@@ -29,6 +29,7 @@ namespace GFDStudio.GUI.Forms
         private bool mAnimationMatchPreviewLoad;
         private bool mAnimationMatchTailActive;
         private int mAnimationMatchPreviewGeneration;
+        private int mAnimationMatchWarmGeneration;
 
         /// <summary>
         /// Adds only the Match affordance to the shared left transport. The actual matcher surface
@@ -196,6 +197,51 @@ namespace GFDStudio.GUI.Forms
             mAnimationMatchController = new AnimationMatchingModeController(this, mAnimationMatchView);
             mAnimationMatchControllerContext = context;
             mAnimationMatchView.SetResults(Array.Empty<AnimationMatchResult>());
+        }
+
+        private void CancelAnimationMatchingWarmup()
+        {
+            mAnimationMatchWarmGeneration = 0;
+            mAnimationMatchController?.Dispose();
+            mAnimationMatchController = null;
+            mAnimationMatchControllerContext = null;
+        }
+
+        private async void WarmAnimationMatchingIndexAfterScan(int scanGeneration)
+        {
+            if (scanGeneration != mCharacterBrowserScanGeneration ||
+                mCharacterAnimations.Count == 0 ||
+                IsDisposed)
+                return;
+
+            EnsureAnimationMatchingController();
+            var controller = mAnimationMatchController;
+            if (controller == null)
+                return;
+
+            mAnimationMatchWarmGeneration = scanGeneration;
+            SetCharacterBrowserStatus("Building AniMatch corpus…");
+            try
+            {
+                var ready = await controller.WarmIndexAsync();
+                if (IsDisposed || scanGeneration != mCharacterBrowserScanGeneration ||
+                    mAnimationMatchWarmGeneration != scanGeneration)
+                    return;
+
+                SetCharacterBrowserStatus(ready
+                    ? "AniMatch corpus ready"
+                    : "AniMatch corpus build failed; open Match for details");
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer character-browser scan or an explicit reindex superseded this warm-up.
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("AnimationMatch: automatic corpus build failed: " + ex);
+                if (!IsDisposed && scanGeneration == mCharacterBrowserScanGeneration)
+                    SetCharacterBrowserStatus("AniMatch corpus build failed: " + ex.Message);
+            }
         }
 
         private ModelPack GetAnimationMatchingTargetModelPack()
