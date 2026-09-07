@@ -25,6 +25,9 @@ public interface IGfdAnimationMatchingHost
 
     /// <summary>Exports a stitched/resampled clip using the normal GFD Studio animation export path.</summary>
     Task ExportAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken);
+
+    /// <summary>Exports the aligned/cut source and candidate sides of a stitched clip separately.</summary>
+    Task ExportAnimationPartsAsync(IAnimationClip clip, CancellationToken cancellationToken);
 }
 
 /// <summary>Optional host capability enabling persistent animation descriptor caching.</summary>

@@ -11,6 +11,7 @@ using GFDLibrary.Animations;
 using GFDLibrary.Models;
 using GFDStudio.AnimationMatching.Core;
 using GFDStudio.AnimationMatching.Integration;
+using GFDStudio.AnimationMatching.Stitching;
 using GFDStudio.AnimationMatching.UI;
 using GFDStudio.GUI.Controls;
 
@@ -387,6 +388,68 @@ namespace GFDStudio.GUI.Forms
                 var output = new AnimationPack(targetPack.Version);
                 output.Animations.Add(animation);
                 output.Save(path);
+            }, cancellationToken);
+        }
+
+        async Task IGfdAnimationMatchingHost.ExportAnimationPartsAsync(
+            IAnimationClip clip,
+            CancellationToken cancellationToken)
+        {
+            var targetPack = GetAnimationMatchingTargetModelPack();
+            if (targetPack?.Model == null)
+                throw new InvalidOperationException("No target model is loaded.");
+
+            using var dialog = new SaveFileDialog
+            {
+                Filter = "Animation pack (*.GAP)|*.GAP|All files (*.*)|*.*",
+                DefaultExt = "GAP",
+                AddExtension = true,
+                OverwritePrompt = true,
+                FileName = "animation_match_parts.GAP",
+                Title = "Export stitched animation parts"
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                throw new OperationCanceledException(cancellationToken);
+
+            var selectedPath = dialog.FileName;
+            var directory = Path.GetDirectoryName(selectedPath) ?? string.Empty;
+            var stem = Path.GetFileNameWithoutExtension(selectedPath);
+            var extension = Path.GetExtension(selectedPath);
+            var sourcePath = Path.Combine(directory, stem + "_source" + extension);
+            var candidatePath = Path.Combine(directory, stem + "_candidate" + extension);
+            if (File.Exists(sourcePath) || File.Exists(candidatePath))
+            {
+                var overwrite = MessageBox.Show(
+                    this,
+                    $"These files already exist and will be replaced:\n\n{Path.GetFileName(sourcePath)}\n{Path.GetFileName(candidatePath)}\n\nContinue?",
+                    "Overwrite animation parts",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                if (overwrite != DialogResult.Yes)
+                    throw new OperationCanceledException(cancellationToken);
+            }
+
+            await Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
+                if (previewClip is not StitchedAnimation stitched)
+                    throw new InvalidOperationException("The selected animation is not a stitched clip.");
+
+                var parts = stitched.CreateExportParts();
+                var sourceAnimation = GfdAnimationClipBaker.Bake(
+                    parts.Source, targetPack.Model, targetPack.Version, cancellationToken);
+                var candidateAnimation = GfdAnimationClipBaker.Bake(
+                    parts.Candidate, targetPack.Model, targetPack.Version, cancellationToken);
+
+                var sourceOutput = new AnimationPack(targetPack.Version);
+                sourceOutput.Animations.Add(sourceAnimation);
+                sourceOutput.Save(sourcePath);
+
+                cancellationToken.ThrowIfCancellationRequested();
+                var candidateOutput = new AnimationPack(targetPack.Version);
+                candidateOutput.Animations.Add(candidateAnimation);
+                candidateOutput.Save(candidatePath);
             }, cancellationToken);
         }
     }
