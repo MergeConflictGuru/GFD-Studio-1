@@ -182,8 +182,12 @@ public static class AnimationIndexCache
                 if (version == CurrentVersion)
                 {
                     var header = ReadFlatHeader(reader);
-                    if (!ValidateFlatLayout(header, stream.Length)) return null;
-                    if (!ValidateMetadata(reader, header, corpus, options, corpusSignature)) return null;
+                    if (!ValidateFlatLayout(header, stream.Length))
+                    {
+                        progress?.Report("Cached animation index layout is invalid; rebuilding…");
+                        return null;
+                    }
+                    if (!ValidateMetadata(reader, header, corpus, options, corpusSignature, progress)) return null;
 
                     var prepared = PrepareFeatureLayout(corpus, options, header.DescriptorDimensions);
                     if (prepared.projection.OutputDimensions != header.ProjectionDimensions) return null;
@@ -448,18 +452,52 @@ public static class AnimationIndexCache
         FlatHeader header,
         AnimationCorpus corpus,
         AnimationMatchOptions options,
-        string corpusSignature)
+        string corpusSignature,
+        IProgress<string>? progress)
     {
-        if (header.ClipCount != corpus.Clips.Count) return false;
+        if (header.ClipCount != corpus.Clips.Count)
+        {
+            progress?.Report($"Cached animation index clip count differs ({header.ClipCount:N0} vs {corpus.Clips.Count:N0}); rebuilding…");
+            return false;
+        }
         reader.BaseStream.Position = header.MetadataOffset;
         var metadataEnd = checked(header.MetadataOffset + header.MetadataLength);
 
-        if (!string.Equals(reader.ReadString(), corpusSignature ?? string.Empty, StringComparison.Ordinal)) return false;
-        if (!string.Equals(reader.ReadString(), options.GetIndexFingerprint(), StringComparison.Ordinal)) return false;
+        var cachedSignature = reader.ReadString();
+        if (!string.Equals(cachedSignature, corpusSignature ?? string.Empty, StringComparison.Ordinal))
+        {
+            progress?.Report(
+                $"Cached animation index corpus signature differs " +
+                $"(saved={GetSignatureToken(cachedSignature)}, current={GetSignatureToken(corpusSignature)}); rebuilding…");
+            return false;
+        }
+
+        var cachedFingerprint = reader.ReadString();
+        if (!string.Equals(cachedFingerprint, options.GetIndexFingerprint(), StringComparison.Ordinal))
+        {
+            progress?.Report("Cached animation index feature fingerprint differs; rebuilding…");
+            return false;
+        }
+
         for (var i = 0; i < header.ClipCount; i++)
-            if (!string.Equals(reader.ReadString(), corpus.Clips[i].Id, StringComparison.Ordinal)) return false;
+        {
+            if (!string.Equals(reader.ReadString(), corpus.Clips[i].Id, StringComparison.Ordinal))
+            {
+                progress?.Report($"Cached animation index clip order differs at {i:N0}; rebuilding…");
+                return false;
+            }
+        }
 
         return reader.BaseStream.Position <= metadataEnd;
+    }
+
+    private static string GetSignatureToken(string signature)
+    {
+        if (string.IsNullOrEmpty(signature))
+            return "empty";
+
+        var parts = signature.Split('|');
+        return parts.Length >= 3 ? parts[^2] : signature;
     }
 
     private static bool SectionFits(long offset, long length, long fileLength)

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
@@ -64,54 +65,103 @@ namespace GFDLibrary.Animations
     public sealed class AnimationPoseSampler
     {
         private readonly Dictionary<string, AnimationController[]> _controllers;
+        private readonly Node[] _evaluationNodes;
+        private readonly int[] _parentIndices;
+        private readonly int[] _requestedNodeIndices;
 
-        public AnimationPoseSampler(Model model, Animation animation)
+        public AnimationPoseSampler(
+            Model model,
+            Animation animation,
+            IReadOnlyList<Node> requestedNodes)
         {
             Model = model ?? throw new ArgumentNullException(nameof(model));
             Animation = animation ?? throw new ArgumentNullException(nameof(animation));
+            if (requestedNodes == null)
+                throw new ArgumentNullException(nameof(requestedNodes));
+
             _controllers = animation.Controllers
                 .Where(controller => controller.TargetKind == TargetKind.Node)
                 .GroupBy(controller => controller.TargetName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+
+            var evaluationNodes = new List<Node>(requestedNodes.Count * 2);
+            var nodeIndices = new Dictionary<Node, int>();
+            var visiting = new HashSet<Node>();
+
+            void AddNode(Node node)
+            {
+                if (nodeIndices.ContainsKey(node))
+                    return;
+                if (!visiting.Add(node))
+                    throw new InvalidOperationException("Animation node hierarchy contains a cycle.");
+
+                if (node.Parent != null)
+                    AddNode(node.Parent);
+
+                visiting.Remove(node);
+                nodeIndices.Add(node, evaluationNodes.Count);
+                evaluationNodes.Add(node);
+            }
+
+            for (var i = 0; i < requestedNodes.Count; i++)
+            {
+                var node = requestedNodes[i] ??
+                    throw new ArgumentException("Requested animation nodes cannot contain null entries.", nameof(requestedNodes));
+                AddNode(node);
+            }
+
+            _evaluationNodes = evaluationNodes.ToArray();
+            _parentIndices = new int[_evaluationNodes.Length];
+            for (var i = 0; i < _evaluationNodes.Length; i++)
+            {
+                _parentIndices[i] = _evaluationNodes[i].Parent is { } parent &&
+                    nodeIndices.TryGetValue(parent, out var parentIndex)
+                    ? parentIndex
+                    : -1;
+            }
+
+            _requestedNodeIndices = new int[requestedNodes.Count];
+            for (var i = 0; i < requestedNodes.Count; i++)
+                _requestedNodeIndices[i] = nodeIndices[requestedNodes[i]];
         }
 
         public Model Model { get; }
         public Animation Animation { get; }
 
-        public Dictionary<Node, Matrix4x4> Evaluate(IReadOnlyList<Node> requestedNodes, float time)
+        public void Evaluate(Span<Matrix4x4> requestedTransforms, float time)
         {
-            if (requestedNodes == null)
-                throw new ArgumentNullException(nameof(requestedNodes));
+            if (requestedTransforms.Length < _requestedNodeIndices.Length)
+                throw new ArgumentException("Requested transform buffer is too small.", nameof(requestedTransforms));
 
-            var result = new Dictionary<Node, Matrix4x4>(requestedNodes.Count * 2);
-            foreach (var node in requestedNodes)
-                if (node != null)
-                    EvaluateNode(node, time, result);
-            return result;
-        }
-
-        private Matrix4x4 EvaluateNode(Node node, float time, Dictionary<Node, Matrix4x4> result)
-        {
-            if (result.TryGetValue(node, out var existing))
-                return existing;
-
-            var position = node.Translation;
-            var rotation = node.Rotation;
-            var scale = node.Scale;
-            if (_controllers.TryGetValue(node.Name ?? string.Empty, out var controllers))
+            var values = ArrayPool<Matrix4x4>.Shared.Rent(_evaluationNodes.Length);
+            try
             {
-                foreach (var controller in controllers)
-                    foreach (var layer in controller.Layers)
-                        AnimationPoseEvaluator.Sample(layer, time, ref position, ref rotation, ref scale);
-            }
+                for (var i = 0; i < _evaluationNodes.Length; i++)
+                {
+                    var node = _evaluationNodes[i];
+                    var position = node.Translation;
+                    var rotation = node.Rotation;
+                    var scale = node.Scale;
+                    if (_controllers.TryGetValue(node.Name ?? string.Empty, out var controllers))
+                    {
+                        foreach (var controller in controllers)
+                            foreach (var layer in controller.Layers)
+                                AnimationPoseEvaluator.Sample(layer, time, ref position, ref rotation, ref scale);
+                    }
 
-            var local = Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(rotation)) * Matrix4x4.CreateScale(scale);
-            local.Translation = position;
-            var world = node.Parent == null
-                ? local
-                : local * EvaluateNode(node.Parent, time, result);
-            result[node] = world;
-            return world;
+                    var local = Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(rotation)) * Matrix4x4.CreateScale(scale);
+                    local.Translation = position;
+                    var parentIndex = _parentIndices[i];
+                    values[i] = parentIndex < 0 ? local : local * values[parentIndex];
+                }
+
+                for (var i = 0; i < _requestedNodeIndices.Length; i++)
+                    requestedTransforms[i] = values[_requestedNodeIndices[i]];
+            }
+            finally
+            {
+                ArrayPool<Matrix4x4>.Shared.Return(values, clearArray: false);
+            }
         }
     }
 }

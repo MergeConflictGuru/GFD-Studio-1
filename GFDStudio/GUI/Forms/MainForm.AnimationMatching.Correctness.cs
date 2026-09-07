@@ -74,6 +74,7 @@ namespace GFDStudio.GUI.Forms
             var lookups = BuildAnimationMatchingSourceModelLookups(root);
             var entries = mCharacterAnimations
                 .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
+                .OrderBy(entry => GetCorrectedAnimationMatchClipId(entry), StringComparer.Ordinal)
                 .ToArray();
             var clips = new List<IAnimationClip>(entries.Length);
             var validSourceModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -208,7 +209,9 @@ namespace GFDStudio.GUI.Forms
         }
 
         private static string GetCorrectedAnimationMatchClipId(CharacterAnimationEntry entry) =>
-            GetCorrectedAnimationMatchClipId(entry.PackPath, entry.Kind, entry.Index);
+            !string.IsNullOrWhiteSpace(entry.DefinitionHash)
+                ? "definition:" + entry.DefinitionHash
+                : GetCorrectedAnimationMatchClipId(entry.PackPath, entry.Kind, entry.Index);
 
         private static string GetCorrectedAnimationMatchClipId(
             string packPath,
@@ -232,7 +235,7 @@ namespace GFDStudio.GUI.Forms
         private string GetCorrectedAnimationMatchingContextKey()
         {
             return string.Join("|",
-                "animatch-global-v3",
+                "animatch-global-v4",
                 NormalizeAnimationMatchPath(mCharacterBrowserRoot),
                 GetAnimationMatchingCorpusListSignature(),
                 mCharacterBrowserScanGeneration);
@@ -245,9 +248,7 @@ namespace GFDStudio.GUI.Forms
             var builder = new StringBuilder();
             foreach (var entry in mCharacterAnimations
                          .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
-                         .OrderBy(entry => entry.PackPath, StringComparer.OrdinalIgnoreCase)
-                         .ThenBy(entry => entry.Kind)
-                         .ThenBy(entry => entry.Index))
+                         .OrderBy(entry => GetCorrectedAnimationMatchClipId(entry), StringComparer.Ordinal))
             {
                 var sourceModelPath = ResolveAnimationMatchingSourceModelPath(
                     entry, root, lookups.exactModels, lookups.characterModels);
