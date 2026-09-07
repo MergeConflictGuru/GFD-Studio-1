@@ -67,6 +67,7 @@ public sealed class AnimationMatchOptions
         static string F(float value) => value.ToString("R", CultureInfo.InvariantCulture);
         return string.Join("|", new[]
         {
+            "canonical-skeleton-v" + CanonicalSkeleton.Version,
             IndexStride.ToString(CultureInfo.InvariantCulture),
             ProjectionDimensions.ToString(CultureInfo.InvariantCulture),
             ProjectionSeed.ToString(CultureInfo.InvariantCulture),

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Threading;
@@ -8,10 +9,17 @@ using GFDStudio.AnimationMatching.Core;
 
 namespace GFDStudio.AnimationMatching.Integration;
 
-/// <summary>Bakes an arbitrary matcher clip (including a StitchedAnimation) back to a normal GFD Animation.</summary>
+/// <summary>
+/// Converts canonical matcher poses to the selected target model only for preview/export.
+/// Index construction never calls this class and therefore never depends on the target model.
+/// </summary>
 public static class GfdAnimationClipBaker
 {
-    public static Animation Bake(IAnimationClip clip, Model targetModel, uint version, CancellationToken cancellationToken = default)
+    public static Animation Bake(
+        IAnimationClip clip,
+        Model targetModel,
+        uint version,
+        CancellationToken cancellationToken = default)
         => BakeRange(clip, targetModel, version, 0, clip?.FrameCount ?? 0, cancellationToken);
 
     public static Animation BakeRange(
@@ -26,6 +34,8 @@ public static class GfdAnimationClipBaker
             throw new ArgumentNullException(nameof(clip));
         if (targetModel == null)
             throw new ArgumentNullException(nameof(targetModel));
+        if (!clip.Skeleton.IsCanonical)
+            throw new ArgumentException("AniMatch preview requires a canonical animation clip.", nameof(clip));
         if (clip.FrameCount <= 0)
             throw new ArgumentException("The animation clip has no frames.", nameof(clip));
         if (frameCount <= 0)
@@ -34,27 +44,27 @@ public static class GfdAnimationClipBaker
         firstFrame = Math.Clamp(firstFrame, 0, clip.FrameCount - 1);
         frameCount = Math.Min(frameCount, clip.FrameCount - firstFrame);
 
-        var nodes = targetModel.Nodes.ToArray();
-        if (nodes.Length == 0)
+        var targetNodes = targetModel.Nodes.ToArray();
+        if (targetNodes.Length == 0)
             throw new InvalidOperationException("The selected model has no nodes.");
 
-        var nodeIndex = new System.Collections.Generic.Dictionary<Node, int>(nodes.Length);
-        for (var i = 0; i < nodes.Length; i++)
-            nodeIndex[nodes[i]] = i;
-
-        var boneForNode = new int[nodes.Length];
-        for (var i = 0; i < nodes.Length; i++)
-            boneForNode[i] = clip.Skeleton.TryGetBone(nodes[i].Name, out var bone) ? bone : -1;
+        var targetCanonicalNodes = GfdAnimationClip.ResolveCanonicalNodes(targetModel);
+        var targetCanonicalIndices = CreateTargetCanonicalIndex(targetNodes, targetCanonicalNodes);
+        var targetBind = AnimationPoseEvaluator.Evaluate(targetModel, null, 0);
+        var targetBindTransforms = targetNodes
+            .Select(node => ToBoneTransform(targetBind[node]))
+            .ToArray();
+        var targetReferenceHeight = CalculateReferenceHeight(targetNodes);
+        var heightRatio = targetReferenceHeight / MathF.Max(clip.Skeleton.ReferenceHeight, 1e-4f);
 
         var animation = new Animation(version)
         {
             Duration = Math.Max(0f, (frameCount - 1) / clip.FramesPerSecond)
         };
-
-        var layers = new AnimationLayer[nodes.Length];
-        for (var i = 0; i < nodes.Length; i++)
+        var layers = new AnimationLayer[targetNodes.Length];
+        for (var i = 0; i < targetNodes.Length; i++)
         {
-            if (boneForNode[i] < 0)
+            if (!targetCanonicalIndices.TryGetValue(targetNodes[i], out _))
                 continue;
 
             var layer = new AnimationLayer(version)
@@ -67,66 +77,85 @@ public static class GfdAnimationClipBaker
             {
                 TargetKind = TargetKind.Node,
                 TargetId = i,
-                TargetName = nodes[i].Name
+                TargetName = targetNodes[i].Name
             };
             controller.Layers.Add(layer);
             animation.Controllers.Add(controller);
             layers[i] = layer;
         }
 
-        var pose = new BoneTransform[clip.Skeleton.BoneCount];
-        var globals = new Matrix4x4[nodes.Length];
+        var canonicalPose = new BoneTransform[CanonicalSkeleton.JointCount];
+        var targetPose = new Matrix4x4[targetNodes.Length];
+        var targetPoseValid = new bool[targetNodes.Length];
+        var sourceBind = clip.Skeleton.BindPose;
+        var rootJoint = (int)CanonicalJoint.Root;
+
         for (var frame = 0; frame < frameCount; frame++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            clip.SampleGlobalPose(firstFrame + frame, pose);
+            clip.SampleGlobalPose(firstFrame + frame, canonicalPose);
+            Array.Clear(targetPoseValid, 0, targetPoseValid.Length);
             var time = frame / clip.FramesPerSecond;
 
-            for (var i = 0; i < nodes.Length; i++)
+            for (var i = 0; i < targetNodes.Length; i++)
             {
-                var bone = boneForNode[i];
-                if (bone >= 0)
-                {
-                    var transform = pose[bone];
-                    var global = Matrix4x4.CreateFromQuaternion(transform.Rotation) * Matrix4x4.CreateScale(transform.Scale);
-                    global.Translation = transform.Position;
-                    globals[i] = global;
-                }
-                else
-                {
-                    globals[i] = nodes[i].WorldTransform;
-                }
-            }
+                var targetNode = targetNodes[i];
+                var local = targetNode.LocalTransform;
+                var parentWorld = GetParentWorld(
+                    targetNode,
+                    targetNodes,
+                    targetPose,
+                    targetPoseValid,
+                    targetBind,
+                    out var parentIndex);
 
-            for (var i = 0; i < nodes.Length; i++)
-            {
-                var layer = layers[i];
-                if (layer == null)
-                    continue;
-
-                var local = globals[i];
-                if (nodes[i].Parent != null && nodeIndex.TryGetValue(nodes[i].Parent, out var parentIndex) &&
-                    Matrix4x4.Invert(globals[parentIndex], out var inverseParent))
+                if (targetCanonicalIndices.TryGetValue(targetNode, out var canonicalIndex))
                 {
-                    local = globals[i] * inverseParent;
+                    var sourceBindTransform = sourceBind[canonicalIndex];
+                    var sourcePoseTransform = canonicalPose[canonicalIndex];
+                    var targetBindTransform = targetBindTransforms[i];
+
+                    var desiredWorldRotation =
+                        ToRotationMatrix(targetBindTransform.Rotation) *
+                        InverseRotation(sourceBindTransform.Rotation) *
+                        ToRotationMatrix(sourcePoseTransform.Rotation);
+                    Matrix4x4.Invert(RotationOnly(parentWorld), out var inverseParentRotation);
+                    var localRotation = Quaternion.Normalize(
+                        Quaternion.CreateFromRotationMatrix(desiredWorldRotation * inverseParentRotation));
+
+                    var localPosition = targetNode.Translation;
+                    if (canonicalIndex == rootJoint)
+                    {
+                        var worldPosition = targetBindTransform.Position +
+                            (sourcePoseTransform.Position - sourceBindTransform.Position) * heightRatio;
+                        if (Matrix4x4.Invert(parentWorld, out var inverseParent))
+                            localPosition = Vector3.Transform(worldPosition, inverseParent);
+                    }
+
+                    local = Matrix4x4.CreateFromQuaternion(localRotation) *
+                        Matrix4x4.CreateScale(targetNode.Scale);
+                    local.Translation = localPosition;
+
+                    if (layers[i] != null)
+                    {
+                        if (!Matrix4x4.Decompose(local, out var scale, out var rotation, out var translation))
+                        {
+                            scale = targetNode.Scale;
+                            rotation = localRotation;
+                            translation = localPosition;
+                        }
+                        layers[i].Keys.Add(new PRSKey(KeyType.NodePRS)
+                        {
+                            Time = time,
+                            Position = translation,
+                            Rotation = Quaternion.Normalize(rotation),
+                            Scale = scale
+                        });
+                    }
                 }
 
-                if (!Matrix4x4.Decompose(local, out var scale, out var rotation, out var translation))
-                {
-                    scale = Vector3.One;
-                    rotation = Quaternion.Identity;
-                    translation = Vector3.Zero;
-                }
-                if (rotation.LengthSquared() < 1e-10f)
-                    rotation = Quaternion.Identity;
-
-                layer.Keys.Add(new PRSKey(KeyType.NodePRS)
-                {
-                    Time = time,
-                    Position = translation,
-                    Rotation = Quaternion.Normalize(rotation),
-                    Scale = scale
-                });
+                targetPose[i] = local * parentWorld;
+                targetPoseValid[i] = true;
             }
         }
 
@@ -140,4 +169,93 @@ public static class GfdAnimationClipBaker
         int frame,
         CancellationToken cancellationToken = default)
         => BakeRange(clip, targetModel, version, frame, 1, cancellationToken);
+
+    private static Dictionary<Node, int> CreateTargetCanonicalIndex(
+        IReadOnlyList<Node> targetNodes,
+        IReadOnlyList<Node> canonicalNodes)
+    {
+        var result = new Dictionary<Node, int>();
+        for (var canonicalIndex = 0; canonicalIndex < canonicalNodes.Count; canonicalIndex++)
+        {
+            var node = canonicalNodes[canonicalIndex];
+            if (!result.TryGetValue(node, out var existing) ||
+                canonicalIndex == (int)CanonicalJoint.Head)
+            {
+                result[node] = canonicalIndex;
+            }
+        }
+
+        // Keep the validation close to the map creation so an accidental model/node mismatch is
+        // reported before any partial animation is returned.
+        foreach (var node in result.Keys)
+            if (!targetNodes.Contains(node))
+                throw new InvalidOperationException("Target canonical node is not part of the target model.");
+        return result;
+    }
+
+    private static Matrix4x4 GetParentWorld(
+        Node node,
+        IReadOnlyList<Node> nodes,
+        IReadOnlyList<Matrix4x4> evaluated,
+        IReadOnlyList<bool> evaluatedFlags,
+        IReadOnlyDictionary<Node, Matrix4x4> bind,
+        out int parentIndex)
+    {
+        parentIndex = -1;
+        if (node.Parent == null)
+            return Matrix4x4.Identity;
+
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            if (!ReferenceEquals(nodes[i], node.Parent))
+                continue;
+            parentIndex = i;
+            return evaluatedFlags[i] ? evaluated[i] : bind[node.Parent];
+        }
+
+        return bind.TryGetValue(node.Parent, out var parentBind) ? parentBind : Matrix4x4.Identity;
+    }
+
+    private static Matrix4x4 RotationOnly(Matrix4x4 matrix)
+    {
+        return Matrix4x4.Decompose(matrix, out _, out var rotation, out _)
+            ? ToRotationMatrix(rotation)
+            : Matrix4x4.Identity;
+    }
+
+    private static Matrix4x4 InverseRotation(Quaternion rotation)
+    {
+        return Matrix4x4.Invert(ToRotationMatrix(rotation), out var inverse)
+            ? inverse
+            : Matrix4x4.Identity;
+    }
+
+    private static Matrix4x4 ToRotationMatrix(Quaternion rotation)
+        => Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(rotation));
+
+    private static BoneTransform ToBoneTransform(Matrix4x4 matrix)
+    {
+        if (!Matrix4x4.Decompose(matrix, out var scale, out var rotation, out var translation))
+        {
+            scale = Vector3.One;
+            rotation = Quaternion.Identity;
+            translation = Vector3.Zero;
+        }
+        if (rotation.LengthSquared() < 1e-10f)
+            rotation = Quaternion.Identity;
+        return new BoneTransform(translation, Quaternion.Normalize(rotation), scale);
+    }
+
+    private static float CalculateReferenceHeight(IReadOnlyList<Node> nodes)
+    {
+        var minY = float.PositiveInfinity;
+        var maxY = float.NegativeInfinity;
+        foreach (var node in nodes)
+        {
+            var y = node.WorldTransform.Translation.Y;
+            minY = MathF.Min(minY, y);
+            maxY = MathF.Max(maxY, y);
+        }
+        return MathF.Max(0.01f, maxY - minY);
+    }
 }

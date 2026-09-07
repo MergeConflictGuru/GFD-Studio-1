@@ -13,8 +13,8 @@ using GFDStudio.AnimationMatching.Integration;
 namespace GFDStudio.GUI.Forms
 {
     /// <summary>
-    /// Correctness layer for AniMatch corpus construction. Kept separate from the Character Browser
-    /// UI so matching can be stricter than the browser's preview compatibility rules.
+    /// Supplies source-model clips to the global AniMatch index. The selected showroom character is
+    /// intentionally absent from this layer; it is used only by the preview/export callbacks.
     /// </summary>
     public partial class MainForm : IAnimationMatchingCorpusHost
     {
@@ -45,9 +45,8 @@ namespace GFDStudio.GUI.Forms
                 if (source == null)
                     return null;
 
-                // Character Browser animations have a stable pack/kind/index identity. Preserve it
-                // for the source as well as the corpus so AnimationMatcher can actually suppress
-                // the trivial self match around the selected transition frame.
+                // Character Browser entries have a stable source pack/kind/index identity. Keep it
+                // on the query clip so the matcher can suppress the trivial self-match.
                 var selected = mCharacterAnimationListBox?.SelectedItem as CharacterAnimationEntry;
                 if (selected != null &&
                     string.Equals(source.DisplayName, selected.DisplayName, StringComparison.OrdinalIgnoreCase))
@@ -55,8 +54,6 @@ namespace GFDStudio.GUI.Forms
                     return new AnimationMatchIdentityClip(source, GetCorrectedAnimationMatchClipId(selected));
                 }
 
-                // An animation opened outside the showroom has no corpus identity, so keep the
-                // source-only GUID assigned by the existing capture path rather than guessing.
                 return source;
             }
         }
@@ -69,88 +66,58 @@ namespace GFDStudio.GUI.Forms
 
         private IReadOnlyList<IAnimationClip> BuildCorrectedAnimationMatchingCorpus()
         {
-            var targetPack = GetAnimationMatchingTargetModelPack();
-            if (targetPack?.Model == null)
-                return Array.Empty<IAnimationClip>();
-
-            var targetModel = targetPack.Model;
-            var targetModelPath = mCharacterBrowserCurrentModelPath;
-            var skeleton = GfdAnimationClip.CreateSkeleton(targetModel);
             var root = mCharacterBrowserRoot;
-
-            var bodyModels = mCharacterModels
-                .Where(model => model.Part == CharacterModelPart.Body && !string.IsNullOrWhiteSpace(model.Path))
-                .ToArray();
-            var exactModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var characterModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var model in bodyModels)
-            {
-                var directory = GetAnimationMatchCharacterDirectory(root, model.Path);
-                var key = ExtractCharacterModelKey(model.Path);
-                var characterId = ExtractCharacterId(model.Path);
-                if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(key))
-                    exactModels.TryAdd(directory + "|" + key, model.Path);
-                if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(characterId))
-                    characterModels.TryAdd(directory + "|" + characterId, model.Path);
-            }
-
-            var selectedKey = ExtractCharacterModelKey(targetModelPath);
-
-            // Do NOT use IsCharacterBrowserAnimationForSelectedBody here. That legacy filter checks
-            // raw target node names and can reject P5/P5D clips before AnimationRetargetMap gets the
-            // chance to map their different humanoid naming/hierarchy conventions.
+            var lookups = BuildAnimationMatchingSourceModelLookups(root);
             var entries = mCharacterAnimations
                 .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
                 .ToArray();
             var clips = new List<IAnimationClip>(entries.Length);
+            var sourceModelCache = new Dictionary<string, Lazy<Model>>(StringComparer.OrdinalIgnoreCase);
             var skippedWithoutSourceModel = 0;
 
             foreach (var entry in entries)
             {
-                var packPath = entry.PackPath;
-                var kind = entry.Kind;
-                var index = entry.Index;
-                var displayName = entry.DisplayName;
-                var directory = GetAnimationMatchCharacterDirectory(root, packPath);
-                var animationKey = ExtractCharacterModelKey(packPath);
-                var characterId = ExtractCharacterId(packPath);
-
-                string sourceModelPath = null;
-                if (!string.IsNullOrWhiteSpace(targetModelPath) &&
-                    !string.IsNullOrWhiteSpace(selectedKey) &&
-                    string.Equals(selectedKey, animationKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    sourceModelPath = targetModelPath;
-                }
-                else if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(animationKey))
-                {
-                    exactModels.TryGetValue(directory + "|" + animationKey, out sourceModelPath);
-                }
-
-                if (string.IsNullOrWhiteSpace(sourceModelPath) &&
-                    !string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(characterId))
-                {
-                    characterModels.TryGetValue(directory + "|" + characterId, out sourceModelPath);
-                }
-
-                // An unknown source skeleton is not a valid retarget. The old path silently called
-                // FixTargetIds on the raw animation, which could delete incompatible tracks and then
-                // index the mutilated pose as if it were a legitimate match candidate.
+                var sourceModelPath = ResolveAnimationMatchingSourceModelPath(
+                    entry, root, lookups.exactModels, lookups.characterModels);
                 if (string.IsNullOrWhiteSpace(sourceModelPath) || !File.Exists(sourceModelPath))
                 {
                     skippedWithoutSourceModel++;
-                    Logger.Debug($"AnimationMatch: skipping {packPath} [{kind} {index}] because its source model could not be resolved.");
+                    Logger.Debug($"AnimationMatch: skipping {entry.PackPath} [{entry.Kind} {entry.Index}] because its source model could not be resolved.");
                     continue;
                 }
 
-                var capturedSourceModelPath = sourceModelPath;
+                if (!sourceModelCache.TryGetValue(sourceModelPath, out var sourceModel))
+                {
+                    sourceModel = new Lazy<Model>(
+                        () => LoadAnimationMatchingSourceModel(sourceModelPath),
+                        System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+                    sourceModelCache.Add(sourceModelPath, sourceModel);
+                }
+
+                try
+                {
+                    // Global indexing accepts only rigs that can be represented by the canonical
+                    // body schema. Props, vehicles, hair-only files, and helper rigs remain valid
+                    // browser assets but must not poison a shared descriptor layout.
+                    GfdAnimationClip.CreateSkeleton(sourceModel.Value);
+                }
+                catch (Exception ex)
+                {
+                    skippedWithoutSourceModel++;
+                    Logger.Debug($"AnimationMatch: skipping {entry.PackPath} because its source skeleton is not canonical: {ex.Message}");
+                    continue;
+                }
+
+                var capturedSourceModel = sourceModel;
+                var capturedPackPath = entry.PackPath;
+                var capturedKind = entry.Kind;
+                var capturedIndex = entry.Index;
                 clips.Add(new GfdAnimationClip(
                     GetCorrectedAnimationMatchClipId(entry),
-                    displayName,
-                    targetModel,
-                    skeleton,
-                    () => LoadAnimationMatchingCandidateStrict(
-                        packPath, kind, index, capturedSourceModelPath, targetModelPath, targetModel),
+                    entry.DisplayName,
+                    () => capturedSourceModel.Value,
+                    () => LoadAnimationMatchingSourceAnimation(
+                        capturedPackPath, capturedKind, capturedIndex),
                     AnimationMatchingFramesPerSecond));
             }
 
@@ -162,19 +129,60 @@ namespace GFDStudio.GUI.Forms
             return clips;
         }
 
-        private static Animation LoadAnimationMatchingCandidateStrict(
+        private (Dictionary<string, string> exactModels, Dictionary<string, string> characterModels)
+            BuildAnimationMatchingSourceModelLookups(string root)
+        {
+            var exactModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var characterModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var model in mCharacterModels.Where(model =>
+                         model.Part == CharacterModelPart.Body && !string.IsNullOrWhiteSpace(model.Path)))
+            {
+                var directory = GetAnimationMatchCharacterDirectory(root, model.Path);
+                var key = ExtractCharacterModelKey(model.Path);
+                var characterId = ExtractCharacterId(model.Path);
+                if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(key))
+                    exactModels.TryAdd(directory + "|" + key, model.Path);
+                if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(characterId))
+                    characterModels.TryAdd(directory + "|" + characterId, model.Path);
+            }
+
+            return (exactModels, characterModels);
+        }
+
+        private static string ResolveAnimationMatchingSourceModelPath(
+            CharacterAnimationEntry entry,
+            string root,
+            IReadOnlyDictionary<string, string> exactModels,
+            IReadOnlyDictionary<string, string> characterModels)
+        {
+            var directory = GetAnimationMatchCharacterDirectory(root, entry.PackPath);
+            var animationKey = ExtractCharacterModelKey(entry.PackPath);
+            var characterId = ExtractCharacterId(entry.PackPath);
+            string sourceModelPath = null;
+
+            if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(animationKey))
+                exactModels.TryGetValue(directory + "|" + animationKey, out sourceModelPath);
+            if (string.IsNullOrWhiteSpace(sourceModelPath) &&
+                !string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(characterId))
+                characterModels.TryGetValue(directory + "|" + characterId, out sourceModelPath);
+
+            return sourceModelPath;
+        }
+
+        private static Model LoadAnimationMatchingSourceModel(string sourceModelPath)
+        {
+            var pack = Resource.Load<ModelPack>(sourceModelPath);
+            return pack?.Model ?? throw new InvalidDataException(
+                "Animation source model has no model data: " + sourceModelPath);
+        }
+
+        private static Animation LoadAnimationMatchingSourceAnimation(
             string packPath,
             CharacterAnimationListKind kind,
-            int index,
-            string sourceModelPath,
-            string targetModelPath,
-            Model targetModel)
+            int index)
         {
-            if (string.IsNullOrWhiteSpace(sourceModelPath))
-                throw new InvalidDataException("Animation matching requires a resolvable source model: " + packPath);
-
             var pack = Resource.Load<AnimationPack>(packPath);
-            Animation animation = kind switch
+            var animation = kind switch
             {
                 CharacterAnimationListKind.Animation =>
                     index >= 0 && index < (pack.Animations?.Count ?? 0) ? pack.Animations[index] : null,
@@ -184,22 +192,8 @@ namespace GFDStudio.GUI.Forms
                     index >= 0 && index < (pack.BlendAnimations?.Count ?? 0) ? pack.BlendAnimations[index] : null,
                 _ => null
             };
-            if (animation == null)
-                throw new InvalidDataException("Animation no longer exists in pack: " + packPath);
-
-            if (!AreSamePath(sourceModelPath, targetModelPath))
-            {
-                var sourcePack = Resource.Load<ModelPack>(sourceModelPath);
-                if (sourcePack?.Model == null)
-                    throw new InvalidDataException("Animation source model has no model data: " + sourceModelPath);
-
-                // This invokes the semantic humanoid baker when P5 and P5D use different
-                // hierarchies, so descriptors are generated only after conversion to target space.
-                animation.Retarget(sourcePack.Model, targetModel, false);
-            }
-
-            animation.FixTargetIds(targetModel);
-            return animation;
+            return animation ?? throw new InvalidDataException(
+                "Animation no longer exists in pack: " + packPath);
         }
 
         private static string GetCorrectedAnimationMatchClipId(CharacterAnimationEntry entry) =>
@@ -226,26 +220,17 @@ namespace GFDStudio.GUI.Forms
 
         private string GetCorrectedAnimationMatchingContextKey()
         {
-            var targetPack = GetAnimationMatchingTargetModelPack();
-            var facePath = GetSelectedCharacterBrowserFacePath();
-            var hairPath = GetSelectedCharacterBrowserHairPath();
-
             return string.Join("|",
-                "animatch-context-v2",
+                "animatch-global-v3",
                 NormalizeAnimationMatchPath(mCharacterBrowserRoot),
-                NormalizeAnimationMatchPath(mCharacterBrowserCurrentModelPath),
-                NormalizeAnimationMatchPath(facePath),
-                NormalizeAnimationMatchPath(hairPath),
-                GetAnimationMatchingTargetSkeletonSignature(targetPack?.Model),
                 GetAnimationMatchingCorpusListSignature(),
-                mCharacterBrowserScanGeneration,
-                mCharacterAnimations.Count);
+                mCharacterBrowserScanGeneration);
         }
 
         private string GetAnimationMatchingCorpusListSignature()
         {
-            // Clip membership is cheap to hash and avoids treating two scans with the same count as
-            // the same corpus. AnimationIndexCache separately verifies every clip ID on load.
+            var root = mCharacterBrowserRoot;
+            var lookups = BuildAnimationMatchingSourceModelLookups(root);
             var builder = new StringBuilder();
             foreach (var entry in mCharacterAnimations
                          .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
@@ -253,47 +238,15 @@ namespace GFDStudio.GUI.Forms
                          .ThenBy(entry => entry.Kind)
                          .ThenBy(entry => entry.Index))
             {
-                builder.Append(GetCorrectedAnimationMatchClipId(entry)).Append('\n');
+                var sourceModelPath = ResolveAnimationMatchingSourceModelPath(
+                    entry, root, lookups.exactModels, lookups.characterModels);
+                builder.Append(GetCorrectedAnimationMatchClipId(entry))
+                    .Append('|')
+                    .Append(NormalizeAnimationMatchPath(sourceModelPath))
+                    .Append('\n');
             }
 
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
-        }
-
-        private static string GetAnimationMatchingTargetSkeletonSignature(Model model)
-        {
-            if (model == null)
-                return "no-target-model";
-
-            // Pose matching depends on the composed target skeleton, not its textures. Hash node
-            // topology and bind transforms so changing body/face/hair composition invalidates both
-            // the disk cache and the live in-memory index even when file paths/counts stay the same.
-            var builder = new StringBuilder();
-            foreach (var node in model.Nodes)
-            {
-                builder.Append(node.Name).Append('|')
-                    .Append(node.Parent?.Name ?? string.Empty).Append('|');
-                AppendAnimationMatchVector(builder, node.Translation);
-                AppendAnimationMatchQuaternion(builder, node.Rotation);
-                AppendAnimationMatchVector(builder, node.Scale);
-                builder.Append('\n');
-            }
-
-            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
-        }
-
-        private static void AppendAnimationMatchVector(StringBuilder builder, System.Numerics.Vector3 value)
-        {
-            builder.Append(BitConverter.SingleToInt32Bits(value.X)).Append(',')
-                .Append(BitConverter.SingleToInt32Bits(value.Y)).Append(',')
-                .Append(BitConverter.SingleToInt32Bits(value.Z)).Append('|');
-        }
-
-        private static void AppendAnimationMatchQuaternion(StringBuilder builder, System.Numerics.Quaternion value)
-        {
-            builder.Append(BitConverter.SingleToInt32Bits(value.X)).Append(',')
-                .Append(BitConverter.SingleToInt32Bits(value.Y)).Append(',')
-                .Append(BitConverter.SingleToInt32Bits(value.Z)).Append(',')
-                .Append(BitConverter.SingleToInt32Bits(value.W)).Append('|');
         }
 
         private static string NormalizeAnimationMatchPath(string path)

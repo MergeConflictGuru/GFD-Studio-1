@@ -119,12 +119,10 @@ namespace GFDStudio.GUI.Forms
             {
                 var selected = mCharacterAnimationListBox?.SelectedItem as CharacterAnimationEntry;
                 var displayName = selected?.DisplayName ?? "Animation";
-                var skeleton = GfdAnimationClip.CreateSkeleton(modelPack.Model);
                 mAnimationMatchCurrentSource = new GfdAnimationClip(
                     "source:" + Guid.NewGuid().ToString("N"),
                     displayName,
                     modelPack.Model,
-                    skeleton,
                     () => animation,
                     AnimationMatchingFramesPerSecond);
                 mAnimationMatchTailActive = false;
@@ -190,7 +188,7 @@ namespace GFDStudio.GUI.Forms
 
         private void EnsureAnimationMatchingController()
         {
-            var context = GetAnimationMatchingContextKey();
+            var context = GetCorrectedAnimationMatchingContextKey();
             if (mAnimationMatchController != null && string.Equals(context, mAnimationMatchControllerContext, StringComparison.Ordinal))
                 return;
 
@@ -203,94 +201,6 @@ namespace GFDStudio.GUI.Forms
         private ModelPack GetAnimationMatchingTargetModelPack()
         {
             return mCharacterBrowserCurrentModelPack ?? ModelEditorTreeView?.TopNode?.Data as ModelPack;
-        }
-
-        private string GetAnimationMatchingContextKey()
-        {
-            return string.Join("|",
-                mCharacterBrowserRoot ?? string.Empty,
-                mCharacterBrowserCurrentModelPath ?? string.Empty,
-                mCharacterBrowserScanGeneration,
-                mCharacterAnimations.Count);
-        }
-
-        private IReadOnlyList<IAnimationClip> BuildAnimationMatchingCorpus()
-        {
-            var targetPack = GetAnimationMatchingTargetModelPack();
-            if (targetPack?.Model == null)
-                return Array.Empty<IAnimationClip>();
-
-            var targetModel = targetPack.Model;
-            var targetModelPath = mCharacterBrowserCurrentModelPath;
-            var skeleton = GfdAnimationClip.CreateSkeleton(targetModel);
-            var root = mCharacterBrowserRoot;
-
-            // Resolve source skeletons once, on the UI thread, instead of doing an O(models)
-            // lookup for every animation while the worker pool is busy sampling poses.
-            var bodyModels = mCharacterModels
-                .Where(model => model.Part == CharacterModelPart.Body && !string.IsNullOrWhiteSpace(model.Path))
-                .ToArray();
-            var exactModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var characterModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var model in bodyModels)
-            {
-                var directory = GetAnimationMatchCharacterDirectory(root, model.Path);
-                var key = ExtractCharacterModelKey(model.Path);
-                var characterId = ExtractCharacterId(model.Path);
-                if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(key))
-                    exactModels.TryAdd(directory + "|" + key, model.Path);
-                if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(characterId))
-                    characterModels.TryAdd(directory + "|" + characterId, model.Path);
-            }
-
-            var selectedKey = ExtractCharacterModelKey(targetModelPath);
-            var entries = mCharacterAnimations
-                .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
-                .Where(IsCharacterBrowserAnimationForSelectedBody)
-                .ToArray();
-            var clips = new List<IAnimationClip>(entries.Length);
-
-            foreach (var entry in entries)
-            {
-                var packPath = entry.PackPath;
-                var kind = entry.Kind;
-                var index = entry.Index;
-                var displayName = entry.DisplayName;
-                var directory = GetAnimationMatchCharacterDirectory(root, packPath);
-                var animationKey = ExtractCharacterModelKey(packPath);
-                var characterId = ExtractCharacterId(packPath);
-
-                string sourceModelPath = null;
-                if (!string.IsNullOrWhiteSpace(targetModelPath) &&
-                    !string.IsNullOrWhiteSpace(selectedKey) &&
-                    string.Equals(selectedKey, animationKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    sourceModelPath = targetModelPath;
-                }
-                else if (!string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(animationKey))
-                {
-                    exactModels.TryGetValue(directory + "|" + animationKey, out sourceModelPath);
-                }
-
-                if (string.IsNullOrWhiteSpace(sourceModelPath) &&
-                    !string.IsNullOrWhiteSpace(directory) && !string.IsNullOrWhiteSpace(characterId))
-                {
-                    characterModels.TryGetValue(directory + "|" + characterId, out sourceModelPath);
-                }
-
-                var capturedSourceModelPath = sourceModelPath;
-                var id = packPath + "|" + kind + "|" + index;
-                clips.Add(new GfdAnimationClip(
-                    id,
-                    displayName,
-                    targetModel,
-                    skeleton,
-                    () => LoadAnimationMatchingCandidate(
-                        packPath, kind, index, capturedSourceModelPath, targetModelPath, targetModel),
-                    AnimationMatchingFramesPerSecond));
-            }
-
-            return clips;
         }
 
         private static string GetAnimationMatchCharacterDirectory(string root, string path)
@@ -311,42 +221,9 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
-        private static Animation LoadAnimationMatchingCandidate(
-            string packPath,
-            CharacterAnimationListKind kind,
-            int index,
-            string sourceModelPath,
-            string targetModelPath,
-            Model targetModel)
-        {
-            var pack = Resource.Load<AnimationPack>(packPath);
-            Animation animation = kind switch
-            {
-                CharacterAnimationListKind.Animation =>
-                    index >= 0 && index < (pack.Animations?.Count ?? 0) ? pack.Animations[index] : null,
-                CharacterAnimationListKind.ExtraAnimation =>
-                    index >= 0 && index < (pack.METAPHOR_AnimArray3?.Count ?? 0) ? pack.METAPHOR_AnimArray3[index] : null,
-                CharacterAnimationListKind.BlendAnimation =>
-                    index >= 0 && index < (pack.BlendAnimations?.Count ?? 0) ? pack.BlendAnimations[index] : null,
-                _ => null
-            };
-            if (animation == null)
-                throw new InvalidDataException("Animation no longer exists in pack: " + packPath);
-
-            if (!string.IsNullOrWhiteSpace(sourceModelPath) &&
-                !AreSamePath(sourceModelPath, targetModelPath))
-            {
-                var sourcePack = Resource.Load<ModelPack>(sourceModelPath);
-                if (sourcePack?.Model != null)
-                    animation.Retarget(sourcePack.Model, targetModel, false);
-            }
-
-            animation.FixTargetIds(targetModel);
-            return animation;
-        }
-
         IAnimationClip IGfdAnimationMatchingHost.CurrentAnimation => mAnimationMatchCurrentSource;
-        IReadOnlyList<IAnimationClip> IGfdAnimationMatchingHost.SearchableAnimations => BuildAnimationMatchingCorpus();
+        IReadOnlyList<IAnimationClip> IGfdAnimationMatchingHost.SearchableAnimations =>
+            BuildCorrectedAnimationMatchingCorpus();
 
         string IAnimationMatchingCacheHost.AnimationMatchingCachePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -354,7 +231,8 @@ namespace GFDStudio.GUI.Forms
             "animation_matching",
             "pose_index.bin");
 
-        string IAnimationMatchingCacheHost.AnimationMatchingCorpusSignature => GetAnimationMatchingContextKey();
+        string IAnimationMatchingCacheHost.AnimationMatchingCorpusSignature =>
+            GetCorrectedAnimationMatchingContextKey();
 
         void IGfdAnimationMatchingHost.PreviewAnimation(IAnimationClip clip, int transitionFrame)
         {
@@ -393,12 +271,10 @@ namespace GFDStudio.GUI.Forms
                 mAnimationMatchPreviewLoad = false;
             }
 
-            var skeleton = GfdAnimationClip.CreateSkeleton(targetPack.Model);
             mAnimationMatchCurrentSource = new GfdAnimationClip(
                 "source:" + clip.Id,
                 clip.DisplayName,
                 targetPack.Model,
-                skeleton,
                 () => baked,
                 AnimationMatchingFramesPerSecond);
             mAnimationMatchTailActive = true;

@@ -25,6 +25,17 @@ public sealed class PoseFeatureExtractor
 
     public int[] SelectFeatureBones(SkeletonDefinition skeleton)
     {
+        if (skeleton.IsCanonical)
+        {
+            // Canonical clips all expose the same semantic slots. Never select by raw source
+            // names here: that would make P5/P5D aliases and hierarchy differences leak back into
+            // the global index schema.
+            return Enumerable.Range(0, skeleton.BoneCount)
+                .Where(index => index != skeleton.RootBoneIndex)
+                .Take(_options.MaxFeatureBones)
+                .ToArray();
+        }
+
         var selected = new List<int>();
         foreach (var preferred in _options.PreferredBones)
         {

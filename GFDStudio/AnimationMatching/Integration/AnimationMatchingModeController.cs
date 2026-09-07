@@ -11,8 +11,8 @@ using GFDStudio.AnimationMatching.UI;
 namespace GFDStudio.AnimationMatching.Integration;
 
 /// <summary>
-/// Controller for the animation matching mode. The host bridges GFD Studio's
-/// currently retargeted animation/model representation into IAnimationClip.
+/// Controller for the animation matching mode. The host supplies source-model clips for the
+/// global index; target-model conversion is deferred to preview/export callbacks.
 /// </summary>
 public sealed class AnimationMatchingModeController : IDisposable
 {
@@ -44,10 +44,15 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.ThumbnailRequested += OnThumbnailRequested;
     }
 
-    private IAnimationClip? CurrentSource => _host.CurrentAnimation;
-    private IReadOnlyList<IAnimationClip> CurrentCorpus => _host.SearchableAnimations;
+    private IAnimationClip? CurrentSource =>
+        (_host as IAnimationMatchingCorpusHost)?.CurrentAnimationForMatching ?? _host.CurrentAnimation;
+
+    private IReadOnlyList<IAnimationClip> CurrentCorpus =>
+        (_host as IAnimationMatchingCorpusHost)?.SearchableAnimationsForMatching ?? _host.SearchableAnimations;
+
     private string? CurrentContextSignature =>
-        _host is IAnimationMatchingCacheHost cacheHost ? cacheHost.AnimationMatchingCorpusSignature : null;
+        (_host as IAnimationMatchingCorpusHost)?.AnimationMatchingContextSignature ??
+        (_host as IAnimationMatchingCacheHost)?.AnimationMatchingCorpusSignature;
 
     public void SyncSourceFromHost()
     {
@@ -127,7 +132,11 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SetBusy(true, "Indexing animations…");
         try
         {
-            var corpus = new AnimationCorpus(CurrentCorpus);
+            // Source-model discovery and canonical-rig validation can load many GMD files. Keep
+            // that work off the UI thread just like descriptor extraction and cache I/O.
+            var corpus = await Task.Run(
+                () => new AnimationCorpus(CurrentCorpus),
+                _work!.Token);
             if (corpus.Clips.Count == 0)
                 throw new InvalidOperationException("No animations with a resolvable source model are available for matching.");
 
