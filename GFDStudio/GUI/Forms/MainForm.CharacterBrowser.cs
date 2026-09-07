@@ -540,6 +540,7 @@ namespace GFDStudio.GUI.Forms
 
         private async void StartCharacterBrowserScan(string root)
         {
+            CancelAnimationMatchingWarmup();
             mCharacterBrowserScanCancellation?.Cancel();
             mCharacterBrowserScanCancellation?.Dispose();
             mCharacterBrowserScanCancellation = new CancellationTokenSource();
@@ -743,6 +744,10 @@ namespace GFDStudio.GUI.Forms
                                     $"{mCharacterAnimations.Count + mCharacterBlendAnimations.Count:N0} unique animations " +
                                     $"({finalCachedCount:N0} cached, {finalRescannedCount:N0} rescanned)" +
                                     (finalFailedCount == 0 ? string.Empty : $" ({finalFailedCount:N0} GAP files failed to parse)"));
+
+                            // The global AniMatch corpus is independent of the selected target, so
+                            // prepare it as soon as the browser has a complete stable animation set.
+                            WarmAnimationMatchingIndexAfterScan(generation);
                         }));
                     }
                 }, token);
