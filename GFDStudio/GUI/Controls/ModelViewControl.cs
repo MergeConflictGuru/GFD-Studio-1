@@ -778,9 +778,19 @@ namespace GFDStudio.GUI.Controls
             if ( mGuideArrow == null || mShaderRegistry?.mGuideArrowShader == null || !mIsModelLoaded )
                 return;
 
-            GetGuideArrowTargetBounds( out var target, out var targetExtents );
+            GetGuideArrowTargetBounds( out var target, out var targetExtents, out var hasTargetGeometry );
+            if ( !IsFinite( target ) )
+            {
+                // A malformed animated pose must not be allowed to turn the
+                // navigation aid into NaNs. Keep the marker usable even when
+                // the model itself cannot produce a meaningful target point.
+                target = Vector3.Zero;
+                targetExtents = new Vector3( 1.0f );
+                hasTargetGeometry = false;
+            }
+
             var targetClip = ProjectGuideArrowPoint( target, out var targetInFrontOfCamera );
-            var targetInView = IsGuideArrowTargetInView( target, targetExtents );
+            var targetInView = hasTargetGeometry && IsGuideArrowTargetInView( target, targetExtents );
             var desiredOpacity = CalculateGuideArrowOpacity( targetClip, targetInFrontOfCamera, targetInView );
             var opacity = UpdateGuideArrowOpacity( desiredOpacity );
             if ( opacity <= 0.001f )
@@ -788,8 +798,21 @@ namespace GFDStudio.GUI.Controls
 
             var anchor = ResolveGuideArrowAnchor();
             var direction = target - anchor;
-            if ( direction.LengthSquared < 0.0001f )
+            if ( !IsFinite( anchor ) || !IsFinite( direction ) )
                 return;
+
+            if ( direction.LengthSquared < 0.0001f )
+            {
+                // No geometry (or a zero-sized model bound) still deserves a
+                // visible locator. Pick a stable camera-facing direction rather
+                // than silently dropping the arrow.
+                var inverseView = Matrix4.Invert( mCamera.View );
+                var cameraDirection = Vector4.TransformRow(
+                    new Vector4( 0.0f, 0.0f, 1.0f, 0.0f ), inverseView );
+                direction = new Vector3( cameraDirection.X, cameraDirection.Y, cameraDirection.Z );
+                if ( !IsFinite( direction ) || direction.LengthSquared < 0.0001f )
+                    direction = Vector3.UnitZ;
+            }
 
             direction.Normalize();
             var model = Matrix4.CreateScale( GetGuideArrowScale( anchor ) ) *
@@ -863,13 +886,64 @@ namespace GFDStudio.GUI.Controls
             return mGuideArrowOpacity;
         }
 
-        private void GetGuideArrowTargetBounds( out Vector3 center, out Vector3 extents )
+        private void GetGuideArrowTargetBounds( out Vector3 center, out Vector3 extents,
+                                                out bool hasTargetGeometry )
         {
             var model = mModel?.ModelPack?.Model;
-            // Keep this path constant-time. It is called for every rendered frame
-            // while animation playback is active; walking every animated vertex
-            // here starves the WinForms message loop on large character models.
-            if ( model?.BoundingBox is { } bounds )
+            var minimum = new System.Numerics.Vector3( float.PositiveInfinity );
+            var maximum = new System.Numerics.Vector3( float.NegativeInfinity );
+            hasTargetGeometry = false;
+
+            // Use each mesh's eight local bound corners instead of walking all
+            // vertices. GLModel.Draw has already updated the node transforms for
+            // the current animation frame, so this follows root motion and
+            // remains cheap enough to run on every paint.
+            if ( mModel != null )
+            {
+                foreach ( var node in mModel.Nodes )
+                {
+                    if ( !node.IsVisible )
+                        continue;
+
+                    foreach ( var mesh in node.Meshes )
+                    {
+                        if ( !mesh.IsVisible || mesh.Mesh?.BoundingBox is not { } meshBounds ||
+                             !IsFinite( meshBounds.Min ) || !IsFinite( meshBounds.Max ) )
+                            continue;
+
+                        for ( var x = -1; x <= 1; x += 2 )
+                        for ( var y = -1; y <= 1; y += 2 )
+                        for ( var z = -1; z <= 1; z += 2 )
+                        {
+                            var localPoint = new System.Numerics.Vector3(
+                                x < 0 ? meshBounds.Min.X : meshBounds.Max.X,
+                                y < 0 ? meshBounds.Min.Y : meshBounds.Max.Y,
+                                z < 0 ? meshBounds.Min.Z : meshBounds.Max.Z );
+                            var worldPoint = System.Numerics.Vector3.Transform(
+                                localPoint, node.WorldTransform );
+                            if ( !IsFinite( worldPoint ) )
+                                continue;
+
+                            minimum = System.Numerics.Vector3.Min( minimum, worldPoint );
+                            maximum = System.Numerics.Vector3.Max( maximum, worldPoint );
+                            hasTargetGeometry = true;
+                        }
+                    }
+                }
+            }
+
+            if ( hasTargetGeometry )
+            {
+                center = ( ( minimum + maximum ) * 0.5f ).ToOpenTK();
+                extents = ( ( maximum - minimum ) * 0.5f ).ToOpenTK();
+                extents.X = MathF.Max( 0.001f, MathF.Abs( extents.X ) );
+                extents.Y = MathF.Max( 0.001f, MathF.Abs( extents.Y ) );
+                extents.Z = MathF.Max( 0.001f, MathF.Abs( extents.Z ) );
+                return;
+            }
+
+            if ( model?.BoundingBox is { } bounds &&
+                 IsFinite( bounds.Min ) && IsFinite( bounds.Max ) )
             {
                 center = new Vector3(
                     ( bounds.Min.X + bounds.Max.X ) * 0.5f,
@@ -879,13 +953,16 @@ namespace GFDStudio.GUI.Controls
                     MathF.Max( 0.001f, MathF.Abs( bounds.Max.X - bounds.Min.X ) * 0.5f ),
                     MathF.Max( 0.001f, MathF.Abs( bounds.Max.Y - bounds.Min.Y ) * 0.5f ),
                     MathF.Max( 0.001f, MathF.Abs( bounds.Max.Z - bounds.Min.Z ) * 0.5f ) );
+                hasTargetGeometry = true;
                 return;
             }
 
-            if ( model?.BoundingSphere is { } sphere )
+            if ( model?.BoundingSphere is { } sphere &&
+                 IsFinite( sphere.Center ) && float.IsFinite( sphere.Radius ) )
             {
                 center = new Vector3( sphere.Center.X, sphere.Center.Y, sphere.Center.Z );
                 extents = new Vector3( MathF.Max( 0.001f, sphere.Radius ) );
+                hasTargetGeometry = true;
                 return;
             }
 
@@ -902,15 +979,24 @@ namespace GFDStudio.GUI.Controls
             var hasFrontPoint = false;
             for ( var x = -1; x <= 1; x += 2 )
             for ( var y = -1; y <= 1; y += 2 )
-            for ( var z = -1; z <= 1; z += 2 )
+                for ( var z = -1; z <= 1; z += 2 )
             {
                 var point = center + new Vector3( extents.X * x, extents.Y * y, extents.Z * z );
+                if ( !IsFinite( point ) )
+                    continue;
+
                 var viewPosition = Vector4.TransformRow( new Vector4( point, 1.0f ), mCamera.View );
+                if ( !IsFinite( viewPosition ) )
+                    continue;
+
                 if ( viewPosition.Z >= 0.0f || viewPosition.W <= 0.0001f )
                     continue;
 
                 hasFrontPoint = true;
                 var clipPosition = Vector4.TransformRow( viewPosition, mCamera.Projection );
+                if ( !IsFinite( clipPosition ) )
+                    continue;
+
                 if ( clipPosition.W <= 0.0001f )
                     continue;
 
@@ -982,7 +1068,7 @@ namespace GFDStudio.GUI.Controls
             // preserves the grid-based default instead of silently moving the
             // marker to the view center.
             var modelRadius = 2.0f;
-            if ( mModel?.ModelPack?.Model?.BoundingSphere is { } sphere )
+            if ( mModel?.ModelPack?.Model?.BoundingSphere is { } sphere && float.IsFinite( sphere.Radius ) )
                 modelRadius = MathF.Max( 2.0f, sphere.Radius );
 
             var inverseView = Matrix4.Invert( mCamera.View );
@@ -1009,8 +1095,19 @@ namespace GFDStudio.GUI.Controls
         {
             var viewPosition = Vector4.TransformRow( new Vector4( worldPosition, 1.0f ), mCamera.View );
             inFrontOfCamera = viewPosition.Z < 0.0f;
-            return Vector4.TransformRow( viewPosition, mCamera.Projection );
+            var clipPosition = Vector4.TransformRow( viewPosition, mCamera.Projection );
+            return IsFinite( clipPosition ) ? clipPosition : Vector4.Zero;
         }
+
+        private static bool IsFinite( System.Numerics.Vector3 value ) =>
+            float.IsFinite( value.X ) && float.IsFinite( value.Y ) && float.IsFinite( value.Z );
+
+        private static bool IsFinite( Vector3 value ) =>
+            float.IsFinite( value.X ) && float.IsFinite( value.Y ) && float.IsFinite( value.Z );
+
+        private static bool IsFinite( Vector4 value ) =>
+            float.IsFinite( value.X ) && float.IsFinite( value.Y ) &&
+            float.IsFinite( value.Z ) && float.IsFinite( value.W );
 
         private static bool IsGuideArrowPointOnScreen( Vector4 clipPosition, float margin )
         {
@@ -1027,7 +1124,7 @@ namespace GFDStudio.GUI.Controls
         {
             if ( targetInView )
                 return 0.0f;
-            if ( !inFrontOfCamera || clipPosition.W <= 0.0001f )
+            if ( !inFrontOfCamera || !IsFinite( clipPosition ) || clipPosition.W <= 0.0001f )
                 return 1.0f;
 
             var normalizedX = clipPosition.X / clipPosition.W;
