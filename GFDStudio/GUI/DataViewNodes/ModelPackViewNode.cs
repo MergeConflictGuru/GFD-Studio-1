@@ -8,6 +8,7 @@ using GFDLibrary.Conversion.AssimpNet;
 using GFDLibrary.Conversion.FbxSdk;
 using GFDLibrary.Misc;
 using GFDStudio.FormatModules;
+using GFDStudio.GUI.Controls;
 using GFDStudio.IO;
 
 namespace GFDStudio.GUI.DataViewNodes
@@ -143,33 +144,62 @@ namespace GFDStudio.GUI.DataViewNodes
                     return;
                 }
 
-                var animationPack = ModuleImportUtilities.SelectImportFile<AnimationPack>(
-                    "Select the GAP animation pack to bake into the FBX.", out var animationPath );
-                if ( animationPack == null )
-                    return;
-                if ( animationPack.Animations == null || animationPack.Animations.Count == 0 )
+                AnimationPack animationPack;
+                string animationPath = null;
+                string exportDescription;
+
+                // If the showroom/editor viewer already has an animation loaded, export exactly
+                // what the user is looking at. This also covers AniMatch previews because those are
+                // baked into the shared ModelViewControl before display.
+                var loadedAnimation = ModelViewControl.Instance.Animation;
+                if ( loadedAnimation != null )
                 {
-                    MessageBox.Show( "The selected GAP contains no base animations.", "Animated FBX export",
-                                     MessageBoxButtons.OK, MessageBoxIcon.Warning );
-                    return;
+                    animationPack = new AnimationPack( Data.Version );
+                    animationPack.Animations.Add( loadedAnimation );
+                    exportDescription = "the currently loaded animation";
+                }
+                else if ( Data.AnimationPack?.Animations?.Count > 0 )
+                {
+                    // Normal model packs can carry their own animation pack. Prefer that over
+                    // asking the user to select the same data again.
+                    animationPack = Data.AnimationPack;
+                    exportDescription = $"{animationPack.Animations.Count} embedded animation(s)";
+                }
+                else
+                {
+                    animationPack = ModuleImportUtilities.SelectImportFile<AnimationPack>(
+                        "Select the GAP animation pack to bake into the FBX.", out animationPath );
+                    if ( animationPack == null )
+                        return;
+                    if ( animationPack.Animations == null || animationPack.Animations.Count == 0 )
+                    {
+                        MessageBox.Show( "The selected GAP contains no base animations.", "Animated FBX export",
+                                         MessageBoxButtons.OK, MessageBoxIcon.Warning );
+                        return;
+                    }
+                    exportDescription = $"{animationPack.Animations.Count} selected GAP animation(s)";
                 }
 
+                var modelStem = Path.GetFileNameWithoutExtension( Text );
                 using var saveDialog = new SaveFileDialog
                 {
                     Filter = "Autodesk FBX (*.fbx)|*.fbx",
                     DefaultExt = "fbx",
                     AddExtension = true,
-                    InitialDirectory = Path.GetDirectoryName( animationPath ),
-                    FileName = Path.GetFileNameWithoutExtension( animationPath ) + ".fbx",
-                    Title = "Export model and GAP animation as FBX"
+                    FileName = animationPath == null
+                        ? modelStem + "_animated.fbx"
+                        : Path.GetFileNameWithoutExtension( animationPath ) + ".fbx",
+                    Title = "Export model and animation as FBX"
                 };
+                if ( animationPath != null )
+                    saveDialog.InitialDirectory = Path.GetDirectoryName( animationPath );
                 if ( saveDialog.ShowDialog() != DialogResult.OK )
                     return;
 
                 try
                 {
                     ModelPackExportHelper.ExportFile( Data, animationPack, saveDialog.FileName );
-                    MessageBox.Show( $"Exported {animationPack.Animations.Count} animation(s) at 30 fps:\n{saveDialog.FileName}",
+                    MessageBox.Show( $"Exported {exportDescription} at 30 fps:\n{saveDialog.FileName}",
                                      "Animated FBX export", MessageBoxButtons.OK, MessageBoxIcon.Information );
                 }
                 catch ( System.Exception exception )
