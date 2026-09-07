@@ -586,80 +586,6 @@ namespace GFDStudio.GUI.Controls
             }
         }
 
-        /// <summary>
-        /// Advances the loaded animation by one frame in the requested direction.
-        /// Frame positions are taken from the source animation's key timings.
-        /// </summary>
-        public void StepAnimation( int frameDelta )
-        {
-            if ( !IsAnimationLoaded || frameDelta == 0 )
-                return;
-
-            if ( AnimationPlayback == AnimationPlaybackState.Playing )
-                AnimationPlayback = AnimationPlaybackState.Paused;
-
-            if ( mModel?.Animation == null )
-            {
-                mModel?.LoadAnimation( Animation );
-                if ( AnimationOverlay != null )
-                    mModel?.LoadBlendAnimation( AnimationOverlay );
-            }
-
-            var frameTimes = GetAnimationFrameTimes();
-            var currentTime = Math.Clamp( AnimationTime, 0d, Math.Max( 0d, Animation.Duration ) );
-            var currentFrame = 0;
-            var closestDistance = double.MaxValue;
-            for ( var i = 0; i < frameTimes.Count; i++ )
-            {
-                var distance = Math.Abs( frameTimes[ i ] - currentTime );
-                if ( distance < closestDistance )
-                {
-                    currentFrame = i;
-                    closestDistance = distance;
-                }
-            }
-
-            var nextFrame = ( currentFrame + ( long )frameDelta ) % frameTimes.Count;
-            if ( nextFrame < 0 )
-                nextFrame += frameTimes.Count;
-
-            AnimationTime = frameTimes[ ( int )nextFrame ];
-            Invalidate();
-        }
-
-        private IReadOnlyList<double> GetAnimationFrameTimes()
-        {
-            var duration = Math.Max( 0d, Animation.Duration );
-            var frameTimes = new List<double> { 0d };
-
-            if ( Animation.Controllers != null )
-            {
-                foreach ( var controller in Animation.Controllers )
-                {
-                    if ( controller?.Layers == null )
-                        continue;
-
-                    foreach ( var layer in controller.Layers )
-                    {
-                        if ( layer?.Keys == null )
-                            continue;
-
-                        foreach ( var key in layer.Keys )
-                        {
-                            if ( key != null && !float.IsNaN( key.Time ) && !float.IsInfinity( key.Time ) &&
-                                 key.Time >= 0f && key.Time <= duration )
-                                frameTimes.Add( key.Time );
-                        }
-                    }
-                }
-            }
-
-            if ( duration > 0d )
-                frameTimes.Add( duration );
-
-            return frameTimes.Distinct().OrderBy( time => time ).ToArray();
-        }
-
         private Bitmap RenderModelThumbnail( int width, int height, float oldAspectRatio )
         {
             var viewport = new int[4];
@@ -1593,19 +1519,7 @@ namespace GFDStudio.GUI.Controls
 
         protected override void OnKeyDown( KeyEventArgs e )
         {
-            if ( e.KeyCode == Keys.Left )
-            {
-                StepAnimation( -1 );
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-            }
-            else if ( e.KeyCode == Keys.Right )
-            {
-                StepAnimation( 1 );
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-            }
-            else if ( e.KeyCode == Keys.Space )
+            if ( e.KeyCode == Keys.Space )
             {
                 mCamera.ModelTranslation = Vector3.Zero;
                 mCamera.ModelRotation = Vector3.Zero;
