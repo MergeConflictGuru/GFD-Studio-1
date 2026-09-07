@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using GFDStudio.AnimationMatching.Core;
@@ -24,6 +25,7 @@ public sealed class AnimationMatchingModeController : IDisposable
     private IAnimationClip? _sourceForResults;
     private StitchedAnimation? _stitched;
     private CancellationTokenSource? _work;
+    private Task? _cachePreload;
     private readonly SemaphoreSlim _thumbnailGate = new(1, 1);
 
     public AnimationMatchingModeController(
@@ -64,6 +66,24 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SetSource(source.DisplayName, source.FrameCount, source.FramesPerSecond);
     }
 
+    /// <summary>
+    /// Starts loading an existing cache in the background. This intentionally does not build or
+    /// write an index; a missing or stale cache remains a user-triggered Reindex operation.
+    /// </summary>
+    public Task PreloadExistingIndexAsync()
+    {
+        if (_host is not IAnimationMatchingCacheHost cacheHost ||
+            !File.Exists(cacheHost.AnimationMatchingCachePath))
+            return Task.CompletedTask;
+
+        if (_cachePreload is { IsCompleted: false })
+            return _cachePreload;
+
+        RestartWork();
+        _cachePreload = BuildIndexAsync(force: false, restartWork: false);
+        return _cachePreload;
+    }
+
     private async void OnSearchRequested(object? sender, EventArgs e)
     {
         var source = _sourceForResults ?? CurrentSource;
@@ -73,11 +93,16 @@ public sealed class AnimationMatchingModeController : IDisposable
             return;
         }
 
-        RestartWork();
-        var cancellationToken = _work.Token;
         _view.SetBusy(true, "Preparing animation match…");
         try
         {
+            // Showroom startup may still be opening the existing memory-mapped cache. Reuse that
+            // work so opening the search surface never starts a second load of the same database.
+            if (_cachePreload is not null)
+                await _cachePreload;
+
+            RestartWork();
+            var cancellationToken = _work.Token;
             await SearchAsync(source, cancellationToken);
         }
         catch (OperationCanceledException) { }
