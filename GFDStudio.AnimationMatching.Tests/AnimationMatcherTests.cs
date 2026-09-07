@@ -182,6 +182,34 @@ public sealed class AnimationMatcherTests
     }
 
     [TestMethod]
+    public void StitchAlignmentFollowsRootMotionWhenFacingAndTravelDisagree()
+    {
+        var source = new FakeClip("source", Vector3.Zero, 0f);
+        var candidate = new FakeClip(
+            "candidate",
+            new Vector3(4f, 0f, -7f),
+            worldYaw: 0f,
+            motionScale: 1f,
+            facingYaw: MathF.PI);
+        var stitched = new StitchedAnimation(source, 5, candidate, 5, 0f, alignPositionAndYaw: true);
+        var sourcePrevious = new BoneTransform[source.Skeleton.BoneCount];
+        var sourceCurrent = new BoneTransform[source.Skeleton.BoneCount];
+        var stitchedCurrent = new BoneTransform[source.Skeleton.BoneCount];
+        var stitchedNext = new BoneTransform[source.Skeleton.BoneCount];
+
+        source.SampleGlobalPose(5, sourcePrevious);
+        source.SampleGlobalPose(6, sourceCurrent);
+        stitched.SampleGlobalPose(6, stitchedCurrent);
+        stitched.SampleGlobalPose(7, stitchedNext);
+
+        AssertPositionEqual(sourcePrevious[0].Position, stitchedCurrent[0].Position);
+        var sourceTravel = Vector3.Normalize(sourceCurrent[0].Position - sourcePrevious[0].Position);
+        var stitchedTravel = Vector3.Normalize(stitchedNext[0].Position - stitchedCurrent[0].Position);
+        Assert.IsTrue(Vector3.Dot(sourceTravel, stitchedTravel) > 0.999f,
+            "Aligned locomotion must continue in the source travel direction even when the root's facing is opposite.");
+    }
+
+    [TestMethod]
     public void StitchAlignmentLeavesStaticAncestorsAboveMotionRootUntouched()
     {
         var source = new HierarchyClip("source", Vector3.Zero, 0f);
@@ -210,6 +238,42 @@ public sealed class AnimationMatcherTests
             stitchedPose[source.Skeleton.RootBoneIndex].Position);
         AssertRotationEqual(sourcePose[source.Skeleton.RootBoneIndex].Rotation,
             stitchedPose[source.Skeleton.RootBoneIndex].Rotation);
+    }
+
+    [TestMethod]
+    public void StitchAlignmentAnchorsIntermediateAxisAncestorsAtTheCut()
+    {
+        var source = new AxisHierarchyClip("source", Vector3.Zero, 0f);
+        var candidate = new AxisHierarchyClip("candidate", new Vector3(180f, 0f, -260f), 0.8f,
+            new Vector3(900f, 0f, 1400f));
+        var stitched = new StitchedAnimation(source, 5, candidate, 5, 0.12f, alignPositionAndYaw: true);
+        var sourcePose = new BoneTransform[source.Skeleton.BoneCount];
+        var stitchedPose = new BoneTransform[source.Skeleton.BoneCount];
+
+        source.SampleGlobalPose(5, sourcePose);
+        stitched.SampleGlobalPose(6, stitchedPose);
+
+        AssertPositionEqual(sourcePose[2].Position, stitchedPose[2].Position);
+        AssertRotationEqual(sourcePose[2].Rotation, stitchedPose[2].Rotation);
+
+        var parts = stitched.CreateExportParts();
+        var candidatePartPose = new BoneTransform[source.Skeleton.BoneCount];
+        parts.Candidate.SampleGlobalPose(0, candidatePartPose);
+        AssertPositionEqual(sourcePose[2].Position, candidatePartPose[2].Position);
+        AssertRotationEqual(sourcePose[2].Rotation, candidatePartPose[2].Rotation);
+
+        var unaligned = new StitchedAnimation(source, 5, candidate, 5, 0.12f, alignPositionAndYaw: false);
+        var candidatePose = new BoneTransform[source.Skeleton.BoneCount];
+        var unalignedPose = new BoneTransform[source.Skeleton.BoneCount];
+        candidate.SampleGlobalPose(6, candidatePose);
+        unaligned.SampleGlobalPose(6, unalignedPose);
+        AssertPositionEqual(candidatePose[2].Position, unalignedPose[2].Position);
+        AssertRotationEqual(candidatePose[2].Rotation, unalignedPose[2].Rotation);
+        var unalignedPartPose = new BoneTransform[source.Skeleton.BoneCount];
+        unaligned.CreateExportParts().Candidate.SampleGlobalPose(0, unalignedPartPose);
+        candidate.SampleGlobalPose(5, candidatePose);
+        AssertPositionEqual(candidatePose[2].Position, unalignedPartPose[2].Position);
+        AssertRotationEqual(candidatePose[2].Rotation, unalignedPartPose[2].Rotation);
     }
 
     [TestMethod]
@@ -288,13 +352,20 @@ public sealed class AnimationMatcherTests
         private readonly Vector3 mWorldTranslation;
         private readonly Quaternion mWorldYaw;
         private readonly float mMotionScale;
+        private readonly Quaternion mFacingYaw;
 
-        public FakeClip(string id, Vector3 worldTranslation, float worldYaw, float motionScale = 1f)
+        public FakeClip(
+            string id,
+            Vector3 worldTranslation,
+            float worldYaw,
+            float motionScale = 1f,
+            float? facingYaw = null)
         {
             Id = id;
             mWorldTranslation = worldTranslation;
             mWorldYaw = Quaternion.CreateFromAxisAngle(Vector3.UnitY, worldYaw);
             mMotionScale = motionScale;
+            mFacingYaw = Quaternion.CreateFromAxisAngle(Vector3.UnitY, facingYaw ?? worldYaw);
         }
 
         public string Id { get; }
@@ -322,7 +393,7 @@ public sealed class AnimationMatcherTests
                     offset.Z -= MathF.Sin(frame * 0.25f) * 0.08f;
 
                 var worldPosition = Vector3.Transform(rootLocal + offset, mWorldYaw) + mWorldTranslation;
-                destination[i] = new BoneTransform(worldPosition, mWorldYaw, Vector3.One);
+                destination[i] = new BoneTransform(worldPosition, mFacingYaw, Vector3.One);
             }
         }
     }
@@ -361,6 +432,53 @@ public sealed class AnimationMatcherTests
             var motionRoot = Vector3.Transform(rootLocal, mWorldYaw) + mWorldTranslation;
             destination[2] = new BoneTransform(motionRoot, mWorldYaw, Vector3.One);
             destination[3] = new BoneTransform(
+                motionRoot + Vector3.Transform(new Vector3(0f, 1f, 0f), mWorldYaw),
+                mWorldYaw,
+                Vector3.One);
+        }
+    }
+
+    private sealed class AxisHierarchyClip : IAnimationClip
+    {
+        private static readonly SkeletonDefinition sSkeleton = new(
+            new[] { "RootNode", "root", "rot", "Bip01", "hand" },
+            new[] { -1, 0, 1, 2, 3 },
+            3,
+            2f);
+
+        private readonly Vector3 mWorldTranslation;
+        private readonly Quaternion mWorldYaw;
+        private readonly Vector3 mAxisTranslation;
+
+        public AxisHierarchyClip(
+            string id,
+            Vector3 worldTranslation,
+            float worldYaw,
+            Vector3 axisTranslation = default)
+        {
+            Id = id;
+            mWorldTranslation = worldTranslation;
+            mWorldYaw = Quaternion.CreateFromAxisAngle(Vector3.UnitY, worldYaw);
+            mAxisTranslation = axisTranslation;
+        }
+
+        public string Id { get; }
+        public string DisplayName => Id;
+        public SkeletonDefinition Skeleton => sSkeleton;
+        public int FrameCount => 12;
+        public float FramesPerSecond => 30f;
+
+        public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
+        {
+            var frame = Math.Clamp(frameIndex, 0, FrameCount - 1);
+            var rootLocal = new Vector3(frame * 0.04f, 0f, frame * 0.015f);
+            var motionRoot = Vector3.Transform(rootLocal, mWorldYaw) + mWorldTranslation + mAxisTranslation;
+
+            destination[0] = new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.One);
+            destination[1] = new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.One);
+            destination[2] = new BoneTransform(mAxisTranslation, Quaternion.Identity, Vector3.One);
+            destination[3] = new BoneTransform(motionRoot, mWorldYaw, Vector3.One);
+            destination[4] = new BoneTransform(
                 motionRoot + Vector3.Transform(new Vector3(0f, 1f, 0f), mWorldYaw),
                 mWorldYaw,
                 Vector3.One);

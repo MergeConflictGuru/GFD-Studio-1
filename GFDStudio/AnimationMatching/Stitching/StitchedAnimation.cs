@@ -1,6 +1,8 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Numerics;
+using GFDLibrary.Animations;
 using GFDStudio.AnimationMatching.Core;
 using GFDStudio.AnimationMatching.Features;
 
@@ -9,11 +11,17 @@ namespace GFDStudio.AnimationMatching.Stitching;
 /// <summary>
 /// Runtime stitched clip for preview/export. When alignment is enabled, candidate root motion is
 /// rigidly translated and yaw-aligned so its first emitted frame lands on the source continuation.
-/// Static hierarchy ancestors above the motion root remain in the target model's axis space.
-/// Optional crossfade blends global transforms, then the candidate owns the rest of the clip.
+/// Semantic/file roots above the motion root remain in the target model's axis space; unlabelled
+/// intermediate axis helpers are anchored to the source handoff so they cannot reintroduce a
+/// world-space offset at the cut.
+/// Optional crossfade blends global transforms, then the candidate owns the rest of the clip. A
+/// short motion-subtree continuity guard also prevents a hard aligned cut from visibly popping.
 /// </summary>
 public sealed class StitchedAnimation : IAnimationClip
 {
+    private const int HeadingLookaheadFrames = 3;
+    private const float MinimumHeadingLengthSquared = 1e-8f;
+
     private readonly IAnimationClip _source;
     private readonly IAnimationClip _candidate;
     private readonly int _sourceFrame;
@@ -24,6 +32,11 @@ public sealed class StitchedAnimation : IAnimationClip
     private readonly Quaternion _matchYawAlignment;
     private readonly Vector3 _matchTranslationAlignment;
     private readonly bool[] _motionSubtree;
+    private readonly bool[] _axisAncestors;
+    private readonly BoneTransform[] _axisAnchors;
+    private readonly Quaternion[] _axisRotations;
+    private readonly Vector3[] _axisTranslations;
+    private const int ContinuityGuardFrames = 3;
 
     public StitchedAnimation(
         IAnimationClip source,
@@ -44,6 +57,15 @@ public sealed class StitchedAnimation : IAnimationClip
         _candidateFrame = Math.Clamp(candidateFrame, 0, candidate.FrameCount - 1);
         _blendFrames = Math.Max(0, (int)MathF.Round(blendSeconds * source.FramesPerSecond));
         _motionSubtree = StitchAlignment.BuildMotionSubtree(Skeleton);
+        _axisAncestors = StitchAlignment.BuildAxisAncestors(Skeleton);
+        _axisAnchors = new BoneTransform[Skeleton.BoneCount];
+        _axisRotations = new Quaternion[Skeleton.BoneCount];
+        _axisTranslations = new Vector3[Skeleton.BoneCount];
+        StitchAlignment.InitializeAxisCorrections(
+            _axisAncestors,
+            _axisAnchors,
+            _axisRotations,
+            _axisTranslations);
 
         AlignPositionAndYaw = alignPositionAndYaw;
         if (alignPositionAndYaw)
@@ -65,6 +87,18 @@ public sealed class StitchedAnimation : IAnimationClip
                 sourceHandoffFrame,
                 candidate,
                 candidateHandoffFrame);
+
+            var sourceHandoffPose = new BoneTransform[Skeleton.BoneCount];
+            var candidateHandoffPose = new BoneTransform[Skeleton.BoneCount];
+            source.SampleGlobalPose(sourceHandoffFrame, sourceHandoffPose);
+            candidate.SampleGlobalPose(candidateHandoffFrame, candidateHandoffPose);
+            StitchAlignment.InitializeAxisCorrections(
+                _axisAncestors,
+                sourceHandoffPose,
+                candidateHandoffPose,
+                _axisAnchors,
+                _axisRotations,
+                _axisTranslations);
         }
         else
         {
@@ -91,8 +125,10 @@ public sealed class StitchedAnimation : IAnimationClip
     /// <summary>
     /// Creates the source prefix and aligned candidate suffix used by an external blend tool.
     /// The source ends at the selected transition frame; the candidate begins at its matched
-    /// frame and receives match-point alignment. The preview uses a handoff alignment for the
-    /// first emitted candidate continuation frame so the visible cut stays continuous.
+    /// frame and receives match-point alignment. Intermediate axis helpers are anchored to the
+    /// source transition in the exported candidate too, so separate files can be blended without
+    /// reproducing the preview seam. The preview uses a handoff alignment for the first emitted
+    /// candidate continuation frame so the visible cut stays continuous.
     /// </summary>
     public (IAnimationClip Source, IAnimationClip Candidate) CreateExportParts()
     {
@@ -105,6 +141,8 @@ public sealed class StitchedAnimation : IAnimationClip
                 _sourceFrame + 1,
                 Quaternion.Identity,
                 Vector3.Zero,
+                null,
+                0,
                 sourceName),
             new StitchedAnimationPart(
                 _candidate,
@@ -112,6 +150,8 @@ public sealed class StitchedAnimation : IAnimationClip
                 _candidate.FrameCount - _candidateFrame,
                 _matchYawAlignment,
                 _matchTranslationAlignment,
+                AlignPositionAndYaw ? _source : null,
+                _sourceFrame,
                 candidateName));
     }
 
@@ -127,11 +167,57 @@ public sealed class StitchedAnimation : IAnimationClip
         candidate.SampleGlobalPose(candidateFrame, candidatePose);
         var sourceRoot = sourcePose[source.Skeleton.RootBoneIndex];
         var candidateRoot = candidatePose[candidate.Skeleton.RootBoneIndex];
-        var yaw = Quaternion.Normalize(
-            PoseFeatureExtractor.ExtractYaw(sourceRoot.Rotation) *
-            Quaternion.Inverse(PoseFeatureExtractor.ExtractYaw(candidateRoot.Rotation)));
+        var yaw = CalculateYawAlignment(
+            source,
+            sourceFrame,
+            sourceRoot,
+            candidate,
+            candidateFrame,
+            candidateRoot);
         var translation = sourceRoot.Position - Vector3.Transform(candidateRoot.Position, yaw);
         return (yaw, translation);
+    }
+
+    private static Quaternion CalculateYawAlignment(
+        IAnimationClip source,
+        int sourceFrame,
+        BoneTransform sourceRoot,
+        IAnimationClip candidate,
+        int candidateFrame,
+        BoneTransform candidateRoot)
+    {
+        var sourceHeading = GetForwardRootHeading(source, sourceFrame);
+        var candidateHeading = GetForwardRootHeading(candidate, candidateFrame);
+        if (sourceHeading.HasValue && candidateHeading.HasValue)
+        {
+            var sourceYaw = MathF.Atan2(sourceHeading.Value.X, sourceHeading.Value.Z);
+            var candidateYaw = MathF.Atan2(candidateHeading.Value.X, candidateHeading.Value.Z);
+            return Quaternion.CreateFromAxisAngle(Vector3.UnitY, sourceYaw - candidateYaw);
+        }
+
+        // In-place clips do not provide a usable trajectory. Their root facing is the only
+        // stable heading available, so retain the old behavior for that case.
+        return Quaternion.Normalize(
+            PoseFeatureExtractor.ExtractYaw(sourceRoot.Rotation) *
+            Quaternion.Inverse(PoseFeatureExtractor.ExtractYaw(candidateRoot.Rotation)));
+    }
+
+    private static Vector3? GetForwardRootHeading(IAnimationClip clip, int frame)
+    {
+        var lastFrame = Math.Min(clip.FrameCount - 1, frame + HeadingLookaheadFrames);
+        if (lastFrame <= frame)
+            return null;
+
+        var firstPose = new BoneTransform[clip.Skeleton.BoneCount];
+        var lastPose = new BoneTransform[clip.Skeleton.BoneCount];
+        clip.SampleGlobalPose(frame, firstPose);
+        clip.SampleGlobalPose(lastFrame, lastPose);
+        var displacement = lastPose[clip.Skeleton.RootBoneIndex].Position -
+                           firstPose[clip.Skeleton.RootBoneIndex].Position;
+        displacement.Y = 0f;
+        return displacement.LengthSquared() >= MinimumHeadingLengthSquared
+            ? Vector3.Normalize(displacement)
+            : null;
     }
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
@@ -168,6 +254,28 @@ public sealed class StitchedAnimation : IAnimationClip
                 }
                 finally { pool.Return(sourceBuffer, clearArray: false); }
             }
+            else if (AlignPositionAndYaw && _blendFrames == 0 && blendOffset <= ContinuityGuardFrames)
+            {
+                // A hard cut can still visibly pop when the matcher finds a close, but not
+                // identical, pose. Keep the matched root exactly continuous and ease the animated
+                // motion subtree into the candidate over a few frames. Static ancestors remain
+                // in the candidate's axis space, preserving the rig's file-level hierarchy.
+                var sourceBuffer = pool.Rent(Skeleton.BoneCount);
+                try
+                {
+                    var sourcePose = sourceBuffer.AsSpan(0, Skeleton.BoneCount);
+                    _source.SampleGlobalPose(_sourceFrame, sourcePose);
+                    var t = SmoothStep(blendOffset / (float)ContinuityGuardFrames);
+                    candidatePose.CopyTo(destination);
+                    for (var i = 0; i < Skeleton.BoneCount; i++)
+                    {
+                        if (!_motionSubtree[i] || i == Skeleton.RootBoneIndex)
+                            continue;
+                        destination[i] = BoneTransform.Lerp(sourcePose[i], candidatePose[i], t);
+                    }
+                }
+                finally { pool.Return(sourceBuffer, clearArray: false); }
+            }
             else
             {
                 candidatePose.CopyTo(destination);
@@ -177,7 +285,18 @@ public sealed class StitchedAnimation : IAnimationClip
     }
 
     private void AlignCandidate(Span<BoneTransform> pose)
-        => StitchAlignment.ApplyRigidTransform(pose, _motionSubtree, _yawAlignment, _translationAlignment);
+    {
+        StitchAlignment.ApplyRigidTransform(pose, _motionSubtree, _yawAlignment, _translationAlignment);
+        if (AlignPositionAndYaw)
+            StitchAlignment.ApplyAxisCorrections(
+                pose,
+                _motionSubtree,
+                _axisAncestors,
+                Skeleton.Parents,
+                _axisAnchors,
+                _axisRotations,
+                _axisTranslations);
+    }
 
     private static float SmoothStep(float t)
     {
@@ -208,6 +327,127 @@ internal static class StitchAlignment
         }
 
         return result;
+    }
+
+    public static bool[] BuildAxisAncestors(SkeletonDefinition skeleton)
+    {
+        // The motion root may sit below an unlabelled animated axis helper (for example
+        // "rot"). Only those unlabelled ancestors are normalized; semantic roots and body bones
+        // remain owned by the source/candidate clips normally.
+        var result = new bool[skeleton.BoneCount];
+        var ancestor = skeleton.Parents[skeleton.RootBoneIndex];
+        var visited = 0;
+        while ((uint)ancestor < (uint)result.Length && visited++ <= result.Length)
+        {
+            var role = AnimationSkeletonRoles.GetRole(skeleton.BoneNames[ancestor]);
+            if (!string.IsNullOrWhiteSpace(role))
+                break;
+
+            result[ancestor] = true;
+            ancestor = skeleton.Parents[ancestor];
+        }
+
+        return result;
+    }
+
+    public static void InitializeAxisCorrections(
+        ReadOnlySpan<bool> axisAncestors,
+        Span<BoneTransform> anchors,
+        Span<Quaternion> rotations,
+        Span<Vector3> translations)
+    {
+        if (anchors.Length < axisAncestors.Length ||
+            rotations.Length < axisAncestors.Length ||
+            translations.Length < axisAncestors.Length)
+            throw new ArgumentException("Axis correction buffers are too small.");
+
+        for (var i = 0; i < axisAncestors.Length; i++)
+        {
+            anchors[i] = new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.One);
+            rotations[i] = Quaternion.Identity;
+            translations[i] = Vector3.Zero;
+        }
+    }
+
+    public static void InitializeAxisCorrections(
+        ReadOnlySpan<bool> axisAncestors,
+        ReadOnlySpan<BoneTransform> sourcePose,
+        ReadOnlySpan<BoneTransform> candidatePose,
+        Span<BoneTransform> anchors,
+        Span<Quaternion> rotations,
+        Span<Vector3> translations)
+    {
+        if (sourcePose.Length < axisAncestors.Length || candidatePose.Length < axisAncestors.Length)
+            throw new ArgumentException("Axis correction poses are too small.");
+        InitializeAxisCorrections(axisAncestors, anchors, rotations, translations);
+
+        for (var i = 0; i < axisAncestors.Length; i++)
+        {
+            if (!axisAncestors[i])
+                continue;
+
+            var source = sourcePose[i];
+            var candidate = candidatePose[i];
+            var rawRotation = source.Rotation * Quaternion.Inverse(candidate.Rotation);
+            var rotation = rawRotation.LengthSquared() >= 1e-10f
+                ? Quaternion.Normalize(rawRotation)
+                : Quaternion.Identity;
+            anchors[i] = source;
+            rotations[i] = rotation;
+            translations[i] = source.Position - Vector3.Transform(candidate.Position, rotation);
+        }
+    }
+
+    public static void ApplyAxisCorrections(
+        Span<BoneTransform> pose,
+        ReadOnlySpan<bool> motionSubtree,
+        ReadOnlySpan<bool> axisAncestors,
+        IReadOnlyList<int> parents,
+        ReadOnlySpan<BoneTransform> anchors,
+        ReadOnlySpan<Quaternion> rotations,
+        ReadOnlySpan<Vector3> translations)
+    {
+        if (pose.Length > motionSubtree.Length || pose.Length > axisAncestors.Length || pose.Length > parents.Count ||
+            pose.Length > anchors.Length || pose.Length > rotations.Length || pose.Length > translations.Length)
+            throw new ArgumentException("Axis correction buffers are too small.");
+
+        for (var i = 0; i < pose.Length; i++)
+        {
+            if (motionSubtree[i])
+                continue;
+
+            var axis = FindNearestAxisAncestor(i, axisAncestors, parents, pose.Length);
+            if (axis < 0)
+                continue;
+
+            if (i == axis)
+            {
+                pose[i] = anchors[axis];
+                continue;
+            }
+
+            var position = Vector3.Transform(pose[i].Position, rotations[axis]) + translations[axis];
+            var rotation = Quaternion.Normalize(rotations[axis] * pose[i].Rotation);
+            pose[i] = new BoneTransform(position, rotation, pose[i].Scale);
+        }
+    }
+
+    private static int FindNearestAxisAncestor(
+        int bone,
+        ReadOnlySpan<bool> axisAncestors,
+        IReadOnlyList<int> parents,
+        int boneCount)
+    {
+        var current = bone;
+        var visited = 0;
+        while ((uint)current < (uint)boneCount && visited++ <= boneCount)
+        {
+            if (axisAncestors[current])
+                return current;
+            current = parents[current];
+        }
+
+        return -1;
     }
 
     public static void ApplyRigidTransform(
