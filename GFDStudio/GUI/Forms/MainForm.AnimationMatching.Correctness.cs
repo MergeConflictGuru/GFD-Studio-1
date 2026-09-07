@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -18,6 +19,9 @@ namespace GFDStudio.GUI.Forms
     /// </summary>
     public partial class MainForm : IAnimationMatchingCorpusHost
     {
+        private static readonly ConcurrentDictionary<string, WeakReference<Model>> sAnimationMatchingSourceModels =
+            new ConcurrentDictionary<string, WeakReference<Model>>(StringComparer.OrdinalIgnoreCase);
+
         private sealed class AnimationMatchIdentityClip : IAnimationClip
         {
             private readonly IAnimationClip mInner;
@@ -72,7 +76,8 @@ namespace GFDStudio.GUI.Forms
                 .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
                 .ToArray();
             var clips = new List<IAnimationClip>(entries.Length);
-            var sourceModelCache = new Dictionary<string, Lazy<Model>>(StringComparer.OrdinalIgnoreCase);
+            var validSourceModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var invalidSourceModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var skippedWithoutSourceModel = 0;
 
             foreach (var entry in entries)
@@ -86,36 +91,36 @@ namespace GFDStudio.GUI.Forms
                     continue;
                 }
 
-                if (!sourceModelCache.TryGetValue(sourceModelPath, out var sourceModel))
+                if (!validSourceModels.Contains(sourceModelPath) && !invalidSourceModels.Contains(sourceModelPath))
                 {
-                    sourceModel = new Lazy<Model>(
-                        () => LoadAnimationMatchingSourceModel(sourceModelPath),
-                        System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
-                    sourceModelCache.Add(sourceModelPath, sourceModel);
+                    try
+                    {
+                        // Validate each unique source model once, then drop the strong reference.
+                        // Individual clips load their source path only while being indexed.
+                        GfdAnimationClip.CreateSkeleton(LoadAnimationMatchingSourceModel(sourceModelPath));
+                        validSourceModels.Add(sourceModelPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        invalidSourceModels.Add(sourceModelPath);
+                        Logger.Debug($"AnimationMatch: skipping {entry.PackPath} because its source skeleton is not canonical: {ex.Message}");
+                    }
                 }
 
-                try
-                {
-                    // Global indexing accepts only rigs that can be represented by the canonical
-                    // body schema. Props, vehicles, hair-only files, and helper rigs remain valid
-                    // browser assets but must not poison a shared descriptor layout.
-                    GfdAnimationClip.CreateSkeleton(sourceModel.Value);
-                }
-                catch (Exception ex)
+                if (invalidSourceModels.Contains(sourceModelPath))
                 {
                     skippedWithoutSourceModel++;
-                    Logger.Debug($"AnimationMatch: skipping {entry.PackPath} because its source skeleton is not canonical: {ex.Message}");
                     continue;
                 }
 
-                var capturedSourceModel = sourceModel;
+                var capturedSourceModelPath = sourceModelPath;
                 var capturedPackPath = entry.PackPath;
                 var capturedKind = entry.Kind;
                 var capturedIndex = entry.Index;
                 clips.Add(new GfdAnimationClip(
                     GetCorrectedAnimationMatchClipId(entry),
                     entry.DisplayName,
-                    () => capturedSourceModel.Value,
+                    () => LoadAnimationMatchingSourceModel(capturedSourceModelPath),
                     () => LoadAnimationMatchingSourceAnimation(
                         capturedPackPath, capturedKind, capturedIndex),
                     AnimationMatchingFramesPerSecond));
@@ -171,9 +176,15 @@ namespace GFDStudio.GUI.Forms
 
         private static Model LoadAnimationMatchingSourceModel(string sourceModelPath)
         {
+            if (sAnimationMatchingSourceModels.TryGetValue(sourceModelPath, out var weakReference) &&
+                weakReference.TryGetTarget(out var cached))
+                return cached;
+
             var pack = Resource.Load<ModelPack>(sourceModelPath);
-            return pack?.Model ?? throw new InvalidDataException(
+            var model = pack?.Model ?? throw new InvalidDataException(
                 "Animation source model has no model data: " + sourceModelPath);
+            sAnimationMatchingSourceModels[sourceModelPath] = new WeakReference<Model>(model);
+            return model;
         }
 
         private static Animation LoadAnimationMatchingSourceAnimation(
