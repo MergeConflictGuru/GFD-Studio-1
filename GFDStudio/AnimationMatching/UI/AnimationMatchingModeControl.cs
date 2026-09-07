@@ -318,8 +318,8 @@ public sealed class AnimationMatchingModeControl : UserControl
             while (_results.Controls.Count > 0)
                 _results.Controls[0].Dispose();
 
-            for (var i = 0; i < results.Count; i++)
-                _results.Controls.Add(CreateResultCard(i + 1, results[i]));
+            foreach (var result in results)
+                _results.Controls.Add(CreateResultCard(result));
         }
         finally
         {
@@ -333,10 +333,10 @@ public sealed class AnimationMatchingModeControl : UserControl
             CandidateActivated?.Invoke(this, _selectedResult);
     }
 
-    private Control CreateResultCard(int rank, AnimationMatchResult result)
+    private Control CreateResultCard(AnimationMatchResult result)
     {
-        const int cardWidth = 164;
-        const int cardHeight = 142;
+        const int cardWidth = 200;
+        const int cardHeight = 166;
         var card = new Panel
         {
             Width = cardWidth,
@@ -360,22 +360,30 @@ public sealed class AnimationMatchingModeControl : UserControl
             Left = 5,
             Top = 95,
             Width = cardWidth - 12,
-            Height = 21,
-            AutoEllipsis = true,
+            Height = 34,
+            AutoEllipsis = false,
+            AutoSize = false,
+            UseCompatibleTextRendering = true,
             ForeColor = Color.Gainsboro,
-            Text = $"#{rank}  {result.Candidate.DisplayName}",
+            Text = AddTitleBreakPoints(result.Candidate.DisplayName),
             Font = new Font(Font, FontStyle.Bold)
         };
         var detail = new Label
         {
             Left = 5,
-            Top = 117,
+            Top = 132,
             Width = cardWidth - 12,
-            Height = 20,
-            AutoEllipsis = true,
+            Height = 29,
+            AutoEllipsis = false,
+            AutoSize = false,
+            UseCompatibleTextRendering = true,
             ForeColor = Color.Silver,
-            Text = $"similarity {result.Score:0.0}% · {result.CandidateTimeSeconds:0.00}s · f{result.CandidateFrame}"
+            Text = $"{result.Score:0.0}% · source f{result.SourceFrame}\n→ candidate f{result.CandidateFrame}"
         };
+        var titleToolTip = new ToolTip();
+        titleToolTip.SetToolTip(title, result.Candidate.DisplayName);
+        titleToolTip.SetToolTip(detail, $"{result.Score:0.0}% · source frame {result.SourceFrame} → candidate frame {result.CandidateFrame}");
+        card.Disposed += (_, _) => titleToolTip.Dispose();
         card.Controls.AddRange(new Control[] { image, title, detail });
 
         void SelectCard()
@@ -429,6 +437,9 @@ public sealed class AnimationMatchingModeControl : UserControl
         }));
         return card;
     }
+
+    private static string AddTitleBreakPoints(string title)
+        => title.Replace("\\", "\\\u200B").Replace("/", "/\u200B");
 
     private static Button MakeButton(string text) => new()
     {
