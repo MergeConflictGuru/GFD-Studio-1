@@ -22,7 +22,7 @@ namespace GFDStudio.GUI.Forms
         private static readonly ConcurrentDictionary<string, WeakReference<Model>> sAnimationMatchingSourceModels =
             new ConcurrentDictionary<string, WeakReference<Model>>(StringComparer.OrdinalIgnoreCase);
 
-        private sealed class AnimationMatchIdentityClip : IAnimationClip
+        private sealed class AnimationMatchIdentityClip : IAnimationClipWrapper
         {
             private readonly IAnimationClip mInner;
 
@@ -33,6 +33,7 @@ namespace GFDStudio.GUI.Forms
             }
 
             public string Id { get; }
+            public IAnimationClip InnerClip => mInner;
             public string DisplayName => mInner.DisplayName;
             public SkeletonDefinition Skeleton => mInner.Skeleton;
             public int FrameCount => mInner.FrameCount;

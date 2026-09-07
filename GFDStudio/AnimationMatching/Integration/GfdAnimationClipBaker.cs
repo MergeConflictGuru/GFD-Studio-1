@@ -188,6 +188,7 @@ public static class GfdAnimationClipBaker
 
         return clip switch
         {
+            IAnimationClipWrapper wrapper => CreateTargetPreviewClip(wrapper.InnerClip, targetModel, targetSkeleton),
             GfdAnimationClip gfdClip => gfdClip.CreateTargetPreviewClip(targetModel, targetSkeleton),
             StitchedAnimation stitched => new StitchedAnimation(
                 CreateTargetPreviewClip(stitched.SourceClip, targetModel, targetSkeleton),
