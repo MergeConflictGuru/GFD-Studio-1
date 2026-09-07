@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using GFDStudio.AnimationMatching.Core;
@@ -42,6 +43,38 @@ public sealed class AnimationMatcherTests
 
         Assert.IsTrue(database.Addresses.Any(address => address.FrameIndex > 0 && address.FrameIndex < clip.FrameCount - 1),
             "AniMatch must index candidate continuation points from the middle of animations.");
+    }
+
+    [TestMethod]
+    public void MemoryMappedCachePreservesEveryIndexedFrameAndSearches()
+    {
+        var options = CreateOptions();
+        var clip = new FakeClip("clip", Vector3.Zero, 0f);
+        var corpus = new AnimationCorpus(new IAnimationClip[] { clip });
+        using var built = AnimationSearchDatabase.Build(corpus, options);
+        var expectedFrames = built.Addresses.Select(address => address.FrameIndex).ToArray();
+        var path = Path.Combine(Path.GetTempPath(), "animatch-test-" + Guid.NewGuid().ToString("N") + ".bin");
+        AnimationSearchDatabase? loaded = null;
+
+        try
+        {
+            AnimationIndexCache.Save(path, built, "test-corpus");
+            loaded = AnimationIndexCache.TryLoad(path, corpus, options, "test-corpus");
+
+            Assert.IsNotNull(loaded);
+            Assert.IsTrue(loaded.IsMemoryMapped, "A v3 cache should search directly from a memory mapping.");
+            Assert.AreEqual(built.SampleCount, loaded.SampleCount);
+            CollectionAssert.AreEqual(expectedFrames, loaded.Addresses.Select(address => address.FrameIndex).ToArray(),
+                "Memory mapping must not change temporal sampling; IndexStride=1 still means every eligible frame.");
+
+            var results = new AnimationMatcher(loaded).Search(new FakeClip("query", Vector3.Zero, 0f));
+            Assert.IsTrue(results.Count > 0, "The mapped FP16 descriptor cache must remain searchable.");
+        }
+        finally
+        {
+            loaded?.Dispose();
+            try { File.Delete(path); } catch { }
+        }
     }
 
     [TestMethod]
