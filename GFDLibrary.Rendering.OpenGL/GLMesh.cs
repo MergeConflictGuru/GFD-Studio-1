@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
+using GFDLibrary.Common;
 using GFDLibrary.Models;
 using OpenTK.Mathematics;
 using OpenTK.Graphics.OpenGL4;
@@ -22,6 +23,14 @@ namespace GFDLibrary.Rendering.OpenGL
         /// </summary>
         public Vector3[] VertexPositions { get; }
 
+        /// <summary>
+        /// Bounds for the vertex positions currently uploaded for this mesh.
+        /// Skinned meshes get a new value whenever their animated vertex buffer
+        /// is rebuilt, while static meshes reuse the source mesh bounds.
+        /// The value is consumed by animated viewport helpers after Draw.
+        /// </summary>
+        public BoundingBox? VertexBounds { get; }
+
         public GLBaseMaterial Material { get; }
 
         public bool IsVisible { get; }
@@ -30,6 +39,7 @@ namespace GFDLibrary.Rendering.OpenGL
         {
             Mesh = null;
             VertexPositions = null;
+            VertexBounds = null;
             VertexArray = vertexArray;
             Material = material;
             IsVisible = isVisible;
@@ -78,6 +88,9 @@ namespace GFDLibrary.Rendering.OpenGL
             }
 
             VertexPositions = vertices;
+            VertexBounds = mesh.VertexWeights != null
+                ? BoundingBox.Calculate( vertices )
+                : mesh.BoundingBox ?? ( vertices.Length > 0 ? BoundingBox.Calculate( vertices ) : null );
 
             var indices = new uint[mesh.Triangles.Length * 3];
             for ( int i = 0; i < mesh.Triangles.Length; i++ )

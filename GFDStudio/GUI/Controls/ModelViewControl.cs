@@ -895,9 +895,9 @@ namespace GFDStudio.GUI.Controls
             hasTargetGeometry = false;
 
             // Use each mesh's eight local bound corners instead of walking all
-            // vertices. GLModel.Draw has already updated the node transforms for
-            // the current animation frame, so this follows root motion and
-            // remains cheap enough to run on every paint.
+            // vertices. GLModel.Draw has already rebuilt animated GLMeshes for
+            // the current frame, so VertexBounds follows skinning and root
+            // motion while this path remains cheap enough for every paint.
             if ( mModel != null )
             {
                 foreach ( var node in mModel.Nodes )
@@ -907,7 +907,7 @@ namespace GFDStudio.GUI.Controls
 
                     foreach ( var mesh in node.Meshes )
                     {
-                        if ( !mesh.IsVisible || mesh.Mesh?.BoundingBox is not { } meshBounds ||
+                        if ( !mesh.IsVisible || ( mesh.VertexBounds ?? mesh.Mesh?.BoundingBox ) is not { } meshBounds ||
                              !IsFinite( meshBounds.Min ) || !IsFinite( meshBounds.Max ) )
                             continue;
 
