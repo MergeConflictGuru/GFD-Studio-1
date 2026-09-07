@@ -101,9 +101,14 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
     /// clavicles, upper arms, fingers, and cosmetic branches.
     /// </summary>
     public IAnimationClip CreateTargetPreviewClip(Model targetModel)
+        => CreateTargetPreviewClip(targetModel, GfdTargetAnimationClip.CreateSkeleton(targetModel));
+
+    internal IAnimationClip CreateTargetPreviewClip(Model targetModel, SkeletonDefinition targetSkeleton)
     {
         if (targetModel == null)
             throw new ArgumentNullException(nameof(targetModel));
+        if (targetSkeleton == null)
+            throw new ArgumentNullException(nameof(targetSkeleton));
 
         var sourceModel = SourceModel;
         var animation = _animationLoader() ??
@@ -114,7 +119,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         else
             animation.Retarget(sourceModel, targetModel, false);
 
-        return new GfdTargetAnimationClip(Id, DisplayName, targetModel, animation, FramesPerSecond);
+        return new GfdTargetAnimationClip(Id, DisplayName, targetModel, animation, FramesPerSecond, targetSkeleton);
     }
 
     /// <summary>Drops decoded GAP data while retaining the source skeleton and duration.</summary>
@@ -227,13 +232,10 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         canonical[(int)CanonicalJoint.UpperSpine] = Pick("spine2", "spine1", "spine");
         canonical[(int)CanonicalJoint.Neck] = Pick("neck");
         canonical[(int)CanonicalJoint.Head] = Pick("head");
-        // The canonical shoulder slot represents the upper arm. Clavicles are retained only by
-        // the full target-model preview adapter; indexing the clavicle here leaves the actual arm
-        // chain out of the matcher and produces incorrect arm motion when poses are compared.
-        canonical[(int)CanonicalJoint.LeftShoulder] = Pick("leftarm", "leftshoulder");
+        canonical[(int)CanonicalJoint.LeftShoulder] = Pick("leftshoulder");
         canonical[(int)CanonicalJoint.LeftElbow] = Pick("leftforearm");
         canonical[(int)CanonicalJoint.LeftHand] = Pick("lefthand");
-        canonical[(int)CanonicalJoint.RightShoulder] = Pick("rightarm", "rightshoulder");
+        canonical[(int)CanonicalJoint.RightShoulder] = Pick("rightshoulder");
         canonical[(int)CanonicalJoint.RightElbow] = Pick("rightforearm");
         canonical[(int)CanonicalJoint.RightHand] = Pick("righthand");
         canonical[(int)CanonicalJoint.LeftHip] = Pick("leftupleg");

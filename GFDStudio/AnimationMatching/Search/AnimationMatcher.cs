@@ -79,6 +79,14 @@ public sealed class AnimationMatcher
                 .OrderBy(result => result.Distance)
                 .ThenBy(result => result.CandidateFrame)
                 .First())
+            // Legacy/path-based cache entries can carry different IDs for the same browser item.
+            // The browser display name contains the stable relative path and animation slot, so
+            // use it as a second safety net for the result grid.
+            .GroupBy(result => result.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderBy(result => result.Distance)
+                .ThenBy(result => result.CandidateFrame)
+                .First())
             .OrderBy(r => r.Distance)
             .ThenBy(r => r.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase);
 
@@ -98,9 +106,14 @@ public sealed class AnimationMatcher
 
     private static bool ShouldExcludeSelf(IAnimationClip source, int sourceFrame, IAnimationClip candidate, int candidateFrame, AnimationMatchOptions options)
     {
-        if (!string.Equals(source.Id, candidate.Id, StringComparison.Ordinal)) return false;
-        var exclusion = Math.Max(1, (int)MathF.Round(options.SelfMatchExclusionSeconds * source.FramesPerSecond));
-        return Math.Abs(sourceFrame - candidateFrame) <= exclusion;
+        if (!string.Equals(source.Id, candidate.Id, StringComparison.Ordinal) &&
+            !(source.Id.StartsWith("source:", StringComparison.Ordinal) &&
+              string.Equals(source.DisplayName, candidate.DisplayName, StringComparison.OrdinalIgnoreCase)))
+            return false;
+        // A source animation is never a useful transition candidate for itself. The old frame
+        // radius only removed the nearby copy and allowed the same animation to reappear at a
+        // distant frame, which made the result grid look like it matched itself.
+        return true;
     }
 
     private static (float total, float pose, float velocity, float orientation) ExactDistance(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
