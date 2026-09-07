@@ -77,7 +77,7 @@ namespace GFDStudio.GUI.Forms
         {
             public CharacterAnimationEntry Entry { get; init; }
             public string DisplayNameSuffix { get; init; }
-            public byte[] SerializedDefinition { get; init; }
+            public string DefinitionHash { get; init; }
         }
 
         private sealed class CharacterAnimationScanCacheEntry
@@ -107,11 +107,10 @@ namespace GFDStudio.GUI.Forms
         }
 
         private const int CharacterAnimationScanCacheMagic = 0x43415343; // "CASC"
-        private const int CharacterAnimationScanCacheVersion = 2;
+        private const int CharacterAnimationScanCacheVersion = 3;
         private const int CharacterAnimationScanCacheMaxFiles = 250000;
         private const int CharacterAnimationScanCacheMaxItemsPerFile = 100000;
         private const int CharacterAnimationScanCacheMaxBodyTargets = 100000;
-        private const int CharacterAnimationScanCacheMaxDefinitionBytes = 256 * 1024 * 1024;
 
         private const string CharacterBrowserSelectionFormat = "paths-v1";
         private const string CharacterBrowserFilterFormat = "filters-v1";
@@ -126,28 +125,12 @@ namespace GFDStudio.GUI.Forms
 
         private sealed class CharacterAnimationDefinitionSet
         {
-            private readonly Dictionary<string, List<byte[]>> mSerializedDefinitions =
-                new Dictionary<string, List<byte[]>>(StringComparer.Ordinal);
+            private readonly HashSet<string> mDefinitionHashes =
+                new HashSet<string>(StringComparer.Ordinal);
 
-            public bool Add(byte[] serialized)
+            public bool Add(string definitionHash)
             {
-                var hash = Convert.ToBase64String(SHA256.HashData(serialized));
-
-                if (!mSerializedDefinitions.TryGetValue(hash, out var candidates))
-                {
-                    mSerializedDefinitions.Add(hash, new List<byte[]> { serialized });
-                    return true;
-                }
-
-                // Keep the comparison exact even if two serialized animations ever share a hash.
-                foreach (var candidate in candidates)
-                {
-                    if (serialized.AsSpan().SequenceEqual(candidate))
-                        return false;
-                }
-
-                candidates.Add(serialized);
-                return true;
+                return mDefinitionHashes.Add(definitionHash);
             }
         }
 
@@ -689,7 +672,7 @@ namespace GFDStudio.GUI.Forms
 
                         foreach (var item in scan.Items)
                         {
-                            if (animationDefinitions.Add(item.SerializedDefinition))
+                            if (animationDefinitions.Add(item.DefinitionHash))
                                 batch.Add(CloneCharacterAnimationEntry(item, root));
                         }
 
@@ -1062,7 +1045,7 @@ namespace GFDStudio.GUI.Forms
 
                 foreach (var item in scan.Items)
                 {
-                    if (animationDefinitions.Add(item.SerializedDefinition))
+                    if (animationDefinitions.Add(item.DefinitionHash))
                         result.Entries.Add(CloneCharacterAnimationEntry(item, root));
                 }
             }
@@ -1177,14 +1160,9 @@ namespace GFDStudio.GUI.Forms
                             for (var targetIndex = 0; targetIndex < bodyTargetCount; targetIndex++)
                                 bodyTargetNames[targetIndex] = reader.ReadString();
 
-                            var definitionLength = reader.ReadInt32();
-                            if (definitionLength < 0 ||
-                                definitionLength > CharacterAnimationScanCacheMaxDefinitionBytes)
-                                throw new InvalidDataException("Animation definition is too large in scan cache.");
-
-                            var serializedDefinition = reader.ReadBytes(definitionLength);
-                            if (serializedDefinition.Length != definitionLength)
-                                throw new EndOfStreamException();
+                            var definitionHash = reader.ReadString();
+                            if (string.IsNullOrWhiteSpace(definitionHash))
+                                throw new InvalidDataException("Animation definition hash is missing in scan cache.");
 
                             items.Add(new CharacterAnimationScanItem
                             {
@@ -1197,7 +1175,7 @@ namespace GFDStudio.GUI.Forms
                                     BodyTargetNames = bodyTargetNames
                                 },
                                 DisplayNameSuffix = displayNameSuffix,
-                                SerializedDefinition = serializedDefinition
+                                DefinitionHash = definitionHash
                             });
                         }
 
@@ -1259,8 +1237,7 @@ namespace GFDStudio.GUI.Forms
                             foreach (var bodyTargetName in bodyTargetNames)
                                 writer.Write(bodyTargetName ?? string.Empty);
 
-                            writer.Write(item.SerializedDefinition.Length);
-                            writer.Write(item.SerializedDefinition);
+                            writer.Write(item.DefinitionHash ?? string.Empty);
                         }
                     }
 
@@ -1492,15 +1469,15 @@ namespace GFDStudio.GUI.Forms
                     BodyTargetNames = AnimationAnalysis.GetBodyTargetNames(animation)
                 },
                 DisplayNameSuffix = displayNameSuffix,
-                SerializedDefinition = SerializeAnimation(animation)
+                DefinitionHash = GetAnimationDefinitionHash(animation)
             });
         }
 
-        private static byte[] SerializeAnimation(Animation animation)
+        private static string GetAnimationDefinitionHash(Animation animation)
         {
             using var stream = new MemoryStream();
             animation.Save(stream, leaveOpen: true);
-            return stream.ToArray();
+            return Convert.ToBase64String(SHA256.HashData(stream.ToArray()));
         }
 
         private void AddCharacterAnimationBatch(IEnumerable<CharacterAnimationEntry> entries)
