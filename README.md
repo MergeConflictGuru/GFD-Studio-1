@@ -41,6 +41,7 @@ For a continuously running monitor instead, use `GFD Studio: Watch and auto-fetc
 - Clone with `git clone https://github.com/tge-was-taken/GFD-Studio`
 - Navigate to the repo, and clone submodules with `git submodule update --init --recursive`
 - Open the solution in Visual Studio. You may get pop-ups prompting you to update the submodules' target frameworks. Click update.
+- Run `./build-release.ps1` from PowerShell to build and copy the release to `GFDStudio-binary`; use `-FinalDirectory <path>` to select another final directory.
 ## Usage
 ### Model Conversion
 For best results, use the [GMD Maxscript](https://github.com/tge-was-taken/GFD-Studio/blob/master/Resources/GfdImporter/GfdImporter.ms) to import models directly into 3ds Max.
