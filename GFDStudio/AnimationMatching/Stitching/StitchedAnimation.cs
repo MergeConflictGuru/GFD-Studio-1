@@ -72,6 +72,32 @@ public sealed class StitchedAnimation : IAnimationClip
     public IAnimationClip SourceClip => _source;
     public IAnimationClip CandidateClip => _candidate;
 
+    /// <summary>
+    /// Creates the source prefix and aligned candidate suffix used by an external blend tool.
+    /// The source ends at the selected transition frame; the candidate begins at its matched
+    /// frame. The candidate receives the exact same alignment as the stitched preview.
+    /// </summary>
+    public (IAnimationClip Source, IAnimationClip Candidate) CreateExportParts()
+    {
+        var sourceName = $"{_source.DisplayName} (source through f{_sourceFrame})";
+        var candidateName = $"{_candidate.DisplayName} (candidate from f{_candidateFrame})";
+        return (
+            new StitchedAnimationPart(
+                _source,
+                0,
+                _sourceFrame + 1,
+                Quaternion.Identity,
+                Vector3.Zero,
+                sourceName),
+            new StitchedAnimationPart(
+                _candidate,
+                _candidateFrame,
+                _candidate.FrameCount - _candidateFrame,
+                _yawAlignment,
+                _translationAlignment,
+                candidateName));
+    }
+
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
     {
         if (destination.Length < Skeleton.BoneCount) throw new ArgumentException("Pose destination is too small.");

@@ -117,6 +117,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     private readonly Button _back = MakeButton("Back");
     private readonly Button _reindex = MakeButton("Reindex");
     private readonly Button _export = MakeButton("Export…");
+    private readonly Button _exportParts = MakeButton("Export parts…");
     private readonly CheckBox _alignPositionAndYaw = new()
     {
         Text = "Align pos/yaw",
@@ -202,11 +203,12 @@ public sealed class AnimationMatchingModeControl : UserControl
         rootBar.Controls.Add(_root, 0, 0);
         rootBar.Controls.Add(_browse, 1, 0);
 
-        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, Margin = Padding.Empty };
+        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 2, Margin = Padding.Empty };
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 98));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
 
@@ -233,17 +235,19 @@ public sealed class AnimationMatchingModeControl : UserControl
         _blendMs.Margin = new Padding(2, 5, 1, 3);
         _reindex.Margin = new Padding(2, 3, 2, 3);
         _export.Margin = new Padding(2, 3, 0, 3);
+        _exportParts.Margin = new Padding(2, 3, 0, 3);
 
         actionBar.Controls.Add(_back, 0, 0);
         actionBar.Controls.Add(_source, 1, 0);
         actionBar.Controls.Add(_reindex, 2, 0);
         actionBar.Controls.Add(_export, 3, 0);
+        actionBar.Controls.Add(_exportParts, 4, 0);
         stitchOptions.Controls.Add(_alignPositionAndYaw);
         stitchOptions.Controls.Add(_blend);
         stitchOptions.Controls.Add(_blendMs);
         stitchOptions.Controls.Add(ms);
         actionBar.Controls.Add(stitchOptions, 0, 1);
-        actionBar.SetColumnSpan(stitchOptions, 4);
+        actionBar.SetColumnSpan(stitchOptions, 5);
 
         layout.Controls.Add(rootBar, 0, 0);
         layout.Controls.Add(actionBar, 0, 1);
@@ -255,6 +259,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         _back.Click += (_, _) => BackRequested?.Invoke(this, EventArgs.Empty);
         _reindex.Click += (_, _) => ReindexRequested?.Invoke(this, EventArgs.Empty);
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
+        _exportParts.Click += (_, _) => ExportPartsRequested?.Invoke(this, EventArgs.Empty);
         _alignPositionAndYaw.CheckedChanged += (_, _) => ReactivateSelected();
         _blend.CheckedChanged += (_, _) => ReactivateSelected();
         _blendMs.ValueChanged += (_, _) => ReactivateSelected();
@@ -270,6 +275,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     public event EventHandler? ReindexRequested;
     public event EventHandler? SearchRequested;
     public event EventHandler? ExportRequested;
+    public event EventHandler? ExportPartsRequested;
     public event AnimationMatchResultEventHandler? CandidateActivated;
     public event AnimationMatchResultEventHandler? CandidateOpened;
     public event EventHandler<ThumbnailRequest>? ThumbnailRequested;
@@ -297,6 +303,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     {
         _reindex.Enabled = !busy;
         _export.Enabled = !busy;
+        _exportParts.Enabled = !busy;
         _browse.Enabled = !busy;
         if (status is not null)
             _status.Text = status;

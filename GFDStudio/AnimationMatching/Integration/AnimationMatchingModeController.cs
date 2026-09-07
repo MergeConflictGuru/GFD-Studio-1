@@ -41,6 +41,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.CandidateActivated += OnCandidateActivated;
         _view.CandidateOpened += OnCandidateOpened;
         _view.ExportRequested += OnExportRequested;
+        _view.ExportPartsRequested += OnExportPartsRequested;
         _view.ThumbnailRequested += OnThumbnailRequested;
     }
 
@@ -271,6 +272,25 @@ public sealed class AnimationMatchingModeController : IDisposable
         finally { _view.SetBusy(false); }
     }
 
+    private async void OnExportPartsRequested(object? sender, EventArgs e)
+    {
+        if (_stitched is null)
+        {
+            _view.SetStatus("Choose a candidate before exporting.");
+            return;
+        }
+        RestartWork();
+        try
+        {
+            _view.SetBusy(true, "Exporting animation parts…");
+            await _host.ExportAnimationPartsAsync(_stitched, _work!.Token);
+            _view.SetStatus("Animation parts export complete");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _view.SetStatus(ex.Message); }
+        finally { _view.SetBusy(false); }
+    }
+
     private async void OnThumbnailRequested(object? sender, ThumbnailRequest request)
     {
         var entered = false;
@@ -310,6 +330,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.CandidateActivated -= OnCandidateActivated;
         _view.CandidateOpened -= OnCandidateOpened;
         _view.ExportRequested -= OnExportRequested;
+        _view.ExportPartsRequested -= OnExportPartsRequested;
         _view.ThumbnailRequested -= OnThumbnailRequested;
     }
 }

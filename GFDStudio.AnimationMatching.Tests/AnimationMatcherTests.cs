@@ -143,6 +143,29 @@ public sealed class AnimationMatcherTests
     }
 
     [TestMethod]
+    public void StitchExportPartsAreCutAtTheMatchBoundaryAndAligned()
+    {
+        var source = new FakeClip("source", new Vector3(2f, 3f, -4f), 0.35f);
+        var candidate = new FakeClip("candidate", new Vector3(-8f, 6f, 12f), -1.1f);
+        var stitched = new StitchedAnimation(source, 5, candidate, 7, 0f, alignPositionAndYaw: true);
+        var parts = stitched.CreateExportParts();
+        var sourcePose = new BoneTransform[source.Skeleton.BoneCount];
+        var sourcePartPose = new BoneTransform[source.Skeleton.BoneCount];
+        var candidatePartPose = new BoneTransform[source.Skeleton.BoneCount];
+
+        source.SampleGlobalPose(5, sourcePose);
+        parts.Source.SampleGlobalPose(parts.Source.FrameCount - 1, sourcePartPose);
+        parts.Candidate.SampleGlobalPose(0, candidatePartPose);
+
+        Assert.AreEqual(6, parts.Source.FrameCount);
+        Assert.AreEqual(candidate.FrameCount - 7, parts.Candidate.FrameCount);
+        AssertPositionEqual(sourcePose[0].Position, sourcePartPose[0].Position);
+        AssertRotationEqual(sourcePose[0].Rotation, sourcePartPose[0].Rotation);
+        AssertPositionEqual(sourcePose[0].Position, candidatePartPose[0].Position);
+        AssertRotationEqual(sourcePose[0].Rotation, candidatePartPose[0].Rotation);
+    }
+
+    [TestMethod]
     public void FullSkeletonPreviewUsesAnimatedMotionRootForStitchAlignment()
     {
         var fileRoot = new Node("RootNode");
