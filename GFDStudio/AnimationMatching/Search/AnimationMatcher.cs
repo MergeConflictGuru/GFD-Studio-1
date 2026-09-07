@@ -39,6 +39,7 @@ public sealed class AnimationMatcher
 
         var bestByAddress = new Dictionary<(int clip, int frame), AnimationMatchResult>();
         var query = new float[_database.DescriptorDimensions];
+        var candidateDescriptor = new float[_database.DescriptorDimensions];
         var projected = new float[_database.Projection.OutputDimensions];
         var rangeLength = Math.Max(1, end - start);
 
@@ -52,11 +53,12 @@ public sealed class AnimationMatcher
 
             foreach (var sampleIndex in neighbors)
             {
-                var address = _database.Addresses[sampleIndex];
+                var address = _database.GetAddress(sampleIndex);
                 var candidate = _database.Corpus.Clips[address.ClipIndex];
                 if (ShouldExcludeSelf(source, sourceFrame, candidate, address.FrameIndex, options)) continue;
 
-                var exact = ExactDistance(query, _database.GetDescriptor(sampleIndex));
+                _database.CopyDescriptor(sampleIndex, candidateDescriptor);
+                var exact = ExactDistance(query, candidateDescriptor);
                 var normalizedRangePosition = (sourceFrame - start) / (float)rangeLength;
                 var sourceBias = options.LaterSourceFrameBias * (1f - normalizedRangePosition);
                 var totalDistance = exact.total + sourceBias;
@@ -72,8 +74,6 @@ public sealed class AnimationMatcher
             .OrderBy(r => r.Distance)
             .ThenBy(r => r.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase);
 
-        // Temporal non-maximum suppression keeps a good clip from occupying the entire list
-        // with frames 100,101,102... while still allowing genuinely different points in it.
         var output = new List<AnimationMatchResult>(options.ResultCount);
         foreach (var candidate in sorted)
         {
@@ -97,9 +97,6 @@ public sealed class AnimationMatcher
 
     private static (float total, float pose, float velocity, float orientation) ExactDistance(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
     {
-        // Descriptor is laid out in 12-float blocks: position, velocity, facing, up,
-        // with four root-motion values at the end. Splitting components gives the UI
-        // meaningful diagnostics without changing the actual total ranking metric.
         var pose = 0f;
         var velocity = 0f;
         var orientation = 0f;
