@@ -214,7 +214,13 @@ public sealed class AnimationMatchingModeController : IDisposable
         var source = _sourceForResults ?? CurrentSource;
         if (source is null) return;
         var blend = _view.BlendingEnabled ? _view.BlendSeconds : 0f;
-        _stitched = new StitchedAnimation(source, result.SourceFrame, result.Candidate, result.CandidateFrame, blend);
+        _stitched = new StitchedAnimation(
+            source,
+            result.SourceFrame,
+            result.Candidate,
+            result.CandidateFrame,
+            blend,
+            _view.AlignPositionAndYaw);
         _view.SetCombinedTimeline(_stitched.FrameCount, result.SourceFrame);
         _host.PreviewAnimation(_stitched, result.SourceFrame);
     }

@@ -7,9 +7,9 @@ using GFDStudio.AnimationMatching.Features;
 namespace GFDStudio.AnimationMatching.Stitching;
 
 /// <summary>
-/// Runtime stitched clip for preview/export. Candidate root motion is rigidly aligned in the
-/// horizontal plane so its match frame lands at the source transition transform. Optional
-/// crossfade blends global transforms, then the aligned candidate owns the rest of the clip.
+/// Runtime stitched clip for preview/export. When alignment is enabled, candidate root motion is
+/// rigidly translated and yaw-aligned so its match frame lands at the source transition transform.
+/// Optional crossfade blends global transforms, then the candidate owns the rest of the clip.
 /// </summary>
 public sealed class StitchedAnimation : IAnimationClip
 {
@@ -21,7 +21,13 @@ public sealed class StitchedAnimation : IAnimationClip
     private readonly Quaternion _yawAlignment;
     private readonly Vector3 _translationAlignment;
 
-    public StitchedAnimation(IAnimationClip source, int sourceFrame, IAnimationClip candidate, int candidateFrame, float blendSeconds)
+    public StitchedAnimation(
+        IAnimationClip source,
+        int sourceFrame,
+        IAnimationClip candidate,
+        int candidateFrame,
+        float blendSeconds,
+        bool alignPositionAndYaw = true)
     {
         if (Math.Abs(source.FramesPerSecond - candidate.FramesPerSecond) > 0.01f)
             throw new ArgumentException("StitchedAnimation expects clips at the same frame rate. Resample in the host adapter first.");
@@ -34,14 +40,23 @@ public sealed class StitchedAnimation : IAnimationClip
         _candidateFrame = Math.Clamp(candidateFrame, 0, candidate.FrameCount - 1);
         _blendFrames = Math.Max(0, (int)MathF.Round(blendSeconds * source.FramesPerSecond));
 
-        var sourcePose = new BoneTransform[Skeleton.BoneCount];
-        var candidatePose = new BoneTransform[Skeleton.BoneCount];
-        source.SampleGlobalPose(_sourceFrame, sourcePose);
-        candidate.SampleGlobalPose(_candidateFrame, candidatePose);
-        var sourceRoot = sourcePose[Skeleton.RootBoneIndex];
-        var candidateRoot = candidatePose[Skeleton.RootBoneIndex];
-        _yawAlignment = Quaternion.Normalize(PoseFeatureExtractor.ExtractYaw(sourceRoot.Rotation) * Quaternion.Inverse(PoseFeatureExtractor.ExtractYaw(candidateRoot.Rotation)));
-        _translationAlignment = sourceRoot.Position - Vector3.Transform(candidateRoot.Position, _yawAlignment);
+        AlignPositionAndYaw = alignPositionAndYaw;
+        if (alignPositionAndYaw)
+        {
+            var sourcePose = new BoneTransform[Skeleton.BoneCount];
+            var candidatePose = new BoneTransform[Skeleton.BoneCount];
+            source.SampleGlobalPose(_sourceFrame, sourcePose);
+            candidate.SampleGlobalPose(_candidateFrame, candidatePose);
+            var sourceRoot = sourcePose[Skeleton.RootBoneIndex];
+            var candidateRoot = candidatePose[Skeleton.RootBoneIndex];
+            _yawAlignment = Quaternion.Normalize(PoseFeatureExtractor.ExtractYaw(sourceRoot.Rotation) * Quaternion.Inverse(PoseFeatureExtractor.ExtractYaw(candidateRoot.Rotation)));
+            _translationAlignment = sourceRoot.Position - Vector3.Transform(candidateRoot.Position, _yawAlignment);
+        }
+        else
+        {
+            _yawAlignment = Quaternion.Identity;
+            _translationAlignment = Vector3.Zero;
+        }
     }
 
     public string Id => $"stitch:{_source.Id}:{_sourceFrame}:{_candidate.Id}:{_candidateFrame}";
@@ -52,6 +67,7 @@ public sealed class StitchedAnimation : IAnimationClip
     public int CandidateStartFrame => _candidateFrame;
     public int BlendFrames => _blendFrames;
     public float BlendSeconds => _blendFrames / FramesPerSecond;
+    public bool AlignPositionAndYaw { get; }
     public int FrameCount => _sourceFrame + 1 + Math.Max(0, _candidate.FrameCount - _candidateFrame - 1);
     public IAnimationClip SourceClip => _source;
     public IAnimationClip CandidateClip => _candidate;

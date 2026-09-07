@@ -195,7 +195,8 @@ public static class GfdAnimationClipBaker
                 stitched.TransitionFrame,
                 CreateTargetPreviewClip(stitched.CandidateClip, targetModel, targetSkeleton),
                 stitched.CandidateStartFrame,
-                stitched.BlendSeconds),
+                stitched.BlendSeconds,
+                stitched.AlignPositionAndYaw),
             TailAnimation tail => new TailAnimation(
                 CreateTargetPreviewClip(tail.CandidateClip, targetModel, targetSkeleton),
                 tail.StartFrame),

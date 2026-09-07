@@ -92,9 +92,16 @@ public sealed class GfdTargetAnimationClip : IAnimationClip
             node.Parent != null && indices.TryGetValue(node.Parent, out var parentIndex)
                 ? parentIndex
                 : -1).ToArray();
-        var rootIndex = model.RootNode != null && indices.TryGetValue(model.RootNode, out var modelRootIndex)
-            ? modelRootIndex
-            : Array.FindIndex(parents, parent => parent < 0);
+        // RootBoneIndex is the motion reference used by matching/stitching, not necessarily the
+        // file-level hierarchy root. Persona rigs commonly keep RootNode static and animate a
+        // lower "root" or "Bip01" node; aligning RootNode would therefore leave the candidate's
+        // actual locomotion offset untouched and make the stitched preview jump.
+        var motionRoot = AnimationSkeletonRoles.ResolveMotionRoot(nodes, model.RootNode);
+        var rootIndex = motionRoot != null && indices.TryGetValue(motionRoot, out var motionRootIndex)
+            ? motionRootIndex
+            : model.RootNode != null && indices.TryGetValue(model.RootNode, out var modelRootIndex)
+                ? modelRootIndex
+                : Array.FindIndex(parents, parent => parent < 0);
         if (rootIndex < 0)
             rootIndex = 0;
 
