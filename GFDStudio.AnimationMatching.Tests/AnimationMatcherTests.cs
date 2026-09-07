@@ -128,7 +128,7 @@ public sealed class AnimationMatcherTests
         var candidatePose = new BoneTransform[source.Skeleton.BoneCount];
         var stitchedPose = new BoneTransform[source.Skeleton.BoneCount];
 
-        source.SampleGlobalPose(6, sourcePose);
+        source.SampleGlobalPose(5, sourcePose);
         candidate.SampleGlobalPose(6, candidatePose);
         aligned.SampleGlobalPose(6, stitchedPose);
 
@@ -174,7 +174,7 @@ public sealed class AnimationMatcherTests
         var sourcePose = new BoneTransform[source.Skeleton.BoneCount];
         var stitchedPose = new BoneTransform[source.Skeleton.BoneCount];
 
-        source.SampleGlobalPose(6, sourcePose);
+        source.SampleGlobalPose(5, sourcePose);
         stitched.SampleGlobalPose(6, stitchedPose);
 
         AssertPositionEqual(sourcePose[0].Position, stitchedPose[0].Position);
