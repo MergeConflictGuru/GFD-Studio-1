@@ -166,6 +166,22 @@ public sealed class AnimationMatcherTests
     }
 
     [TestMethod]
+    public void StitchHandoffAlignsTheFirstEmittedCandidateFrame()
+    {
+        var source = new FakeClip("source", Vector3.Zero, 0f, motionScale: 1f);
+        var candidate = new FakeClip("candidate", new Vector3(4f, 0f, -7f), 0.8f, motionScale: 2f);
+        var stitched = new StitchedAnimation(source, 5, candidate, 5, 0f, alignPositionAndYaw: true);
+        var sourcePose = new BoneTransform[source.Skeleton.BoneCount];
+        var stitchedPose = new BoneTransform[source.Skeleton.BoneCount];
+
+        source.SampleGlobalPose(6, sourcePose);
+        stitched.SampleGlobalPose(6, stitchedPose);
+
+        AssertPositionEqual(sourcePose[0].Position, stitchedPose[0].Position);
+        AssertRotationEqual(sourcePose[0].Rotation, stitchedPose[0].Rotation);
+    }
+
+    [TestMethod]
     public void FullSkeletonPreviewUsesAnimatedMotionRootForStitchAlignment()
     {
         var fileRoot = new Node("RootNode");
@@ -240,12 +256,14 @@ public sealed class AnimationMatcherTests
 
         private readonly Vector3 mWorldTranslation;
         private readonly Quaternion mWorldYaw;
+        private readonly float mMotionScale;
 
-        public FakeClip(string id, Vector3 worldTranslation, float worldYaw)
+        public FakeClip(string id, Vector3 worldTranslation, float worldYaw, float motionScale = 1f)
         {
             Id = id;
             mWorldTranslation = worldTranslation;
             mWorldYaw = Quaternion.CreateFromAxisAngle(Vector3.UnitY, worldYaw);
+            mMotionScale = motionScale;
         }
 
         public string Id { get; }
@@ -257,7 +275,10 @@ public sealed class AnimationMatcherTests
         public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
         {
             var frame = Math.Clamp(frameIndex, 0, FrameCount - 1);
-            var rootLocal = new Vector3(frame * 0.04f, frame * 0.002f, frame * 0.015f);
+            var rootLocal = new Vector3(
+                frame * 0.04f * mMotionScale,
+                frame * 0.002f * mMotionScale,
+                frame * 0.015f * mMotionScale);
 
             for (var i = 0; i < sOffsets.Length; i++)
             {
