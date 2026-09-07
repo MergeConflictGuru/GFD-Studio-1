@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.CodeDom;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -188,7 +188,12 @@ namespace GFDStudio.GUI.Forms
         public string SelectFileAndSave()
         {
             if ( ModelEditorTreeView.Nodes.Count > 0 )
+            {
+                if ( ModelEditorTreeView.TopNode is ModelPackViewNode modelPackNode )
+                    return SelectFileAndSaveModelPack( modelPackNode );
+
                 return ModelEditorTreeView.TopNode.Export();
+            }
 
             return null;
         }
