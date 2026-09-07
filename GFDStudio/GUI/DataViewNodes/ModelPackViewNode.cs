@@ -134,6 +134,50 @@ namespace GFDStudio.GUI.DataViewNodes
 
                 return model;
             } );
+            RegisterCustomHandler( "Tools", "Export animated FBX...", () =>
+            {
+                if ( Data.Model == null )
+                {
+                    MessageBox.Show( "This model pack has no model to animate.", "Animated FBX export",
+                                     MessageBoxButtons.OK, MessageBoxIcon.Error );
+                    return;
+                }
+
+                var animationPack = ModuleImportUtilities.SelectImportFile<AnimationPack>(
+                    "Select the GAP animation pack to bake into the FBX.", out var animationPath );
+                if ( animationPack == null )
+                    return;
+                if ( animationPack.Animations == null || animationPack.Animations.Count == 0 )
+                {
+                    MessageBox.Show( "The selected GAP contains no base animations.", "Animated FBX export",
+                                     MessageBoxButtons.OK, MessageBoxIcon.Warning );
+                    return;
+                }
+
+                using var saveDialog = new SaveFileDialog
+                {
+                    Filter = "Autodesk FBX (*.fbx)|*.fbx",
+                    DefaultExt = "fbx",
+                    AddExtension = true,
+                    InitialDirectory = Path.GetDirectoryName( animationPath ),
+                    FileName = Path.GetFileNameWithoutExtension( animationPath ) + ".fbx",
+                    Title = "Export model and GAP animation as FBX"
+                };
+                if ( saveDialog.ShowDialog() != DialogResult.OK )
+                    return;
+
+                try
+                {
+                    ModelPackExportHelper.ExportFile( Data, animationPack, saveDialog.FileName );
+                    MessageBox.Show( $"Exported {animationPack.Animations.Count} animation(s) at 30 fps:\n{saveDialog.FileName}",
+                                     "Animated FBX export", MessageBoxButtons.OK, MessageBoxIcon.Information );
+                }
+                catch ( System.Exception exception )
+                {
+                    MessageBox.Show( exception.Message, "Animated FBX export failed",
+                                     MessageBoxButtons.OK, MessageBoxIcon.Error );
+                }
+            } );
             RegisterCustomHandler( "Add", "Animation pack", () =>
             {
                 Data.AnimationPack = new AnimationPack( Data.Version );
@@ -167,7 +211,7 @@ namespace GFDStudio.GUI.DataViewNodes
 
             if ( Data.Model != null )
             {
-                Model = ( ModelViewNode ) DataViewNodeFactory.Create( "Model", Data.Model );
+                Model = ( ModelViewNode )DataViewNodeFactory.Create( "Model", Data.Model );
                 AddChildNode( Model );
             }
 
