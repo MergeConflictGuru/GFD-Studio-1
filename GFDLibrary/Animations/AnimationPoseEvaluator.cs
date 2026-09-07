@@ -57,6 +57,67 @@ namespace GFDLibrary.Animations
         }
     }
 
+    /// <summary>A sampled local node transform, suitable for baked interchange export.</summary>
+    public readonly struct AnimationNodeTransform
+    {
+        public AnimationNodeTransform(Vector3 translation, Quaternion rotation, Vector3 scale)
+        {
+            Translation = translation;
+            Rotation = rotation;
+            Scale = scale;
+        }
+
+        public Vector3 Translation { get; }
+        public Quaternion Rotation { get; }
+        public Vector3 Scale { get; }
+    }
+
+    /// <summary>
+    /// Reusable local-pose sampler for interchange exporters. Controller lookup is built once,
+    /// then each frame returns the local PRS values for every model node in model node order.
+    /// </summary>
+    public sealed class AnimationLocalPoseSampler
+    {
+        private readonly Node[] _nodes;
+        private readonly Dictionary<string, AnimationController[]> _controllers;
+
+        public AnimationLocalPoseSampler(Model model, Animation animation)
+        {
+            Model = model ?? throw new ArgumentNullException(nameof(model));
+            Animation = animation ?? throw new ArgumentNullException(nameof(animation));
+            _nodes = model.Nodes.ToArray();
+            _controllers = animation.Controllers
+                .Where(controller => controller.TargetKind == TargetKind.Node)
+                .GroupBy(controller => controller.TargetName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        }
+
+        public Model Model { get; }
+        public Animation Animation { get; }
+        public int NodeCount => _nodes.Length;
+
+        public AnimationNodeTransform[] Evaluate(float time)
+        {
+            var values = new AnimationNodeTransform[_nodes.Length];
+            for (var i = 0; i < _nodes.Length; i++)
+            {
+                var node = _nodes[i];
+                var position = node.Translation;
+                var rotation = node.Rotation;
+                var scale = node.Scale;
+                if (_controllers.TryGetValue(node.Name ?? string.Empty, out var controllers))
+                {
+                    foreach (var controller in controllers)
+                        foreach (var layer in controller.Layers)
+                            AnimationPoseEvaluator.Sample(layer, time, ref position, ref rotation, ref scale);
+                }
+
+                values[i] = new AnimationNodeTransform(position, Quaternion.Normalize(rotation), scale);
+            }
+            return values;
+        }
+    }
+
     /// <summary>
     /// Reusable evaluator for a single animation. It resolves only the requested nodes and their
     /// ancestors, which is important for the global matcher because cosmetic and helper branches
