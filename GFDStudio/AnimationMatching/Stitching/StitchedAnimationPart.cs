@@ -17,6 +17,11 @@ public sealed class StitchedAnimationPart : IAnimationClip
     private readonly Quaternion _rotation;
     private readonly Vector3 _translation;
     private readonly bool[] _motionSubtree;
+    private readonly bool[] _axisAncestors;
+    private readonly BoneTransform[] _axisAnchors;
+    private readonly Quaternion[] _axisRotations;
+    private readonly Vector3[] _axisTranslations;
+    private readonly bool _normalizeAxisAncestors;
 
     public StitchedAnimationPart(
         IAnimationClip clip,
@@ -24,6 +29,19 @@ public sealed class StitchedAnimationPart : IAnimationClip
         int frameCount,
         Quaternion rotation,
         Vector3 translation,
+        string displayName)
+        : this(clip, startFrame, frameCount, rotation, translation, null, 0, displayName)
+    {
+    }
+
+    public StitchedAnimationPart(
+        IAnimationClip clip,
+        int startFrame,
+        int frameCount,
+        Quaternion rotation,
+        Vector3 translation,
+        IAnimationClip axisReferenceClip,
+        int axisReferenceFrame,
         string displayName)
     {
         _clip = clip ?? throw new ArgumentNullException(nameof(clip));
@@ -35,6 +53,33 @@ public sealed class StitchedAnimationPart : IAnimationClip
         _rotation = Quaternion.Normalize(rotation);
         _translation = translation;
         _motionSubtree = StitchAlignment.BuildMotionSubtree(Skeleton);
+        _axisAncestors = StitchAlignment.BuildAxisAncestors(Skeleton);
+        _axisAnchors = new BoneTransform[Skeleton.BoneCount];
+        _axisRotations = new Quaternion[Skeleton.BoneCount];
+        _axisTranslations = new Vector3[Skeleton.BoneCount];
+        _normalizeAxisAncestors = axisReferenceClip != null && Array.IndexOf(_axisAncestors, true) >= 0;
+        StitchAlignment.InitializeAxisCorrections(
+            _axisAncestors,
+            _axisAnchors,
+            _axisRotations,
+            _axisTranslations);
+        if (_normalizeAxisAncestors)
+        {
+            if (axisReferenceClip.Skeleton.BoneCount != Skeleton.BoneCount)
+                throw new ArgumentException("Axis reference clip must use the same skeleton.", nameof(axisReferenceClip));
+
+            var referencePose = new BoneTransform[Skeleton.BoneCount];
+            var candidatePose = new BoneTransform[Skeleton.BoneCount];
+            axisReferenceClip.SampleGlobalPose(axisReferenceFrame, referencePose);
+            _clip.SampleGlobalPose(_startFrame, candidatePose);
+            StitchAlignment.InitializeAxisCorrections(
+                _axisAncestors,
+                referencePose,
+                candidatePose,
+                _axisAnchors,
+                _axisRotations,
+                _axisTranslations);
+        }
         DisplayName = string.IsNullOrWhiteSpace(displayName)
             ? throw new ArgumentException("A display name is required.", nameof(displayName))
             : displayName;
@@ -53,5 +98,14 @@ public sealed class StitchedAnimationPart : IAnimationClip
         _clip.SampleGlobalPose(_startFrame + localFrame, destination);
 
         StitchAlignment.ApplyRigidTransform(destination[..Skeleton.BoneCount], _motionSubtree, _rotation, _translation);
+        if (_normalizeAxisAncestors)
+            StitchAlignment.ApplyAxisCorrections(
+                destination[..Skeleton.BoneCount],
+                _motionSubtree,
+                _axisAncestors,
+                Skeleton.Parents,
+                _axisAnchors,
+                _axisRotations,
+                _axisTranslations);
     }
 }
