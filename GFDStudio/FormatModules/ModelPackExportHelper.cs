@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using GFDLibrary;
 using GFDLibrary.Animations;
@@ -14,9 +14,10 @@ namespace GFDStudio.FormatModules
             var ext = Path.GetExtension( path );
             if ( ext.Equals( ".fbx", StringComparison.OrdinalIgnoreCase ) )
             {
+                // Plain FBX export is model-only. Animation baking is explicitly selected by the
+                // caller so Save As can expose an "Include animations" option instead of silently
+                // changing the contents of every FBX export.
                 FbxSdkModelPackExporter.ExportFile( modelPack, path, new FbxSdkModelPackExporterConfig() );
-                if ( modelPack.Model != null && modelPack.AnimationPack?.Animations?.Count > 0 )
-                    FbxSdkAnimationExporter.AppendFile( modelPack.Model, modelPack.AnimationPack, path );
             }
             else
             {
