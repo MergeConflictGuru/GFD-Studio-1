@@ -13,7 +13,10 @@ public sealed class AnimationMatchOptions
     /// <summary>Frames between source pivots when a range is selected.</summary>
     public int QueryStride { get; set; } = 1;
 
-    /// <summary>How many approximate neighbors are reranked with the full descriptor.</summary>
+    /// <summary>
+    /// Initial number of frame neighbors reranked with the full descriptor. The matcher expands
+    /// this window when animation-level deduplication leaves fewer than ResultCount candidates.
+    /// </summary>
     public int ApproximateNeighborCount { get; set; } = 128;
 
     public int ResultCount { get; set; } = 32;

@@ -38,10 +38,56 @@ public sealed class AnimationMatcher
         if (sourceBones.Length != requiredBones) sourceBones = sourceBones[..requiredBones];
 
         var bestByAddress = new Dictionary<(int clip, int frame), AnimationMatchResult>();
+        var rangeLength = Math.Max(1, end - start);
+
+        // ApproximateNeighborCount is a frame-level search width, while the result grid is
+        // animation-level. A long or very similar clip can occupy the whole initial neighbor
+        // window, leaving only one animation after identity deduplication. Expand the window
+        // until the requested number of distinct animations is available or the index is
+        // exhausted.
+        var neighborCount = Math.Min(
+            _database.SampleCount,
+            Math.Max(1, options.ApproximateNeighborCount));
+        IReadOnlyList<AnimationMatchResult> output;
+        while (true)
+        {
+            SearchNeighbors(
+                source,
+                sourceBones,
+                start,
+                end,
+                rangeLength,
+                neighborCount,
+                bestByAddress,
+                cancellationToken);
+
+            output = BuildResults(bestByAddress.Values, options);
+            if (output.Count >= options.ResultCount || neighborCount >= _database.SampleCount)
+                return output;
+
+            var expanded = neighborCount <= _database.SampleCount / 2
+                ? neighborCount * 2
+                : _database.SampleCount;
+            if (expanded == neighborCount)
+                return output;
+            neighborCount = expanded;
+        }
+    }
+
+    private void SearchNeighbors(
+        IAnimationClip source,
+        int[] sourceBones,
+        int start,
+        int end,
+        int rangeLength,
+        int neighborCount,
+        Dictionary<(int clip, int frame), AnimationMatchResult> bestByAddress,
+        CancellationToken cancellationToken)
+    {
+        var options = _database.Options;
         var query = new float[_database.DescriptorDimensions];
         var candidateDescriptor = new float[_database.DescriptorDimensions];
         var projected = new float[_database.Projection.OutputDimensions];
-        var rangeLength = Math.Max(1, end - start);
 
         for (var sourceFrame = start; sourceFrame <= end; sourceFrame += options.QueryStride)
         {
@@ -49,7 +95,7 @@ public sealed class AnimationMatcher
             _database.Extractor.Extract(source, sourceFrame, sourceBones, query);
             _database.NormalizeQuery(query);
             _database.Projection.Project(query, projected);
-            var neighbors = _database.Tree.FindNearest(projected, options.ApproximateNeighborCount);
+            var neighbors = _database.Tree.FindNearest(projected, neighborCount);
 
             foreach (var sampleIndex in neighbors)
             {
@@ -69,11 +115,16 @@ public sealed class AnimationMatcher
                     bestByAddress[key] = result;
             }
         }
+    }
 
+    private static IReadOnlyList<AnimationMatchResult> BuildResults(
+        IEnumerable<AnimationMatchResult> candidates,
+        AnimationMatchOptions options)
+    {
         // The same animation identity can be present at several transition frames, and stale or
         // externally supplied corpora can contain the same definition more than once. The result
         // grid should show one best representative for each candidate identity.
-        var sorted = bestByAddress.Values
+        var sorted = candidates
             .GroupBy(result => result.Candidate.Id, StringComparer.Ordinal)
             .Select(group => group
                 .OrderBy(result => result.Distance)
