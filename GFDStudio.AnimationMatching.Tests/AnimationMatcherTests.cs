@@ -6,6 +6,7 @@ using GFDStudio.AnimationMatching.Core;
 using GFDStudio.AnimationMatching.Features;
 using GFDStudio.AnimationMatching.Index;
 using GFDStudio.AnimationMatching.Search;
+using GFDStudio.AnimationMatching.Stitching;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace GFDStudio.AnimationMatching.Tests;
@@ -92,6 +93,25 @@ public sealed class AnimationMatcherTests
         Assert.AreEqual(first.Length, second.Length);
         for (var i = 0; i < first.Length; i++)
             Assert.AreEqual(first[i], second[i], 1e-4f, $"Descriptor dimension {i} changed under a rigid world transform.");
+    }
+
+    [TestMethod]
+    public void TailStartsAtMatchedFrameAndUsesZeroBasedFrames()
+    {
+        var candidate = new FakeClip("candidate", Vector3.Zero, 0f);
+        var tail = new TailAnimation(candidate, 5);
+        var pose = new BoneTransform[tail.Skeleton.BoneCount];
+        var candidatePose = new BoneTransform[candidate.Skeleton.BoneCount];
+
+        tail.SampleGlobalPose(0, pose);
+        candidate.SampleGlobalPose(5, candidatePose);
+
+        Assert.AreEqual(candidate.FrameCount - 5, tail.FrameCount);
+        Assert.AreEqual(candidatePose[0].Position, pose[0].Position);
+
+        tail.SampleGlobalPose(tail.FrameCount - 1, pose);
+        candidate.SampleGlobalPose(candidate.FrameCount - 1, candidatePose);
+        Assert.AreEqual(candidatePose[0].Position, pose[0].Position);
     }
 
     private static AnimationMatchOptions CreateOptions() => new()

@@ -27,6 +27,7 @@ namespace GFDStudio.GUI.Forms
         private GfdAnimationClip mAnimationMatchCurrentSource;
         private string mAnimationMatchControllerContext;
         private bool mAnimationMatchPreviewLoad;
+        private bool mAnimationMatchTailActive;
         private int mAnimationMatchPreviewGeneration;
 
         /// <summary>
@@ -126,6 +127,7 @@ namespace GFDStudio.GUI.Forms
                     skeleton,
                     () => animation,
                     AnimationMatchingFramesPerSecond);
+                mAnimationMatchTailActive = false;
                 mAnimationMatchTimeline.FrameCount = mAnimationMatchCurrentSource.FrameCount;
                 mAnimationMatchTimeline.TransitionFrame = -1;
                 mAnimationMatchView?.SetSource(displayName, mAnimationMatchCurrentSource.FrameCount, AnimationMatchingFramesPerSecond);
@@ -172,6 +174,9 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             mAnimationMatchView.Visible = false;
+            if (mAnimationMatchTailActive && mAnimationMatchCurrentSource != null)
+                SetCharacterBrowserStatus("Matched tail active: " + mAnimationMatchCurrentSource.DisplayName);
+
             if (mCharacterBrowserPanel != null && mCharacterBrowserPanel.Visible)
             {
                 mCharacterBrowserPanel.BringToFront();
@@ -360,6 +365,50 @@ namespace GFDStudio.GUI.Forms
             var generation = ++mAnimationMatchPreviewGeneration;
             mAnimationMatchView.SetStatus("Preparing stitched preview…");
             _ = PreviewAnimationMatchingClipAsync(clip, transitionFrame, targetPack, generation);
+        }
+
+        async Task IGfdAnimationMatchingHost.OpenAnimationAsync(
+            IAnimationClip clip,
+            CancellationToken cancellationToken)
+        {
+            var targetPack = GetAnimationMatchingTargetModelPack();
+            if (targetPack?.Model == null)
+                throw new InvalidOperationException("No target model is loaded.");
+
+            var generation = ++mAnimationMatchPreviewGeneration;
+            mAnimationMatchView.SetStatus("Opening matched tail…");
+            var baked = await Task.Run(() => GfdAnimationClipBaker.Bake(
+                clip, targetPack.Model, targetPack.Version, cancellationToken), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsDisposed || generation != mAnimationMatchPreviewGeneration)
+                throw new OperationCanceledException(cancellationToken);
+
+            mAnimationMatchPreviewLoad = true;
+            try
+            {
+                ModelViewControl.Instance.LoadAnimation(baked, true);
+            }
+            finally
+            {
+                mAnimationMatchPreviewLoad = false;
+            }
+
+            var skeleton = GfdAnimationClip.CreateSkeleton(targetPack.Model);
+            mAnimationMatchCurrentSource = new GfdAnimationClip(
+                "source:" + clip.Id,
+                clip.DisplayName,
+                targetPack.Model,
+                skeleton,
+                () => baked,
+                AnimationMatchingFramesPerSecond);
+            mAnimationMatchTailActive = true;
+            mAnimationMatchTimeline.FrameCount = mAnimationMatchCurrentSource.FrameCount;
+            mAnimationMatchTimeline.TransitionFrame = -1;
+            mAnimationMatchView.SetSource(
+                mAnimationMatchCurrentSource.DisplayName,
+                mAnimationMatchCurrentSource.FrameCount,
+                mAnimationMatchCurrentSource.FramesPerSecond);
+            mAnimationMatchView.SetStatus("Matched tail loaded; refreshing results…");
         }
 
         private async Task PreviewAnimationMatchingClipAsync(

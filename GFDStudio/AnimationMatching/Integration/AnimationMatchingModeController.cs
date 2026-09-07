@@ -39,6 +39,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SearchRequested += OnSearchRequested;
         _view.ReindexRequested += OnReindexRequested;
         _view.CandidateActivated += OnCandidateActivated;
+        _view.CandidateOpened += OnCandidateOpened;
         _view.ExportRequested += OnExportRequested;
         _view.ThumbnailRequested += OnThumbnailRequested;
     }
@@ -67,25 +68,11 @@ public sealed class AnimationMatchingModeController : IDisposable
         }
 
         RestartWork();
+        var cancellationToken = _work.Token;
         _view.SetBusy(true, "Preparing animation match…");
         try
         {
-            await BuildIndexAsync(force: false);
-            if (_database is null || _work?.IsCancellationRequested != false) return;
-
-            _view.SetStatus("Searching…");
-            var matcher = new AnimationMatcher(_database);
-            var selection = _view.Selection;
-            var results = await Task.Run(() => matcher.Search(
-                source,
-                selection?.start,
-                selection?.end,
-                _work.Token), _work.Token);
-
-            _sourceForResults = source;
-            _stitched = null;
-            _view.SetResults(results);
-            _view.SetStatus(results.Count == 0 ? "No matches found" : $"{results.Count:N0} matches");
+            await SearchAsync(source, cancellationToken);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _view.SetStatus(ex.Message); }
@@ -100,7 +87,29 @@ public sealed class AnimationMatchingModeController : IDisposable
         catch (Exception ex) { _view.SetStatus(ex.Message); }
     }
 
-    private async Task BuildIndexAsync(bool force)
+    private async Task SearchAsync(IAnimationClip source, CancellationToken cancellationToken)
+    {
+        await BuildIndexAsync(force: false, restartWork: false);
+        if (_database is null || cancellationToken.IsCancellationRequested)
+            return;
+
+        _view.SetStatus("Searching…");
+        var matcher = new AnimationMatcher(_database);
+        var selection = _view.Selection;
+        var results = await Task.Run(() => matcher.Search(
+            source,
+            selection?.start,
+            selection?.end,
+            cancellationToken), cancellationToken);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        _sourceForResults = source;
+        _stitched = null;
+        _view.SetResults(results);
+        _view.SetStatus(results.Count == 0 ? "No matches found" : $"{results.Count:N0} matches");
+    }
+
+    private async Task BuildIndexAsync(bool force, bool restartWork = true)
     {
         var contextSignature = CurrentContextSignature;
         if (_database is not null && !force &&
@@ -113,7 +122,8 @@ public sealed class AnimationMatchingModeController : IDisposable
         _database = null;
         _databaseContextSignature = null;
 
-        RestartWork();
+        if (restartWork)
+            RestartWork();
         _view.SetBusy(true, "Indexing animations…");
         try
         {
@@ -197,6 +207,31 @@ public sealed class AnimationMatchingModeController : IDisposable
         _host.PreviewAnimation(_stitched, result.SourceFrame);
     }
 
+    private async void OnCandidateOpened(object? sender, AnimationMatchResult result)
+    {
+        var tail = new TailAnimation(result.Candidate, result.CandidateFrame);
+        RestartWork();
+        var cancellationToken = _work.Token;
+        _sourceForResults = tail;
+        _stitched = null;
+        _view.SetSelection(null);
+        _view.SetSource(tail.DisplayName, tail.FrameCount, tail.FramesPerSecond);
+        _view.SetBusy(true, "Opening matched tail…");
+
+        try
+        {
+            await _host.OpenAnimationAsync(tail, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // The index is corpus-scoped and remains reusable; only the query source changed.
+            var source = CurrentSource ?? tail;
+            await SearchAsync(source, cancellationToken);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _view.SetStatus("Tail open failed: " + ex.Message); }
+        finally { _view.SetBusy(false); }
+    }
+
     private async void OnExportRequested(object? sender, EventArgs e)
     {
         if (_stitched is null)
@@ -253,6 +288,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SearchRequested -= OnSearchRequested;
         _view.ReindexRequested -= OnReindexRequested;
         _view.CandidateActivated -= OnCandidateActivated;
+        _view.CandidateOpened -= OnCandidateOpened;
         _view.ExportRequested -= OnExportRequested;
         _view.ThumbnailRequested -= OnThumbnailRequested;
     }

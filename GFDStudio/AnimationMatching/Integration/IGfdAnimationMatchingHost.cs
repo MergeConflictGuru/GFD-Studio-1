@@ -17,6 +17,9 @@ public interface IGfdAnimationMatchingHost
     /// <summary>Displays a clip in the existing left model viewer and seeks to frame zero.</summary>
     void PreviewAnimation(IAnimationClip clip, int transitionFrame = -1);
 
+    /// <summary>Loads a clip as the new main animation without stitching it to the previous source.</summary>
+    Task OpenAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken);
+
     /// <summary>Produces animated small same-model frames for a candidate result. May return null.</summary>
     Task<IReadOnlyList<Image>> RenderCandidateThumbnailAsync(IAnimationClip clip, int frame, int width, int height, CancellationToken cancellationToken);
 
