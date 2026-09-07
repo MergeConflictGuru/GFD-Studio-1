@@ -70,7 +70,15 @@ public sealed class AnimationMatcher
             }
         }
 
+        // The same animation identity can be present at several transition frames, and stale or
+        // externally supplied corpora can contain the same definition more than once. The result
+        // grid should show one best representative for each candidate identity.
         var sorted = bestByAddress.Values
+            .GroupBy(result => result.Candidate.Id, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderBy(result => result.Distance)
+                .ThenBy(result => result.CandidateFrame)
+                .First())
             .OrderBy(r => r.Distance)
             .ThenBy(r => r.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase);
 

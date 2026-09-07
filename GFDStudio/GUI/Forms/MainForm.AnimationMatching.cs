@@ -29,7 +29,6 @@ namespace GFDStudio.GUI.Forms
         private bool mAnimationMatchPreviewLoad;
         private bool mAnimationMatchTailActive;
         private int mAnimationMatchPreviewGeneration;
-        private int mAnimationMatchWarmGeneration;
 
         /// <summary>
         /// Adds only the Match affordance to the shared left transport. The actual matcher surface
@@ -199,51 +198,6 @@ namespace GFDStudio.GUI.Forms
             mAnimationMatchView.SetResults(Array.Empty<AnimationMatchResult>());
         }
 
-        private void CancelAnimationMatchingWarmup()
-        {
-            mAnimationMatchWarmGeneration = 0;
-            mAnimationMatchController?.Dispose();
-            mAnimationMatchController = null;
-            mAnimationMatchControllerContext = null;
-        }
-
-        private async void WarmAnimationMatchingIndexAfterScan(int scanGeneration)
-        {
-            if (scanGeneration != mCharacterBrowserScanGeneration ||
-                mCharacterAnimations.Count == 0 ||
-                IsDisposed)
-                return;
-
-            EnsureAnimationMatchingController();
-            var controller = mAnimationMatchController;
-            if (controller == null)
-                return;
-
-            mAnimationMatchWarmGeneration = scanGeneration;
-            SetCharacterBrowserStatus("Building AniMatch corpus…");
-            try
-            {
-                var ready = await controller.WarmIndexAsync();
-                if (IsDisposed || scanGeneration != mCharacterBrowserScanGeneration ||
-                    mAnimationMatchWarmGeneration != scanGeneration)
-                    return;
-
-                SetCharacterBrowserStatus(ready
-                    ? "AniMatch corpus ready"
-                    : "AniMatch corpus build failed; open Match for details");
-            }
-            catch (OperationCanceledException)
-            {
-                // A newer character-browser scan or an explicit reindex superseded this warm-up.
-            }
-            catch (Exception ex)
-            {
-                Logger.Debug("AnimationMatch: automatic corpus build failed: " + ex);
-                if (!IsDisposed && scanGeneration == mCharacterBrowserScanGeneration)
-                    SetCharacterBrowserStatus("AniMatch corpus build failed: " + ex.Message);
-            }
-        }
-
         private ModelPack GetAnimationMatchingTargetModelPack()
         {
             return mCharacterBrowserCurrentModelPack ?? ModelEditorTreeView?.TopNode?.Data as ModelPack;
@@ -301,8 +255,11 @@ namespace GFDStudio.GUI.Forms
 
             var generation = ++mAnimationMatchPreviewGeneration;
             mAnimationMatchView.SetStatus("Opening matched tail…");
-            var baked = await Task.Run(() => GfdAnimationClipBaker.Bake(
-                clip, targetPack.Model, targetPack.Version, cancellationToken), cancellationToken);
+            var baked = await Task.Run(() =>
+            {
+                var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
+                return GfdAnimationClipBaker.Bake(previewClip, targetPack.Model, targetPack.Version, cancellationToken);
+            }, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (IsDisposed || generation != mAnimationMatchPreviewGeneration)
                 throw new OperationCanceledException(cancellationToken);
@@ -342,7 +299,10 @@ namespace GFDStudio.GUI.Forms
             try
             {
                 var baked = await Task.Run(() =>
-                    GfdAnimationClipBaker.Bake(clip, targetPack.Model, targetPack.Version));
+                {
+                    var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
+                    return GfdAnimationClipBaker.Bake(previewClip, targetPack.Model, targetPack.Version);
+                });
                 if (IsDisposed || generation != mAnimationMatchPreviewGeneration)
                     return;
 
@@ -382,8 +342,12 @@ namespace GFDStudio.GUI.Forms
             var availableFrames = Math.Max(1, clip.FrameCount - Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1)));
             var frameCount = Math.Min(previewFrameCount, availableFrames);
             var firstFrame = Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1));
-            var baked = await Task.Run(() => GfdAnimationClipBaker.BakeRange(
-                clip, targetPack.Model, targetPack.Version, firstFrame, frameCount, cancellationToken), cancellationToken);
+            var baked = await Task.Run(() =>
+            {
+                var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
+                return GfdAnimationClipBaker.BakeRange(
+                    previewClip, targetPack.Model, targetPack.Version, firstFrame, frameCount, cancellationToken);
+            }, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
             var times = Enumerable.Range(0, frameCount)
@@ -415,7 +379,8 @@ namespace GFDStudio.GUI.Forms
             await Task.Run(() =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var animation = GfdAnimationClipBaker.Bake(clip, targetPack.Model, targetPack.Version, cancellationToken);
+                var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
+                var animation = GfdAnimationClipBaker.Bake(previewClip, targetPack.Model, targetPack.Version, cancellationToken);
                 var output = new AnimationPack(targetPack.Version);
                 output.Animations.Add(animation);
                 output.Save(path);

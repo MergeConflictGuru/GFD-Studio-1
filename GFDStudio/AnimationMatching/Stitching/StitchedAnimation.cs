@@ -51,7 +51,10 @@ public sealed class StitchedAnimation : IAnimationClip
     public int TransitionFrame => _sourceFrame;
     public int CandidateStartFrame => _candidateFrame;
     public int BlendFrames => _blendFrames;
+    public float BlendSeconds => _blendFrames / FramesPerSecond;
     public int FrameCount => _sourceFrame + 1 + Math.Max(0, _candidate.FrameCount - _candidateFrame - 1);
+    public IAnimationClip SourceClip => _source;
+    public IAnimationClip CandidateClip => _candidate;
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
     {
