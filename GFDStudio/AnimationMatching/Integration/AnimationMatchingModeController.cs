@@ -157,6 +157,9 @@ public sealed class AnimationMatchingModeController : IDisposable
                     _view.SetStatus($"Loaded {_database.SampleCount:N0} indexed poses from cache");
                     return;
                 }
+
+                _view.SetStatus("Cached animation index is unavailable or stale; click Reindex to rebuild.");
+                return;
             }
 
             var progress = new Progress<(int done, int total)>(p =>
