@@ -55,6 +55,7 @@ namespace GFDStudio.GUI.Forms
         public MainForm()
         {
             InitializeComponent();
+            InitializeAnimationStepButtons();
             InitializeState();
             InitializeEvents();
             InitializeAnimationMatching();
@@ -68,6 +69,54 @@ namespace GFDStudio.GUI.Forms
             //ModelViewControl.Instance.LoadAnimation( Resource.Load<AnimationPack>( 
             //    @"D:\Modding\Persona 5 EU\Main game\ExtractedClean\data\model\character\0001\field\bf0001_002.GAP" ).Animations[2]);
 #endif
+        }
+
+        private void InitializeAnimationStepButtons()
+        {
+            mAnimationPreviousButton = CreateAnimationStepButton( "←", "Previous frame" );
+            mAnimationNextButton = CreateAnimationStepButton( "→", "Next frame" );
+
+            tableLayoutPanel_AnimationControls.ColumnCount = 5;
+            tableLayoutPanel_AnimationControls.ColumnStyles.Clear();
+            tableLayoutPanel_AnimationControls.ColumnStyles.Add( new System.Windows.Forms.ColumnStyle( System.Windows.Forms.SizeType.Percent, 9F ) );
+            tableLayoutPanel_AnimationControls.ColumnStyles.Add( new System.Windows.Forms.ColumnStyle( System.Windows.Forms.SizeType.Percent, 58F ) );
+            tableLayoutPanel_AnimationControls.ColumnStyles.Add( new System.Windows.Forms.ColumnStyle( System.Windows.Forms.SizeType.Percent, 13F ) );
+            tableLayoutPanel_AnimationControls.ColumnStyles.Add( new System.Windows.Forms.ColumnStyle( System.Windows.Forms.SizeType.Percent, 9F ) );
+            tableLayoutPanel_AnimationControls.ColumnStyles.Add( new System.Windows.Forms.ColumnStyle( System.Windows.Forms.SizeType.Percent, 11F ) );
+
+            tableLayoutPanel_AnimationControls.Controls.Clear();
+            tableLayoutPanel_AnimationControls.Controls.Add( mAnimationPreviousButton, 0, 0 );
+            tableLayoutPanel_AnimationControls.Controls.Add( mAnimationTrackBar, 1, 0 );
+            tableLayoutPanel_AnimationControls.Controls.Add( mAnimationPlaybackButton, 2, 0 );
+            tableLayoutPanel_AnimationControls.Controls.Add( mAnimationNextButton, 3, 0 );
+            tableLayoutPanel_AnimationControls.Controls.Add( mAnimationStopButton, 4, 0 );
+        }
+
+        private static MetroSetButton CreateAnimationStepButton( string text, string accessibleName )
+        {
+            return new MetroSetButton
+            {
+                AccessibleName = accessibleName,
+                Dock = DockStyle.Fill,
+                Font = new System.Drawing.Font( "Microsoft Sans Serif", 12F ),
+                HoverBorderColor = System.Drawing.Color.FromArgb( 95, 207, 255 ),
+                HoverColor = System.Drawing.Color.FromArgb( 95, 207, 255 ),
+                HoverTextColor = System.Drawing.Color.White,
+                IsDerivedStyle = true,
+                Margin = new Padding( 5, 4, 5, 4 ),
+                MaximumSize = new System.Drawing.Size( 100, 30 ),
+                NormalBorderColor = System.Drawing.Color.FromArgb( 65, 177, 225 ),
+                NormalColor = System.Drawing.Color.FromArgb( 65, 177, 225 ),
+                NormalTextColor = System.Drawing.Color.White,
+                Padding = new Padding( 5 ),
+                PressBorderColor = System.Drawing.Color.FromArgb( 35, 147, 195 ),
+                PressColor = System.Drawing.Color.FromArgb( 35, 147, 195 ),
+                PressTextColor = System.Drawing.Color.White,
+                Style = MetroSet_UI.Enums.Style.Dark,
+                Text = text,
+                ThemeAuthor = "Narwin",
+                ThemeName = "MetroDark"
+            };
         }
 
         private void InitializeState()
@@ -103,6 +152,8 @@ namespace GFDStudio.GUI.Forms
             ModelViewControl.Instance.AnimationTimeChanged += HandleModelAnimationTimeChanged;
             mAnimationTrackBar.ValueChanged += HandleTrackbarValueChanged;
             mAnimationPlaybackButton.Click += HandleAnimationPlaybackButtonClick;
+            mAnimationPreviousButton.Click += HandleAnimationPreviousButtonClick;
+            mAnimationNextButton.Click += HandleAnimationNextButtonClick;
         }
 
         //

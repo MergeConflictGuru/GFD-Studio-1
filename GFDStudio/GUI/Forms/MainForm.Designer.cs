@@ -622,6 +622,8 @@ namespace GFDStudio.GUI.Forms
         private System.Windows.Forms.TrackBar mAnimationTrackBar;
         private DataTreeView mAnimationListTreeView;
         private MetroSetButton mAnimationStopButton;
+        private MetroSetButton mAnimationPreviousButton;
+        private MetroSetButton mAnimationNextButton;
         private System.Windows.Forms.ToolStripMenuItem rescaleAnimationPacksInDirectoryToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem convertAnimationsToP5InDirectoryToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem convertMaterialInDirectoryToolStripMenuItem;
