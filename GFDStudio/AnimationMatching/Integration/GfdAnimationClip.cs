@@ -64,13 +64,16 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         {
             lock (_animationSync)
             {
-                _animation ??= _animationLoader() ??
-                    throw new InvalidOperationException($"Could not load animation {DisplayName}.");
+                if (_animation == null)
+                {
+                    _animation = _animationLoader() ??
+                        throw new InvalidOperationException($"Could not load animation {DisplayName}.");
 
-                // Evaluating a raw GAP uses TargetName, but fixing IDs here also makes the same
-                // source clip safe to pass through the preview/export baker later.
-                _animation.FixTargetIds(SourceModel);
-                _poseSampler = new AnimationPoseSampler(SourceModel, _animation);
+                    // Evaluating a raw GAP uses TargetName, but fixing IDs here also makes the same
+                    // source clip safe to pass through the preview/export baker later.
+                    _animation.FixTargetIds(SourceModel);
+                    _poseSampler = new AnimationPoseSampler(SourceModel, _animation);
+                }
                 return _animation;
             }
         }
