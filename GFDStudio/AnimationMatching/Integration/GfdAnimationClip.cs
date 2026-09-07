@@ -105,6 +105,8 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
                 _poseSampler = null;
                 _animation = null;
             }
+            _canonicalNodes = null;
+            _model = null;
         }
     }
 
@@ -236,12 +238,12 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
 
     private (Model model, Node[] canonicalNodes, SkeletonDefinition skeleton) EnsureModelContext()
     {
-        if (_skeleton != null)
+        if (_skeleton != null && _model != null && _canonicalNodes != null)
             return (_model, _canonicalNodes, _skeleton);
 
         lock (_modelSync)
         {
-            if (_skeleton != null)
+            if (_skeleton != null && _model != null && _canonicalNodes != null)
                 return (_model, _canonicalNodes, _skeleton);
 
             _model = _modelLoader() ?? throw new InvalidOperationException($"Could not load source model for {DisplayName}.");
@@ -249,8 +251,11 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
                 throw new InvalidOperationException($"Source model for {DisplayName} has no nodes.");
 
             _canonicalNodes = ResolveCanonicalNodes(_model);
-            var bindPose = _canonicalNodes.Select(GetWorldTransform).ToArray();
-            _skeleton = CanonicalSkeleton.Create(bindPose, CalculateReferenceHeight(_model));
+            if (_skeleton == null)
+            {
+                var bindPose = _canonicalNodes.Select(GetWorldTransform).ToArray();
+                _skeleton = CanonicalSkeleton.Create(bindPose, CalculateReferenceHeight(_model));
+            }
             return (_model, _canonicalNodes, _skeleton);
         }
     }
