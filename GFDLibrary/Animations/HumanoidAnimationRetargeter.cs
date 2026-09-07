@@ -20,6 +20,13 @@ namespace GFDLibrary.Animations
             if (mapping.Count < 4)
                 throw new InvalidOperationException("Not enough corresponding humanoid bones to retarget this animation.");
 
+            // Keep the reverse lookup too. When a source joint and its parent map
+            // directly to a target joint and its parent, the joint animation can
+            // be transferred in local bind space. That is important for P5/R <->
+            // Dance limbs: the semantic bones correspond, but their local axes do
+            // not (notably the calf/foot and forearm/hand chains).
+            var reverseMapping = mapping.ToDictionary(pair => pair.Value, pair => pair.Key);
+
             var motionRoot = AnimationSkeletonRoles.ResolveMotionRoot(targets.Where(mapping.ContainsKey));
             var heightRatio = 1f;
             if (motionRoot != null)
@@ -58,11 +65,40 @@ namespace GFDLibrary.Animations
                     var local = target.LocalTransform;
                     if (mapping.TryGetValue(target, out var source))
                     {
-                        var bindRotation = Rotation(sourceBind[source]);
-                        Matrix4x4.Invert(bindRotation, out var inverseBindRotation);
-                        var desiredRotation = Rotation(targetBind[target]) * inverseBindRotation * Rotation(sourcePose[source]);
-                        Matrix4x4.Invert(Rotation(parentWorld), out var inverseParentRotation);
-                        var localRotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(desiredRotation * inverseParentRotation));
+                        Quaternion localRotation;
+                        if (CanTransferLocalRotation(source, target, reverseMapping))
+                        {
+                            // A contiguous semantic chain should be retargeted as
+                            // a local animation delta. Reconstructing every bone
+                            // independently in model space couples a child's bend
+                            // to its parent's different bind axes. On the real P5D
+                            // and P5R rigs that made knees/elbows twist as soon as
+                            // the calf/foot or forearm/hand began moving.
+                            var sourceBindLocalRotation = Rotation(source.LocalTransform);
+                            Matrix4x4.Invert(sourceBindLocalRotation, out var inverseSourceBindLocalRotation);
+                            var sourceAnimatedLocalRotation = Rotation(LocalPose(source, sourcePose));
+                            var desiredLocalRotation = Rotation(target.LocalTransform) *
+                                                       inverseSourceBindLocalRotation *
+                                                       sourceAnimatedLocalRotation;
+                            localRotation = Quaternion.Normalize(
+                                Quaternion.CreateFromRotationMatrix(desiredLocalRotation));
+                        }
+                        else
+                        {
+                            // If the semantic parent chain differs, stay in model
+                            // space so motion from collapsed/unmapped ancestors is
+                            // preserved. This is needed around the two games' root
+                            // and spine hierarchy differences.
+                            var bindRotation = Rotation(sourceBind[source]);
+                            Matrix4x4.Invert(bindRotation, out var inverseBindRotation);
+                            var desiredRotation = Rotation(targetBind[target]) *
+                                                  inverseBindRotation *
+                                                  Rotation(sourcePose[source]);
+                            Matrix4x4.Invert(Rotation(parentWorld), out var inverseParentRotation);
+                            localRotation = Quaternion.Normalize(
+                                Quaternion.CreateFromRotationMatrix(desiredRotation * inverseParentRotation));
+                        }
+
                         var position = target.Translation;
                         if (target == motionRoot)
                         {
@@ -91,6 +127,28 @@ namespace GFDLibrary.Animations
             // Material/morph/visibility tracks refer to source meshes; they are
             // not portable to the separately packaged Dance body, face and hair.
             animation.Controllers = targets.Where(output.ContainsKey).Select(n => output[n]).ToList();
+        }
+
+        private static bool CanTransferLocalRotation(
+            Node source,
+            Node target,
+            IReadOnlyDictionary<Node, Node> reverseMapping)
+        {
+            if (source?.Parent == null || target?.Parent == null)
+                return false;
+
+            return reverseMapping.TryGetValue(source.Parent, out var mappedSourceParent) &&
+                   ReferenceEquals(mappedSourceParent, target.Parent);
+        }
+
+        private static Matrix4x4 LocalPose(Node node, IReadOnlyDictionary<Node, Matrix4x4> pose)
+        {
+            if (node.Parent == null)
+                return pose[node];
+
+            if (!Matrix4x4.Invert(pose[node.Parent], out var inverseParent))
+                throw new InvalidOperationException("Cannot invert an animated skeleton parent transform.");
+            return pose[node] * inverseParent;
         }
 
         private static Matrix4x4 Rotation(Matrix4x4 transform)
