@@ -1,13 +1,20 @@
 [CmdletBinding()]
 param(
-    [switch]$Run
+    [switch]$Run,
+    [ValidateScript({ -not [string]::IsNullOrWhiteSpace($_) })]
+    [string]$FinalDirectory = 'GFDStudio-binary'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $workspace = (Resolve-Path $PSScriptRoot).Path
-$binaryDirectory = Join-Path $workspace 'GFDStudio-binary'
+$binaryDirectory = if ([System.IO.Path]::IsPathRooted($FinalDirectory)) {
+    [System.IO.Path]::GetFullPath($FinalDirectory)
+}
+else {
+    [System.IO.Path]::GetFullPath((Join-Path $workspace $FinalDirectory))
+}
 $buildDirectory = Join-Path $workspace 'GFDStudio\bin\x64\Release\net8.0-windows\win-x64'
 
 $dotnetRootCandidates = @(
@@ -143,6 +150,7 @@ $binaryDirectoryUpdated = $false
 $buildSucceeded = $false
 
 try {
+    Write-Host "[release] Final directory: $binaryDirectory"
     Write-Host '[release] Restoring the normal GFD Studio project graph...'
     Invoke-MSBuild @(
         (Join-Path $workspace 'GFDStudio\GFDStudio.csproj'),
