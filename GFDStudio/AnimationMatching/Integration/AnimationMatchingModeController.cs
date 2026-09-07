@@ -63,17 +63,6 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SetSource(source.DisplayName, source.FrameCount, source.FramesPerSecond);
     }
 
-    /// <summary>
-    /// Builds or loads the global animation corpus without requiring a source animation or an
-    /// open matching panel. MainForm uses this after the Character Browser finishes scanning so
-    /// the first Match click can search an already prepared model-independent index.
-    /// </summary>
-    public async Task<bool> WarmIndexAsync()
-    {
-        await BuildIndexAsync(force: false);
-        return _database is not null;
-    }
-
     private async void OnSearchRequested(object? sender, EventArgs e)
     {
         var source = _sourceForResults ?? CurrentSource;

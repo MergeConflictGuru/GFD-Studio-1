@@ -95,6 +95,28 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         }
     }
 
+    /// <summary>
+    /// Creates the full-skeleton clip used by the final preview. Matching remains canonical and
+    /// model-independent, but preview must retain every node in the original animation, including
+    /// clavicles, upper arms, fingers, and cosmetic branches.
+    /// </summary>
+    public IAnimationClip CreateTargetPreviewClip(Model targetModel)
+    {
+        if (targetModel == null)
+            throw new ArgumentNullException(nameof(targetModel));
+
+        var sourceModel = SourceModel;
+        var animation = _animationLoader() ??
+            throw new InvalidOperationException($"Could not load animation {DisplayName} for preview.");
+
+        if (ReferenceEquals(sourceModel, targetModel))
+            animation.FixTargetIds(targetModel);
+        else
+            animation.Retarget(sourceModel, targetModel, false);
+
+        return new GfdTargetAnimationClip(Id, DisplayName, targetModel, animation, FramesPerSecond);
+    }
+
     /// <summary>Drops decoded GAP data while retaining the source skeleton and duration.</summary>
     public void ReleaseResources()
     {

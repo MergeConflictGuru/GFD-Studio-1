@@ -26,6 +26,8 @@ public sealed class TailAnimation : IAnimationClip
     public SkeletonDefinition Skeleton => _candidate.Skeleton;
     public int FrameCount => _candidate.FrameCount - _startFrame;
     public float FramesPerSecond => _candidate.FramesPerSecond;
+    public IAnimationClip CandidateClip => _candidate;
+    public int StartFrame => _startFrame;
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
     {
