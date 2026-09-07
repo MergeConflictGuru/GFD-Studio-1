@@ -248,6 +248,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     public event EventHandler? SearchRequested;
     public event EventHandler? ExportRequested;
     public event AnimationMatchResultEventHandler? CandidateActivated;
+    public event AnimationMatchResultEventHandler? CandidateOpened;
     public event EventHandler<ThumbnailRequest>? ThumbnailRequested;
 
     public void SetRootPath(string? path) => _root.Text = path ?? string.Empty;
@@ -347,19 +348,34 @@ public sealed class AnimationMatchingModeControl : UserControl
         };
         card.Controls.AddRange(new Control[] { image, title, detail });
 
-        void Activate(object? _, EventArgs __)
+        void SelectCard()
         {
             _selectedResult = result;
             foreach (Control child in _results.Controls)
                 child.BackColor = Color.FromArgb(37, 37, 38);
             card.BackColor = Color.FromArgb(55, 72, 84);
+        }
+
+        void Activate(object? _, EventArgs __)
+        {
+            SelectCard();
             CandidateActivated?.Invoke(this, result);
+        }
+
+        void Open(object? _, EventArgs __)
+        {
+            SelectCard();
+            CandidateOpened?.Invoke(this, result);
         }
 
         card.Click += Activate;
         image.Click += Activate;
         title.Click += Activate;
         detail.Click += Activate;
+        card.DoubleClick += Open;
+        image.DoubleClick += Open;
+        title.DoubleClick += Open;
+        detail.DoubleClick += Open;
 
         ThumbnailRequested?.Invoke(this, new ThumbnailRequest(result, image.Width, image.Height, frames =>
         {
