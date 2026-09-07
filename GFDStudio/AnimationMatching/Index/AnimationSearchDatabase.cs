@@ -153,8 +153,8 @@ public sealed class AnimationSearchDatabase : IDisposable
         var featureBones = new int[corpus.Clips.Count][];
         for (var i = 0; i < corpus.Clips.Count; i++) featureBones[i] = extractor.SelectFeatureBones(corpus.Clips[i].Skeleton);
 
-        // A corpus should normally share one skeleton after GFD showroom retargeting. To support rigs
-        // with different bone counts, descriptor cardinality is forced to the smallest selected set.
+        // Canonical clips share one semantic skeleton. Keep the minimum guard for non-GFD adapters,
+        // but canonical source clips normally produce the full identical slot set.
         var commonBoneCount = int.MaxValue;
         foreach (var bones in featureBones) commonBoneCount = Math.Min(commonBoneCount, bones.Length);
         if (commonBoneCount < 1) throw new InvalidOperationException("No feature bones were found.");

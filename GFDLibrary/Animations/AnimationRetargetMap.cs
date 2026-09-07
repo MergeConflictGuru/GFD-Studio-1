@@ -227,6 +227,11 @@ namespace GFDLibrary.Animations
             return null;
         }
 
+        internal static string GetSkeletonRoleForMatching( string name )
+        {
+            return GetSkeletonRole( name );
+        }
+
         private static string GetSide( string name, out string sideName )
         {
             sideName = name;

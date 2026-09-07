@@ -35,10 +35,8 @@ public interface IAnimationMatchingCacheHost
 }
 
 /// <summary>
-/// Optional correctness-oriented corpus provider. Hosts with enough source-model context should
-/// implement this instead of relying on the legacy raw Character Browser list. It lets the matcher
-/// use a canonical source identity, a corpus that has been validated/retargeted for the active
-/// target skeleton, and a context signature that also invalidates the in-memory index.
+/// Source-model corpus provider for the global matcher. Implementations must expose clips in the
+/// canonical skeleton space; the active showroom target must not affect these members.
 /// </summary>
 public interface IAnimationMatchingCorpusHost
 {
