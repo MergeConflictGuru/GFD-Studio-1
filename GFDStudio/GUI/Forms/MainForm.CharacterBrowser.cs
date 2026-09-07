@@ -744,6 +744,10 @@ namespace GFDStudio.GUI.Forms
                                     $"({finalCachedCount:N0} cached, {finalRescannedCount:N0} rescanned)" +
                                     (finalFailedCount == 0 ? string.Empty : $" ({finalFailedCount:N0} GAP files failed to parse)"));
 
+                            // The showroom corpus is now complete. Warm only an already-existing
+                            // AniMatch cache so opening the search surface does not pay that I/O cost.
+                            StartAnimationMatchingCachePreload();
+
                         }));
                     }
                 }, token);

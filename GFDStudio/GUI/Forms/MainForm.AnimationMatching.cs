@@ -202,6 +202,16 @@ namespace GFDStudio.GUI.Forms
             mAnimationMatchView.SetResults(Array.Empty<AnimationMatchResult>());
         }
 
+        private void StartAnimationMatchingCachePreload()
+        {
+            var cacheHost = (IAnimationMatchingCacheHost)this;
+            if (!File.Exists(cacheHost.AnimationMatchingCachePath))
+                return;
+
+            EnsureAnimationMatchingController();
+            _ = mAnimationMatchController.PreloadExistingIndexAsync();
+        }
+
         private ModelPack GetAnimationMatchingTargetModelPack()
         {
             return mCharacterBrowserCurrentModelPack ?? ModelEditorTreeView?.TopNode?.Data as ModelPack;
