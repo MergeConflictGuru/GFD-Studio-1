@@ -23,6 +23,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
     private Node[] _canonicalNodes;
     private SkeletonDefinition _skeleton;
     private Animation _animation;
+    private AnimationPoseSampler _poseSampler;
     private int _frameCount;
 
     public GfdAnimationClip(
@@ -67,6 +68,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
                 // Evaluating a raw GAP uses TargetName, but fixing IDs here also makes the same
                 // source clip safe to pass through the preview/export baker later.
                 _animation.FixTargetIds(SourceModel);
+                _poseSampler = new AnimationPoseSampler(SourceModel, _animation);
                 return _animation;
             }
         }
@@ -91,7 +93,10 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
     public void ReleaseResources()
     {
         lock (_animationSync)
+        {
+            _poseSampler = null;
             _animation = null;
+        }
     }
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
@@ -101,6 +106,9 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             throw new ArgumentException("Destination pose buffer is too small.", nameof(destination));
 
         var animation = Animation;
+        var poseSampler = Volatile.Read(ref _poseSampler);
+        if (poseSampler == null)
+            throw new InvalidOperationException($"Could not prepare animation sampler for {DisplayName}.");
         var frameCount = Volatile.Read(ref _frameCount);
         if (frameCount <= 0)
         {
@@ -111,7 +119,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
 
         var clamped = Math.Clamp(frameIndex, 0, frameCount - 1);
         var time = clamped / FramesPerSecond;
-        var transforms = AnimationPoseEvaluator.Evaluate(context.model, animation, time);
+        var transforms = poseSampler.Evaluate(context.canonicalNodes, time);
 
         for (var i = 0; i < context.canonicalNodes.Length; i++)
         {
