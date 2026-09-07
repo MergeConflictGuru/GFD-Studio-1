@@ -19,6 +19,8 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
     private readonly Func<Animation> _animationLoader;
     private readonly object _modelSync = new();
     private readonly object _animationSync = new();
+    private readonly object _poseCacheSync = new();
+    private readonly Dictionary<int, BoneTransform[]> _poseCache = new();
     private Model _model;
     private Node[] _canonicalNodes;
     private SkeletonDefinition _skeleton;
@@ -92,10 +94,14 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
     /// <summary>Drops decoded GAP data while retaining the source skeleton and duration.</summary>
     public void ReleaseResources()
     {
-        lock (_animationSync)
+        lock (_poseCacheSync)
         {
-            _poseSampler = null;
-            _animation = null;
+            _poseCache.Clear();
+            lock (_animationSync)
+            {
+                _poseSampler = null;
+                _animation = null;
+            }
         }
     }
 
@@ -118,25 +124,40 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         }
 
         var clamped = Math.Clamp(frameIndex, 0, frameCount - 1);
-        var time = clamped / FramesPerSecond;
-        var transforms = poseSampler.Evaluate(context.canonicalNodes, time);
-
-        for (var i = 0; i < context.canonicalNodes.Length; i++)
+        lock (_poseCacheSync)
         {
-            var node = context.canonicalNodes[i];
-            var matrix = transforms.TryGetValue(node, out var evaluated)
-                ? evaluated
-                : node.WorldTransform;
-            if (!Matrix4x4.Decompose(matrix, out var scale, out var rotation, out var translation))
+            if (!ReferenceEquals(poseSampler, Volatile.Read(ref _poseSampler)))
+                throw new InvalidOperationException($"Animation resources were released while sampling {DisplayName}.");
+
+            if (_poseCache.TryGetValue(clamped, out var cached))
             {
-                scale = Vector3.One;
-                rotation = Quaternion.Identity;
-                translation = Vector3.Zero;
+                cached.AsSpan().CopyTo(destination);
+                return;
             }
 
-            if (rotation.LengthSquared() < 1e-10f)
-                rotation = Quaternion.Identity;
-            destination[i] = new BoneTransform(translation, Quaternion.Normalize(rotation), scale);
+            var time = clamped / FramesPerSecond;
+            var transforms = poseSampler.Evaluate(context.canonicalNodes, time);
+            var sampled = new BoneTransform[CanonicalSkeleton.JointCount];
+            for (var i = 0; i < context.canonicalNodes.Length; i++)
+            {
+                var node = context.canonicalNodes[i];
+                var matrix = transforms.TryGetValue(node, out var evaluated)
+                    ? evaluated
+                    : node.WorldTransform;
+                if (!Matrix4x4.Decompose(matrix, out var scale, out var rotation, out var translation))
+                {
+                    scale = Vector3.One;
+                    rotation = Quaternion.Identity;
+                    translation = Vector3.Zero;
+                }
+
+                if (rotation.LengthSquared() < 1e-10f)
+                    rotation = Quaternion.Identity;
+                sampled[i] = new BoneTransform(translation, Quaternion.Normalize(rotation), scale);
+            }
+
+            _poseCache.Add(clamped, sampled);
+            sampled.AsSpan().CopyTo(destination);
         }
     }
 
