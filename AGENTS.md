@@ -1,3 +1,6 @@
+you are not allowed to run dotnet to build it directly
+use the build script "build-release.ps1" and nothing else
+
 # Commit guidance
 
 AI should make commits for features and keep each commit focused on one coarse feature.
