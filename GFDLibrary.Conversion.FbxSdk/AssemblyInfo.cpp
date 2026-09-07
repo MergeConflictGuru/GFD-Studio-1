@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "FbxSdkAnimationExporter.h"
 
 using namespace System;
 using namespace System::Reflection;
