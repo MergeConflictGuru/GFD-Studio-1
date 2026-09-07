@@ -367,7 +367,7 @@ public sealed class AnimationMatchingModeControl : UserControl
             Height = 20,
             AutoEllipsis = true,
             ForeColor = Color.Silver,
-            Text = $"{result.Score:0.0} · {result.CandidateTimeSeconds:0.00}s · f{result.CandidateFrame}"
+            Text = $"similarity {result.Score:0.0}% · {result.CandidateTimeSeconds:0.00}s · f{result.CandidateFrame}"
         };
         card.Controls.AddRange(new Control[] { image, title, detail });
 

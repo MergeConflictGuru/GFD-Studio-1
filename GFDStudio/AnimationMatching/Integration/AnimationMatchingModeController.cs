@@ -111,7 +111,9 @@ public sealed class AnimationMatchingModeController : IDisposable
         _sourceForResults = source;
         _stitched = null;
         _view.SetResults(results);
-        _view.SetStatus(results.Count == 0 ? "No matches found" : $"{results.Count:N0} matches");
+        _view.SetStatus(results.Count == 0
+            ? "No matches found · no similarity cutoff"
+            : $"{results.Count:N0} matches · no similarity cutoff");
     }
 
     private async Task BuildIndexAsync(bool force, bool restartWork = true)
