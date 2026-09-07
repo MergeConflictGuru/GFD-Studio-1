@@ -11,13 +11,13 @@ using GFDStudio.AnimationMatching.UI;
 namespace GFDStudio.AnimationMatching.Integration;
 
 /// <summary>
-/// UI-agnostic controller for the animation matching mode. The host bridges GFD Studio's
+/// Controller for the animation matching mode. The host bridges GFD Studio's
 /// currently retargeted animation/model representation into IAnimationClip.
 /// </summary>
 public sealed class AnimationMatchingModeController : IDisposable
 {
     private readonly IGfdAnimationMatchingHost _host;
-    private readonly IAnimationMatchingModeView _view;
+    private readonly AnimationMatchingModeControl _view;
     private readonly AnimationMatchOptions _options;
     private AnimationSearchDatabase? _database;
     private string? _databaseContextSignature;
@@ -28,7 +28,7 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     public AnimationMatchingModeController(
         IGfdAnimationMatchingHost host,
-        IAnimationMatchingModeView view,
+        AnimationMatchingModeControl view,
         AnimationMatchOptions? options = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
