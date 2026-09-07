@@ -25,6 +25,17 @@ public sealed class GfdTargetAnimationClip : IAnimationClip
         Model model,
         Animation animation,
         float framesPerSecond)
+        : this(id, displayName, model, animation, framesPerSecond, null)
+    {
+    }
+
+    internal GfdTargetAnimationClip(
+        string id,
+        string displayName,
+        Model model,
+        Animation animation,
+        float framesPerSecond,
+        SkeletonDefinition skeleton)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         DisplayName = displayName ?? string.Empty;
@@ -34,7 +45,9 @@ public sealed class GfdTargetAnimationClip : IAnimationClip
         if (_nodes.Length == 0)
             throw new InvalidOperationException("The target model has no nodes.");
 
-        _skeleton = CreateSkeleton(model, _nodes);
+        _skeleton = skeleton ?? CreateSkeleton(model, _nodes);
+        if (_skeleton.BoneCount != _nodes.Length)
+            throw new ArgumentException("The target skeleton does not match the target model nodes.", nameof(skeleton));
         FramesPerSecond = MathF.Max(1f, framesPerSecond);
     }
 
@@ -66,6 +79,9 @@ public sealed class GfdTargetAnimationClip : IAnimationClip
             destination[i] = new BoneTransform(translation, Quaternion.Normalize(rotation), scale);
         }
     }
+
+    internal static SkeletonDefinition CreateSkeleton(Model model)
+        => CreateSkeleton(model, model.Nodes.ToArray());
 
     private static SkeletonDefinition CreateSkeleton(Model model, Node[] nodes)
     {

@@ -119,8 +119,11 @@ namespace GFDStudio.GUI.Forms
             {
                 var selected = mCharacterAnimationListBox?.SelectedItem as CharacterAnimationEntry;
                 var displayName = selected?.DisplayName ?? "Animation";
+                var sourceId = selected == null
+                    ? "source:" + Guid.NewGuid().ToString("N")
+                    : GetCorrectedAnimationMatchClipId(selected);
                 mAnimationMatchCurrentSource = new GfdAnimationClip(
-                    "source:" + Guid.NewGuid().ToString("N"),
+                    sourceId,
                     displayName,
                     modelPack.Model,
                     () => animation,

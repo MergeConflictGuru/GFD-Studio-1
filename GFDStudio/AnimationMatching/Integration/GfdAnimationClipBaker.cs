@@ -174,17 +174,29 @@ public static class GfdAnimationClipBaker
         if (targetModel == null)
             throw new ArgumentNullException(nameof(targetModel));
 
+        var targetSkeleton = GfdTargetAnimationClip.CreateSkeleton(targetModel);
+        return CreateTargetPreviewClip(clip, targetModel, targetSkeleton);
+    }
+
+    private static IAnimationClip CreateTargetPreviewClip(
+        IAnimationClip clip,
+        Model targetModel,
+        SkeletonDefinition targetSkeleton)
+    {
+        if (clip == null)
+            throw new ArgumentNullException(nameof(clip));
+
         return clip switch
         {
-            GfdAnimationClip gfdClip => gfdClip.CreateTargetPreviewClip(targetModel),
+            GfdAnimationClip gfdClip => gfdClip.CreateTargetPreviewClip(targetModel, targetSkeleton),
             StitchedAnimation stitched => new StitchedAnimation(
-                CreateTargetPreviewClip(stitched.SourceClip, targetModel),
+                CreateTargetPreviewClip(stitched.SourceClip, targetModel, targetSkeleton),
                 stitched.TransitionFrame,
-                CreateTargetPreviewClip(stitched.CandidateClip, targetModel),
+                CreateTargetPreviewClip(stitched.CandidateClip, targetModel, targetSkeleton),
                 stitched.CandidateStartFrame,
                 stitched.BlendSeconds),
             TailAnimation tail => new TailAnimation(
-                CreateTargetPreviewClip(tail.CandidateClip, targetModel),
+                CreateTargetPreviewClip(tail.CandidateClip, targetModel, targetSkeleton),
                 tail.StartFrame),
             _ => clip
         };
