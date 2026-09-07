@@ -48,6 +48,7 @@ namespace GFDStudio.GUI.Forms
             public CharacterAnimationListKind Kind { get; init; }
             public int Index { get; init; }
             public string DisplayName { get; init; }
+            public string DefinitionHash { get; init; }
             public IReadOnlyCollection<string> BodyTargetNames { get; init; }
             public bool IsAutoLoaded { get; set; }
             public override string ToString() => IsAutoLoaded
@@ -1172,6 +1173,7 @@ namespace GFDStudio.GUI.Forms
                                     Kind = (CharacterAnimationListKind)kindValue,
                                     Index = index,
                                     DisplayName = displayName,
+                                    DefinitionHash = definitionHash,
                                     BodyTargetNames = bodyTargetNames
                                 },
                                 DisplayNameSuffix = displayNameSuffix,
@@ -1374,6 +1376,7 @@ namespace GFDStudio.GUI.Forms
                 Kind = item.Entry.Kind,
                 Index = item.Entry.Index,
                 DisplayName = displayName,
+                DefinitionHash = item.DefinitionHash ?? item.Entry.DefinitionHash,
                 BodyTargetNames = item.Entry.BodyTargetNames,
                 IsAutoLoaded = false
             };
@@ -1458,6 +1461,7 @@ namespace GFDStudio.GUI.Forms
         {
             var relative = Path.GetRelativePath(root, gapPath);
             var stem = Path.ChangeExtension(relative, null);
+            var definitionHash = GetAnimationDefinitionHash(animation);
             output.Add(new CharacterAnimationScanItem
             {
                 Entry = new CharacterAnimationEntry
@@ -1466,10 +1470,11 @@ namespace GFDStudio.GUI.Forms
                     Kind = kind,
                     Index = index,
                     DisplayName = stem + displayNameSuffix,
+                    DefinitionHash = definitionHash,
                     BodyTargetNames = AnimationAnalysis.GetBodyTargetNames(animation)
                 },
                 DisplayNameSuffix = displayNameSuffix,
-                DefinitionHash = GetAnimationDefinitionHash(animation)
+                DefinitionHash = definitionHash
             });
         }
 

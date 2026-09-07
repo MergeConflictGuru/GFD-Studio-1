@@ -71,8 +71,9 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
 
                     // Evaluating a raw GAP uses TargetName, but fixing IDs here also makes the same
                     // source clip safe to pass through the preview/export baker later.
-                    _animation.FixTargetIds(SourceModel);
-                    _poseSampler = new AnimationPoseSampler(SourceModel, _animation);
+                    var context = EnsureModelContext();
+                    _animation.FixTargetIds(context.model);
+                    _poseSampler = new AnimationPoseSampler(context.model, _animation, context.canonicalNodes);
                 }
                 return _animation;
             }
@@ -141,14 +142,13 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             }
 
             var time = clamped / FramesPerSecond;
-            var transforms = poseSampler.Evaluate(context.canonicalNodes, time);
+            Span<Matrix4x4> transforms = stackalloc Matrix4x4[CanonicalSkeleton.JointCount];
+            poseSampler.Evaluate(transforms, time);
             var sampled = new BoneTransform[CanonicalSkeleton.JointCount];
             for (var i = 0; i < context.canonicalNodes.Length; i++)
             {
                 var node = context.canonicalNodes[i];
-                var matrix = transforms.TryGetValue(node, out var evaluated)
-                    ? evaluated
-                    : node.WorldTransform;
+                var matrix = transforms[i];
                 if (!Matrix4x4.Decompose(matrix, out var scale, out var rotation, out var translation))
                 {
                     scale = Vector3.One;
