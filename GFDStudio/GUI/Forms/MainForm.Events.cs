@@ -791,16 +791,6 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
-        private void HandleAnimationPreviousButtonClick( object sender, EventArgs e )
-        {
-            ModelViewControl.Instance.StepAnimation( -1 );
-        }
-
-        private void HandleAnimationNextButtonClick( object sender, EventArgs e )
-        {
-            ModelViewControl.Instance.StepAnimation( 1 );
-        }
-
         private void HandleTrackbarValueChanged( object sender, EventArgs e )
         {
             if ( !mIgnoreNextTrackBarChange )
