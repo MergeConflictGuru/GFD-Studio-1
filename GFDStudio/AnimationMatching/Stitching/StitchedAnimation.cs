@@ -51,9 +51,11 @@ public sealed class StitchedAnimation : IAnimationClip
                 candidate,
                 _candidateFrame);
             // The stitched output does not emit the matched candidate frame. Its first candidate
-            // sample is the following frame, so align that actual handoff sample to the source's
-            // corresponding continuation frame. This prevents a one-frame root jump at the cut.
-            var sourceHandoffFrame = Math.Min(_sourceFrame + 1, source.FrameCount - 1);
+            // sample is the following frame, so align that actual handoff sample to the last
+            // source frame that is actually emitted. A source continuation frame is not part of
+            // this clip when the cut is inside the source animation; using it would introduce a
+            // one-frame displacement at the visible boundary.
+            var sourceHandoffFrame = _sourceFrame;
             var candidateHandoffFrame = Math.Min(_candidateFrame + 1, candidate.FrameCount - 1);
             (_yawAlignment, _translationAlignment) = CalculateAlignment(
                 source,
