@@ -107,6 +107,9 @@ public sealed class AnimationMatchingModeController : IDisposable
             string.Equals(_databaseContextSignature, contextSignature, StringComparison.Ordinal))
             return;
 
+        // Do not synchronously dispose an older mapped database here: a just-cancelled search task
+        // may still be unwinding on another thread. The mapping is opened FileShare.Delete and has a
+        // finalizer, so an atomic cache replacement is safe and the old view can die with its reader.
         _database = null;
         _databaseContextSignature = null;
 
@@ -146,14 +149,31 @@ public sealed class AnimationMatchingModeController : IDisposable
             {
                 try
                 {
-                    _view.SetStatus("Saving animation match index…");
+                    var builtDatabase = _database;
                     var cacheSignature = contextSignature ?? writeCacheHost.AnimationMatchingCorpusSignature;
+                    _view.SetStatus("Saving memory-mapped animation match index…");
                     await Task.Run(() => AnimationIndexCache.Save(
                         writeCacheHost.AnimationMatchingCachePath,
-                        _database,
+                        builtDatabase,
                         cacheSignature), _work.Token);
+
+                    // Search from the same representation future launches use. This also lets the
+                    // huge temporary FP32 build arrays become collectible immediately after saving.
+                    _view.SetStatus("Opening memory-mapped animation match index…");
+                    var cacheProgress = new Progress<string>(message => _view.SetStatus(message));
+                    var mappedDatabase = await Task.Run(() => AnimationIndexCache.TryLoad(
+                        writeCacheHost.AnimationMatchingCachePath,
+                        corpus,
+                        _options,
+                        cacheSignature,
+                        cacheProgress), _work.Token);
+                    if (mappedDatabase is not null)
+                        _database = mappedDatabase;
                 }
-                catch { /* cache failure must never make matching fail */ }
+                catch
+                {
+                    // Cache failure must never make matching fail; keep the freshly built DB.
+                }
             }
             _view.SetStatus($"Indexed {_database.SampleCount:N0} poses from {corpus.Clips.Count:N0} animations");
         }
