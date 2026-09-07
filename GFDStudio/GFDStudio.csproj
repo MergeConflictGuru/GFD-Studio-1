@@ -118,7 +118,7 @@
     <None Update="Presets\Metaphor\Metaphor_Field.yml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="Presets\Metaphor\Metaphor_Character_Lambert.yml">
+    <None Update="Presets\Metaphor\Metaphor_Lambert.yml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Presets\Metaphor\Metaphor_Water.yml">
