@@ -184,7 +184,7 @@ public static class AnimationIndexCache
                     var header = ReadFlatHeader(reader);
                     if (!ValidateFlatLayout(header, stream.Length))
                     {
-                        progress?.Report("Cached animation index layout is invalid; rebuilding…");
+                        progress?.Report("Cached animation index layout is invalid; click Reindex to rebuild.");
                         return null;
                     }
                     if (!ValidateMetadata(reader, header, corpus, options, corpusSignature, progress)) return null;
@@ -457,25 +457,27 @@ public static class AnimationIndexCache
     {
         if (header.ClipCount != corpus.Clips.Count)
         {
-            progress?.Report($"Cached animation index clip count differs ({header.ClipCount:N0} vs {corpus.Clips.Count:N0}); rebuilding…");
+            progress?.Report($"Cached animation index clip count differs ({header.ClipCount:N0} vs {corpus.Clips.Count:N0}); click Reindex to rebuild.");
             return false;
         }
         reader.BaseStream.Position = header.MetadataOffset;
         var metadataEnd = checked(header.MetadataOffset + header.MetadataLength);
 
         var cachedSignature = reader.ReadString();
-        if (!string.Equals(cachedSignature, corpusSignature ?? string.Empty, StringComparison.Ordinal))
+        if (!string.Equals(cachedSignature, corpusSignature ?? string.Empty, StringComparison.Ordinal) &&
+            !IsLegacyScanGenerationCompatible(cachedSignature, corpusSignature))
         {
             progress?.Report(
                 $"Cached animation index corpus signature differs " +
-                $"(saved={GetSignatureToken(cachedSignature)}, current={GetSignatureToken(corpusSignature)}); rebuilding…");
+                $"(saved={GetSignatureToken(cachedSignature)}, current={GetSignatureToken(corpusSignature)}); " +
+                "click Reindex to rebuild.");
             return false;
         }
 
         var cachedFingerprint = reader.ReadString();
         if (!string.Equals(cachedFingerprint, options.GetIndexFingerprint(), StringComparison.Ordinal))
         {
-            progress?.Report("Cached animation index feature fingerprint differs; rebuilding…");
+            progress?.Report("Cached animation index feature fingerprint differs; click Reindex to rebuild.");
             return false;
         }
 
@@ -483,12 +485,25 @@ public static class AnimationIndexCache
         {
             if (!string.Equals(reader.ReadString(), corpus.Clips[i].Id, StringComparison.Ordinal))
             {
-                progress?.Report($"Cached animation index clip order differs at {i:N0}; rebuilding…");
+                progress?.Report($"Cached animation index clip order differs at {i:N0}; click Reindex to rebuild.");
                 return false;
             }
         }
 
         return reader.BaseStream.Position <= metadataEnd;
+    }
+
+    private static bool IsLegacyScanGenerationCompatible(string cachedSignature, string currentSignature)
+    {
+        if (string.IsNullOrEmpty(cachedSignature) || string.IsNullOrEmpty(currentSignature))
+            return false;
+
+        var cachedParts = cachedSignature.Split('|');
+        var currentParts = currentSignature.Split('|');
+        return cachedParts.Length == currentParts.Length + 1 &&
+               string.Equals(cachedParts[0], currentParts[0], StringComparison.Ordinal) &&
+               string.Equals(cachedParts[1], currentParts[1], StringComparison.Ordinal) &&
+               string.Equals(cachedParts[2], currentParts[2], StringComparison.Ordinal);
     }
 
     private static string GetSignatureToken(string signature)

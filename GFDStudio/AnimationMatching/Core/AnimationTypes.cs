@@ -49,7 +49,7 @@ public enum CanonicalJoint
 /// </summary>
 public static class CanonicalSkeleton
 {
-    public const int Version = 1;
+    public const int Version = 2;
     public const int JointCount = 18;
 
     public static readonly string[] Names =

@@ -237,8 +237,7 @@ namespace GFDStudio.GUI.Forms
             return string.Join("|",
                 "animatch-global-v4",
                 NormalizeAnimationMatchPath(mCharacterBrowserRoot),
-                GetAnimationMatchingCorpusListSignature(),
-                mCharacterBrowserScanGeneration);
+                GetAnimationMatchingCorpusListSignature());
         }
 
         private string GetAnimationMatchingCorpusListSignature()
