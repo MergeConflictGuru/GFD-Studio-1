@@ -149,6 +149,16 @@ public interface IAnimationClip
 }
 
 /// <summary>
+/// Optional identity-preserving wrapper around a clip. Matching may wrap a source to give it a
+/// stable corpus identity, but preview/export adapters must still convert the wrapped clip to the
+/// target model rather than treating the wrapper as an already-converted animation.
+/// </summary>
+public interface IAnimationClipWrapper : IAnimationClip
+{
+    IAnimationClip InnerClip { get; }
+}
+
+/// <summary>
 /// Optional lifecycle hook for clips backed by large decoded resources. Index construction calls
 /// this after metadata inspection and after each clip's sampling batch so adapters can discard
 /// decoded GAP/retargeted animation data while keeping cheap metadata resident.
