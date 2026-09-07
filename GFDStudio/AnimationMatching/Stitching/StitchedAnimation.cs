@@ -8,7 +8,7 @@ namespace GFDStudio.AnimationMatching.Stitching;
 
 /// <summary>
 /// Runtime stitched clip for preview/export. When alignment is enabled, candidate root motion is
-/// rigidly translated and yaw-aligned so its match frame lands at the source transition transform.
+/// rigidly translated and yaw-aligned so its first emitted frame lands on the source continuation.
 /// Optional crossfade blends global transforms, then the candidate owns the rest of the clip.
 /// </summary>
 public sealed class StitchedAnimation : IAnimationClip
@@ -20,6 +20,8 @@ public sealed class StitchedAnimation : IAnimationClip
     private readonly int _blendFrames;
     private readonly Quaternion _yawAlignment;
     private readonly Vector3 _translationAlignment;
+    private readonly Quaternion _matchYawAlignment;
+    private readonly Vector3 _matchTranslationAlignment;
 
     public StitchedAnimation(
         IAnimationClip source,
@@ -43,19 +45,28 @@ public sealed class StitchedAnimation : IAnimationClip
         AlignPositionAndYaw = alignPositionAndYaw;
         if (alignPositionAndYaw)
         {
-            var sourcePose = new BoneTransform[Skeleton.BoneCount];
-            var candidatePose = new BoneTransform[Skeleton.BoneCount];
-            source.SampleGlobalPose(_sourceFrame, sourcePose);
-            candidate.SampleGlobalPose(_candidateFrame, candidatePose);
-            var sourceRoot = sourcePose[Skeleton.RootBoneIndex];
-            var candidateRoot = candidatePose[Skeleton.RootBoneIndex];
-            _yawAlignment = Quaternion.Normalize(PoseFeatureExtractor.ExtractYaw(sourceRoot.Rotation) * Quaternion.Inverse(PoseFeatureExtractor.ExtractYaw(candidateRoot.Rotation)));
-            _translationAlignment = sourceRoot.Position - Vector3.Transform(candidateRoot.Position, _yawAlignment);
+            (_matchYawAlignment, _matchTranslationAlignment) = CalculateAlignment(
+                source,
+                _sourceFrame,
+                candidate,
+                _candidateFrame);
+            // The stitched output does not emit the matched candidate frame. Its first candidate
+            // sample is the following frame, so align that actual handoff sample to the source's
+            // corresponding continuation frame. This prevents a one-frame root jump at the cut.
+            var sourceHandoffFrame = Math.Min(_sourceFrame + 1, source.FrameCount - 1);
+            var candidateHandoffFrame = Math.Min(_candidateFrame + 1, candidate.FrameCount - 1);
+            (_yawAlignment, _translationAlignment) = CalculateAlignment(
+                source,
+                sourceHandoffFrame,
+                candidate,
+                candidateHandoffFrame);
         }
         else
         {
             _yawAlignment = Quaternion.Identity;
             _translationAlignment = Vector3.Zero;
+            _matchYawAlignment = Quaternion.Identity;
+            _matchTranslationAlignment = Vector3.Zero;
         }
     }
 
@@ -75,7 +86,8 @@ public sealed class StitchedAnimation : IAnimationClip
     /// <summary>
     /// Creates the source prefix and aligned candidate suffix used by an external blend tool.
     /// The source ends at the selected transition frame; the candidate begins at its matched
-    /// frame. The candidate receives the exact same alignment as the stitched preview.
+    /// frame and receives match-point alignment. The preview uses a handoff alignment for the
+    /// first emitted candidate continuation frame so the visible cut stays continuous.
     /// </summary>
     public (IAnimationClip Source, IAnimationClip Candidate) CreateExportParts()
     {
@@ -93,9 +105,28 @@ public sealed class StitchedAnimation : IAnimationClip
                 _candidate,
                 _candidateFrame,
                 _candidate.FrameCount - _candidateFrame,
-                _yawAlignment,
-                _translationAlignment,
+                _matchYawAlignment,
+                _matchTranslationAlignment,
                 candidateName));
+    }
+
+    private static (Quaternion yaw, Vector3 translation) CalculateAlignment(
+        IAnimationClip source,
+        int sourceFrame,
+        IAnimationClip candidate,
+        int candidateFrame)
+    {
+        var sourcePose = new BoneTransform[source.Skeleton.BoneCount];
+        var candidatePose = new BoneTransform[candidate.Skeleton.BoneCount];
+        source.SampleGlobalPose(sourceFrame, sourcePose);
+        candidate.SampleGlobalPose(candidateFrame, candidatePose);
+        var sourceRoot = sourcePose[source.Skeleton.RootBoneIndex];
+        var candidateRoot = candidatePose[candidate.Skeleton.RootBoneIndex];
+        var yaw = Quaternion.Normalize(
+            PoseFeatureExtractor.ExtractYaw(sourceRoot.Rotation) *
+            Quaternion.Inverse(PoseFeatureExtractor.ExtractYaw(candidateRoot.Rotation)));
+        var translation = sourceRoot.Position - Vector3.Transform(candidateRoot.Position, yaw);
+        return (yaw, translation);
     }
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
