@@ -1,6 +1,10 @@
+using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Linq;
 using System.Numerics;
+using GFDLibrary.Animations;
 using GFDLibrary.Models;
 
 static class PoseRender
@@ -23,8 +27,7 @@ static class PoseRender
     private static Vector3 GetFocusPosition(Model model, Dictionary<Node, Matrix4x4> pose)
     {
         var nodes = model.Nodes.ToArray();
-        var focusNode = nodes.FirstOrDefault(n => n.Name == "Bip01") ??
-                        nodes.FirstOrDefault(n => n.Name == "root") ??
+        var focusNode = AnimationSkeletonRoles.ResolveMotionRoot(model) ??
                         nodes.FirstOrDefault(n => n.Name == "head" || n.Name == "neck") ??
                         nodes[0];
         return pose[focusNode].Translation;

@@ -226,7 +226,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         }
 
         var canonical = new Node[CanonicalSkeleton.JointCount];
-        canonical[(int)CanonicalJoint.Root] = Pick("motionroot", "root", "rootnode");
+        canonical[(int)CanonicalJoint.Root] = AnimationSkeletonRoles.ResolveMotionRoot(model);
         canonical[(int)CanonicalJoint.Pelvis] = Pick("hips");
         canonical[(int)CanonicalJoint.LowerSpine] = Pick("spine", "spine1", "spine2");
         canonical[(int)CanonicalJoint.UpperSpine] = Pick("spine2", "spine1", "spine");

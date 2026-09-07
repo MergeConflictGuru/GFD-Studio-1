@@ -16,6 +16,7 @@ namespace GFDLibrary.Animations
         private readonly Dictionary<string, Node> mTargetNodes;
         private readonly Dictionary<string, Node> mTargetNodesByRole;
         private readonly Dictionary<Node, int> mTargetNodeIds;
+        private readonly Node mTargetMotionRoot;
         private Node mSyntheticRootNode;
         internal Model SourceModel { get; }
         internal Model TargetModel { get; }
@@ -27,6 +28,7 @@ namespace GFDLibrary.Animations
             TargetModel = targetModel;
             mOriginalNodes = CreateNodeLookup( originalModel.Nodes );
             mTargetNodes = CreateNodeLookup( targetModel.Nodes );
+            mTargetMotionRoot = AnimationSkeletonRoles.ResolveMotionRoot( targetModel );
             UsesDifferentHumanoidHierarchy =
                 (mOriginalNodes.ContainsKey("Bip01 Pelvis") && mTargetNodes.ContainsKey("Hips")) ||
                 (mOriginalNodes.ContainsKey("Hips") && mTargetNodes.ContainsKey("Bip01 Pelvis"));
@@ -74,6 +76,8 @@ namespace GFDLibrary.Animations
             if ( string.IsNullOrEmpty( sourceName ) )
                 return false;
 
+            var sourceRole = AnimationSkeletonRoles.GetRole( sourceName );
+
             // The Dance motion root corresponds to Bip01, not P5's axis
             // conversion node also named root. Their extra ancestors are
             // evaluated by the pose baker, never assigned duplicate controllers.
@@ -81,20 +85,26 @@ namespace GFDLibrary.Animations
             {
                 if (mOriginalNodes.ContainsKey("Bip01 Pelvis"))
                 {
-                    if (sourceName == "root" || sourceName == "rot" || sourceName == "RootNode")
+                    if (sourceRole == AnimationSkeletonRoles.RootRole ||
+                        sourceRole == AnimationSkeletonRoles.FileRootRole ||
+                        sourceName.Equals("rot", StringComparison.OrdinalIgnoreCase))
                         return false;
-                    if (sourceName == "Bip01")
+                    if (sourceRole == AnimationSkeletonRoles.MotionRootRole)
                     {
-                        sourceNode = mOriginalNodes[sourceName];
-                        return mTargetNodes.TryGetValue("root", out targetNode);
+                        if (!mOriginalNodes.TryGetValue(sourceName, out sourceNode))
+                            return false;
+                        targetNode = mTargetMotionRoot;
+                        return targetNode != null;
                     }
                 }
-                else if (sourceName == "root")
+                else if (sourceRole == AnimationSkeletonRoles.RootRole)
                 {
-                    sourceNode = mOriginalNodes[sourceName];
-                    return mTargetNodes.TryGetValue("Bip01", out targetNode);
+                    if (!mOriginalNodes.TryGetValue(sourceName, out sourceNode))
+                        return false;
+                    targetNode = mTargetMotionRoot;
+                    return targetNode != null;
                 }
-                else if (sourceName == "RootNode")
+                else if (sourceRole == AnimationSkeletonRoles.FileRootRole)
                     return false;
             }
 
@@ -103,7 +113,7 @@ namespace GFDLibrary.Animations
                 // Older Persona 5 models do not contain the file-level RootNode,
                 // although their animation packs can still contain a controller
                 // for it. Its bind transform is the identity transform.
-                if ( string.Equals( sourceName, "RootNode", StringComparison.OrdinalIgnoreCase ) )
+                if ( sourceRole == AnimationSkeletonRoles.FileRootRole )
                 {
                     mSyntheticRootNode ??= new Node( "RootNode" );
                     sourceNode = mSyntheticRootNode;
@@ -151,9 +161,9 @@ namespace GFDLibrary.Animations
 
             var normalized = name.Trim();
             if ( normalized.Equals( "RootNode", StringComparison.OrdinalIgnoreCase ) )
-                return "rootnode";
+                return AnimationSkeletonRoles.FileRootRole;
             if ( normalized.Equals( "root", StringComparison.OrdinalIgnoreCase ) )
-                return "root";
+                return AnimationSkeletonRoles.RootRole;
             if ( normalized.Equals( "rot", StringComparison.OrdinalIgnoreCase ) )
                 return null;
 
@@ -166,7 +176,7 @@ namespace GFDLibrary.Animations
                 sourceName = sourceName.Substring( 6 );
 
             if ( sourceName.Equals( "Bip01", StringComparison.OrdinalIgnoreCase ) )
-                return "motionroot";
+                return AnimationSkeletonRoles.MotionRootRole;
             if ( sourceName.Equals( "Pelvis", StringComparison.OrdinalIgnoreCase ) ||
                  sourceName.Equals( "Hips", StringComparison.OrdinalIgnoreCase ) )
                 return "hips";

@@ -4,7 +4,6 @@ using System.IO;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
-using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -51,10 +50,6 @@ internal static class Program
         "hair", "skirt", "coat", "cloth", "tail", "weapon", "prop", "bike", "wheel", "vehicle",
         "accessory", "ribbon", "cape", "scarf", "bag", "umbrella", "guitar", "microphone"
     };
-
-    private static readonly MethodInfo SkeletonRoleResolver = typeof(Resource).Assembly
-        .GetType("GFDLibrary.Animations.AnimationRetargetMap", throwOnError: true)!
-        .GetMethod("GetSkeletonRole", BindingFlags.Static | BindingFlags.NonPublic)!;
 
     private static int Main(string[] args)
     {
@@ -605,7 +600,7 @@ internal static class Program
     private static float Percent(int count, int total) => total == 0 ? 0 : 100f * count / total;
 
     private static string? GetSkeletonRole(string name)
-        => (string?)SkeletonRoleResolver.Invoke(null, new object?[] { name });
+        => AnimationSkeletonRoles.GetRole(name);
 
     private static float[] ToArray(Vector3 value) => new[] { value.X, value.Y, value.Z };
     private static float[] ToArray(Quaternion value) => new[] { value.X, value.Y, value.Z, value.W };

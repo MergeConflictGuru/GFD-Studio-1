@@ -20,8 +20,7 @@ namespace GFDLibrary.Animations
             if (mapping.Count < 4)
                 throw new InvalidOperationException("Not enough corresponding humanoid bones to retarget this animation.");
 
-            var motionRoot = targets.FirstOrDefault(n => mapping.ContainsKey(n) &&
-                (n.Name == "root" || n.Name == "Bip01"));
+            var motionRoot = AnimationSkeletonRoles.ResolveMotionRoot(targets.Where(mapping.ContainsKey));
             var heightRatio = 1f;
             if (motionRoot != null)
             {
