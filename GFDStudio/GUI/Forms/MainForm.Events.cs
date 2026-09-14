@@ -850,6 +850,7 @@ namespace GFDStudio.GUI.Forms
         {
             settings.UseLocalBindSpaceRetargeting = useLocalBindSpaceRetargetingToolStripMenuItem.Checked;
             settings.SaveJson( settings );
+            RefreshCurrentCharacterBrowserAnimation();
         }
 
         private void handleSaveReplacedTexturesExternally( object sender, EventArgs e )
