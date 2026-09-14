@@ -15,6 +15,7 @@ namespace GFDStudio
         public bool RetainTextureNames { get; set; } = true;
         public bool RetainMaterialColors { get; set; } = false;
         public bool SaveReplacedTexturesExternally { get; set; } = true;
+        public bool UseLocalBindSpaceRetargeting { get; set; } = true;
 
         public void SaveJson( Config settings )
         {

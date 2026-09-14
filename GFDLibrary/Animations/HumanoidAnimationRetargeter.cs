@@ -8,7 +8,7 @@ namespace GFDLibrary.Animations
 {
     internal static class HumanoidAnimationRetargeter
     {
-        internal static void Bake(Animation animation, AnimationRetargetMap map)
+        internal static void Bake(Animation animation, AnimationRetargetMap map, bool useLocalBindSpace)
         {
             var sourceBind = AnimationPoseEvaluator.Evaluate(map.SourceModel, null, 0);
             var targetBind = AnimationPoseEvaluator.Evaluate(map.TargetModel, null, 0);
@@ -66,7 +66,7 @@ namespace GFDLibrary.Animations
                     if (mapping.TryGetValue(target, out var source))
                     {
                         Quaternion localRotation;
-                        if (CanTransferLocalRotation(source, target, reverseMapping))
+                        if (useLocalBindSpace && CanTransferLocalRotation(source, target, reverseMapping))
                         {
                             // A contiguous semantic chain should be retargeted as
                             // a local animation delta. Reconstructing every bone

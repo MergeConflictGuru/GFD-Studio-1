@@ -65,20 +65,20 @@ namespace GFDLibrary.Animations
             Field0C.FixTargetIds( model );
         }
 
-        public void Retarget( Model originalModel, Model newModel, bool fixArms )
+        public void Retarget( Model originalModel, Model newModel, bool fixArms, bool useLocalBindSpace = true )
         {
-            Field00.Retarget( originalModel, newModel, fixArms );
-            Field04.Retarget( originalModel, newModel, fixArms );
-            Field08.Retarget( originalModel, newModel, fixArms );
-            Field0C.Retarget( originalModel, newModel, fixArms );
+            Field00.Retarget( originalModel, newModel, fixArms, useLocalBindSpace );
+            Field04.Retarget( originalModel, newModel, fixArms, useLocalBindSpace );
+            Field08.Retarget( originalModel, newModel, fixArms, useLocalBindSpace );
+            Field0C.Retarget( originalModel, newModel, fixArms, useLocalBindSpace );
         }
 
-        internal void Retarget( AnimationRetargetMap retargetMap, bool fixArms )
+        internal void Retarget( AnimationRetargetMap retargetMap, bool fixArms, bool useLocalBindSpace )
         {
-            Field00.Retarget( retargetMap, fixArms );
-            Field04.Retarget( retargetMap, fixArms );
-            Field08.Retarget( retargetMap, fixArms );
-            Field0C.Retarget( retargetMap, fixArms );
+            Field00.Retarget( retargetMap, fixArms, useLocalBindSpace );
+            Field04.Retarget( retargetMap, fixArms, useLocalBindSpace );
+            Field08.Retarget( retargetMap, fixArms, useLocalBindSpace );
+            Field0C.Retarget( retargetMap, fixArms, useLocalBindSpace );
         }
 
         internal void SetVersion( uint version )

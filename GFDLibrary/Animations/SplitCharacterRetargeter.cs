@@ -27,7 +27,8 @@ namespace GFDLibrary.Animations
         /// and unmatched hair/cloth dynamics are not interchangeable across rigs.
         /// </summary>
         public static ModelPack CreatePreview(Model source, AnimationPack animations,
-            ModelPack body, ModelPack face, ModelPack hair, Animation nativeBase)
+            ModelPack body, ModelPack face, ModelPack hair, Animation nativeBase,
+            bool useLocalBindSpace = true)
         {
             var combined = Copy(body);
             combined.Textures ??= new TextureDictionary(combined.Version);
@@ -46,7 +47,7 @@ namespace GFDLibrary.Animations
                 combined.Model.MergeWith(part.Model);
             }
             combined.AnimationPack = Copy(animations);
-            combined.AnimationPack.Retarget(source, combined.Model, false);
+            combined.AnimationPack.Retarget(source, combined.Model, false, useLocalBindSpace);
             DancingKneeCorrection.Apply(combined.AnimationPack, combined.Model, nativeBase);
             return combined;
         }

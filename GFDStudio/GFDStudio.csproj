@@ -26,6 +26,7 @@
     <ProjectReference Include="..\GFDLibrary.Conversion.FbxSdk\GFDLibrary.Conversion.FbxSdk.vcxproj" />
     <ProjectReference Include="..\GFDLibrary.Rendering.OpenGL\GFDLibrary.Rendering.OpenGL.csproj" />
     <ProjectReference Include="..\GFDLibrary\GFDLibrary.csproj" />
+    <ProjectReference Include="..\tools\RetargetProbe\RetargetProbe.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

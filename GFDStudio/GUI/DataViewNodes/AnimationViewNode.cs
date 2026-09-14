@@ -8,6 +8,7 @@ using GFDLibrary.Common;
 using GFDLibrary.Conversion;
 using GFDLibrary.Conversion.AssimpNet;
 using GFDStudio.FormatModules;
+using GFDStudio.GUI.Forms;
 using GFDStudio.GUI.TypeConverters;
 
 namespace GFDStudio.GUI.DataViewNodes
@@ -123,7 +124,7 @@ namespace GFDStudio.GUI.DataViewNodes
                 bool fixArms = MessageBox.Show( "Fix arms? If unsure, select No.", "Question", MessageBoxButtons.YesNo,
                                                 MessageBoxIcon.Question, MessageBoxDefaultButton.Button2 ) == DialogResult.Yes;
 
-                Data.Retarget( originalModel, newModel, fixArms );
+                Data.Retarget( originalModel, newModel, fixArms, MainForm.settings.UseLocalBindSpaceRetargeting );
             } );
         }
 

@@ -278,17 +278,17 @@ namespace GFDLibrary.Animations
                 Field1C.Field20.Version = version;
         }
 
-        public void Retarget( Model originalModel, Model newModel, bool fixArms )
+        public void Retarget( Model originalModel, Model newModel, bool fixArms, bool useLocalBindSpace = true )
         {
-            Retarget( AnimationRetargetMap.Create( originalModel, newModel ), fixArms );
+            Retarget( AnimationRetargetMap.Create( originalModel, newModel ), fixArms, useLocalBindSpace );
             SetVersion( newModel.Version );
         }
 
-        internal void Retarget( AnimationRetargetMap retargetMap, bool fixArms )
+        internal void Retarget( AnimationRetargetMap retargetMap, bool fixArms, bool useLocalBindSpace )
         {
             if (retargetMap.UsesDifferentHumanoidHierarchy)
             {
-                HumanoidAnimationRetargeter.Bake(this, retargetMap);
+                HumanoidAnimationRetargeter.Bake(this, retargetMap, useLocalBindSpace);
                 return;
             }
             foreach ( var controller in Controllers.ToList() )

@@ -6,6 +6,7 @@ using System.Threading;
 using GFDLibrary.Animations;
 using GFDLibrary.Models;
 using GFDStudio.AnimationMatching.Core;
+using GFDStudio.GUI.Forms;
 
 namespace GFDStudio.AnimationMatching.Integration;
 
@@ -117,7 +118,8 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         if (ReferenceEquals(sourceModel, targetModel))
             animation.FixTargetIds(targetModel);
         else
-            animation.Retarget(sourceModel, targetModel, false);
+            animation.Retarget(sourceModel, targetModel, false,
+                MainForm.settings.UseLocalBindSpaceRetargeting);
 
         return new GfdTargetAnimationClip(Id, DisplayName, targetModel, animation, FramesPerSecond, targetSkeleton);
     }
