@@ -55,8 +55,8 @@ namespace GFDLibrary.Animations
                 combined.Model.MergeWith(part.Model);
             }
             combined.AnimationPack = Copy(animations);
-            combined.AnimationPack.Retarget(source, combined.Model, false, useLocalBindSpace);
-            DancingKneeCorrection.Apply(combined.AnimationPack, combined.Model, nativeBase);
+            P5dAnimationRetargeter.Retarget(
+                combined.AnimationPack, source, combined.Model, nativeBase, useLocalBindSpace);
             return combined;
         }
 
