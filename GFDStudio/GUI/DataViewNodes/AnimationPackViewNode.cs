@@ -58,14 +58,24 @@ namespace GFDStudio.GUI.DataViewNodes
                 if ( originalScene == null )
                     return;
 
-                var newScene = ModuleImportUtilities.SelectImportFile<ModelPack>( "Select the new model file." )?.Model;
+                var newPack = ModuleImportUtilities.SelectImportFile<ModelPack>(
+                    "Select the new model file.", out var newModelPath);
+                var newScene = newPack?.Model;
                 if ( newScene == null )
                     return;    
 
                 bool fixArms = MessageBox.Show( "Fix arms? If unsure, select No.", "Question", MessageBoxButtons.YesNo,
                                                 MessageBoxIcon.Question, MessageBoxDefaultButton.Button2 ) == DialogResult.Yes;
 
-                Data.Retarget( originalScene, newScene, fixArms, MainForm.settings.UseLocalBindSpaceRetargeting );
+                var sourceAnimationPath = MainForm.Instance?.LastOpenedFilePath;
+                if (!string.Equals(Path.GetExtension(sourceAnimationPath), ".GAP",
+                    StringComparison.OrdinalIgnoreCase))
+                    sourceAnimationPath = null;
+                var referenceRoot = Path.GetDirectoryName(newModelPath);
+                P5dAnimationRetargeter.Retarget(
+                    Data, originalScene, newScene, sourceAnimationPath,
+                    newModelPath, referenceRoot,
+                    MainForm.settings.UseLocalBindSpaceRetargeting, fixArms);
             } );
             RegisterCustomHandler("Tools", "Convert to P5", () =>
             {

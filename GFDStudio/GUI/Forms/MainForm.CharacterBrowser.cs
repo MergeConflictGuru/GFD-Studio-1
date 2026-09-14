@@ -2603,9 +2603,14 @@ namespace GFDStudio.GUI.Forms
                     }
                     else
                     {
+                        var targetModelPaths = GetSelectedCharacterModelParts()
+                            .Select(part => part.Path)
+                            .ToArray();
                         var p5dRetarget = P5dAnimationRetargeter.Retarget(
                             animation, sourceModelPack.Model, targetModelPack.Model,
+                            entry.PackPath, entry.Index,
                             mCharacterBrowserCurrentModelPath,
+                            targetModelPaths,
                             mCharacterBrowserRoot,
                             settings.UseLocalBindSpaceRetargeting);
                         var mode = settings.UseLocalBindSpaceRetargeting
@@ -2614,9 +2619,12 @@ namespace GFDStudio.GUI.Forms
                         var kneeNote = p5dRetarget.KneeCorrectionApplied
                             ? ", P5D knee helpers"
                             : string.Empty;
+                        var destinationTrackNote = p5dRetarget.DestinationTracksApplied > 0
+                            ? $", destination-only tracks {p5dRetarget.DestinationTracksApplied}"
+                            : string.Empty;
                         retargetNote = hasSplitComponents
-                            ? $"retargeted in preview ({mode}{kneeNote}) with selected face/hair tracks"
-                            : $"retargeted in preview ({mode}{kneeNote})";
+                            ? $"retargeted in preview ({mode}{kneeNote}{destinationTrackNote}) with selected face/hair tracks"
+                            : $"retargeted in preview ({mode}{kneeNote}{destinationTrackNote})";
                     }
                     break;
 
@@ -2819,7 +2827,7 @@ namespace GFDStudio.GUI.Forms
 
             var baseStem = Regex.Replace(
                 stem,
-                @"_(?:f|h\d+)$",
+                @"_(?:\d+|f|h\d+)$",
                 string.Empty,
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             return Path.Combine(directory, baseStem + ".GAP");
@@ -2890,7 +2898,7 @@ namespace GFDStudio.GUI.Forms
         {
             return Regex.IsMatch(
                 Path.GetFileNameWithoutExtension(path) ?? string.Empty,
-                @"^pc\d+_\d+_p(?:_(?:f|h\d+))?$",
+                @"^pc\d+_\d+_p(?:_(?:\d+|f|h\d+))?$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 

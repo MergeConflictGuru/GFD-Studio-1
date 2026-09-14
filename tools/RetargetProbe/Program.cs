@@ -18,6 +18,7 @@ var sourceOption = args.FirstOrDefault(a => a.StartsWith("--source=", StringComp
 var targetOption = args.FirstOrDefault(a => a.StartsWith("--target=", StringComparison.OrdinalIgnoreCase));
 var sourceModelOption = args.FirstOrDefault(a => a.StartsWith("--source-model=", StringComparison.OrdinalIgnoreCase));
 var targetModelOption = args.FirstOrDefault(a => a.StartsWith("--target-model=", StringComparison.OrdinalIgnoreCase));
+var targetAnimationOption = args.FirstOrDefault(a => a.StartsWith("--target-animation=", StringComparison.OrdinalIgnoreCase));
 var kneeReferenceOption = args.FirstOrDefault(a => a.StartsWith("--knee-reference=", StringComparison.OrdinalIgnoreCase));
 var referenceRootOption = args.FirstOrDefault(a => a.StartsWith("--reference-root=", StringComparison.OrdinalIgnoreCase));
 var p5rTarget = args.Contains("--p5r") || targetOption != null;
@@ -47,6 +48,25 @@ var targetModelPath = targetModelOption != null
     ? $@"M:\_P_backup\p5 modding\dataR\model\character\{targetCharacterId}\c{targetCharacterId}_107_00.GMD"
     : $@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\pc{danceId}_26.GMD";
 var target = Resource.Load<ModelPack>(targetModelPath);
+Console.SetOut(stdout);
+if (args.Contains("--skeleton-diff", StringComparer.OrdinalIgnoreCase))
+{
+    var sourceNames = source.Model.Nodes
+        .Select(node => node.Name)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var targetNames = target.Model.Nodes
+        .Select(node => node.Name)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    Console.WriteLine($"SOURCE model={sourceModelOption ?? "default"} nodes={source.Model.Nodes.Count()}");
+    Console.WriteLine($"TARGET model={targetModelPath} nodes={target.Model.Nodes.Count()}");
+    Console.WriteLine($"SOURCE_ONLY count={source.Model.Nodes.Count(node => !targetNames.Contains(node.Name))}");
+    foreach (var node in source.Model.Nodes.Where(node => !targetNames.Contains(node.Name)))
+        Console.WriteLine($"  {node.Name} <- {node.Parent?.Name ?? "<root>"}");
+    Console.WriteLine($"TARGET_ONLY count={target.Model.Nodes.Count(node => !sourceNames.Contains(node.Name))}");
+    foreach (var node in target.Model.Nodes.Where(node => !sourceNames.Contains(node.Name)))
+        Console.WriteLine($"  {node.Name} <- {node.Parent?.Name ?? "<root>"}");
+    return;
+}
 var hairId = args.Contains("--h26") ? "h26" : "h00";
 var nativeAnimationId = otherCharacter ? "001" : "018";
 var animationOption = args.FirstOrDefault(a => a.StartsWith("--animation=", StringComparison.OrdinalIgnoreCase));
@@ -59,6 +79,105 @@ var animationPath = animationOption != null
     : @"Q:\_coding\DaYoBuO\modssrc\dayobuo\repacked_0004_selected.GAP";
 var pack = Resource.Load<AnimationPack>(animationPath);
 Console.SetOut(stdout);
+var fbxExportOption = args.FirstOrDefault(a => a.StartsWith("--fbx-export=", StringComparison.OrdinalIgnoreCase));
+if (fbxExportOption != null)
+{
+    var ueOutputDirectory = Path.GetFullPath(fbxExportOption.Substring("--fbx-export=".Length));
+    Directory.CreateDirectory(ueOutputDirectory);
+    var clipOption = args.FirstOrDefault(a => a.StartsWith("--clip=", StringComparison.OrdinalIgnoreCase));
+    var clipIndex = clipOption == null ? 0 : int.Parse(clipOption.Substring("--clip=".Length));
+    if (clipIndex < 0 || clipIndex >= pack.Animations.Count)
+        throw new ArgumentOutOfRangeException(nameof(clipIndex), $"Animation clip {clipIndex} is not present in {animationPath}.");
+
+    var fbxAssemblyPath = Path.GetFullPath(Path.Combine("GFDStudio-binary", "GFDLibrary.Conversion.FbxSdk.dll"));
+    if (!File.Exists(fbxAssemblyPath))
+        throw new FileNotFoundException("The FBX SDK conversion assembly is required for UE export.", fbxAssemblyPath);
+    var fbxAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(fbxAssemblyPath);
+    var modelExporterType = fbxAssembly.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkModelPackExporter", true)!;
+    var configType = fbxAssembly.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkModelPackExporterConfig", true)!;
+    var animationExporterType = fbxAssembly.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkAnimationExporter", true)!;
+    var exportModelMethod = modelExporterType.GetMethod(
+        "ExportFile", new[] { typeof(ModelPack), typeof(string), configType })
+        ?? throw new MissingMethodException(modelExporterType.FullName, "ExportFile");
+    var appendAnimationMethod = animationExporterType.GetMethod(
+        "AppendFile", new[] { typeof(Model), typeof(AnimationPack), typeof(string) })
+        ?? throw new MissingMethodException(animationExporterType.FullName, "AppendFile");
+
+    var sourceModelPack = source;
+    var targetModelPack = target;
+    var sourceAnimationPack = new AnimationPack(pack.Version)
+    {
+        Flags = pack.Flags,
+        Animations = new List<Animation> { pack.Animations[clipIndex] },
+        BlendAnimations = new List<Animation>()
+    };
+    var config = Activator.CreateInstance(configType)!;
+    var sourceFbxPath = Path.Combine(ueOutputDirectory, "morgana_source.fbx");
+    var targetFbxPath = Path.Combine(ueOutputDirectory, "makoto_target.fbx");
+    var gfdDirectAnimationPack = new AnimationPack(sourceAnimationPack.Version)
+    {
+        Flags = sourceAnimationPack.Flags,
+        Animations = new List<Animation> { pack.Animations[clipIndex] },
+        BlendAnimations = new List<Animation>()
+    };
+    gfdDirectAnimationPack.Retarget(source.Model, target.Model, false, useLocalBindSpace);
+    var gfdDirectFbxPath = Path.Combine(ueOutputDirectory, "makoto_gfd_direct.fbx");
+
+    exportModelMethod.Invoke(null, new object[] { sourceModelPack, sourceFbxPath, config });
+    appendAnimationMethod.Invoke(null, new object[] { source.Model, sourceAnimationPack, sourceFbxPath });
+    exportModelMethod.Invoke(null, new object[] { targetModelPack, targetFbxPath, config });
+    exportModelMethod.Invoke(null, new object[] { targetModelPack, gfdDirectFbxPath, config });
+    appendAnimationMethod.Invoke(null, new object[] { target.Model, gfdDirectAnimationPack, gfdDirectFbxPath });
+
+    Console.WriteLine($"UE_EXPORT source={sourceFbxPath}");
+    Console.WriteLine($"UE_EXPORT target={targetFbxPath}");
+    Console.WriteLine($"UE_EXPORT gfdDirect={gfdDirectFbxPath}");
+    Console.WriteLine($"UE_EXPORT clip={clipIndex} duration={pack.Animations[clipIndex].Duration}");
+    return;
+}
+if (targetAnimationOption != null)
+{
+    var targetAnimationPath = targetAnimationOption.Substring("--target-animation=".Length);
+    var targetPack = Resource.Load<AnimationPack>(targetAnimationPath);
+    var sourceModelNames = source.Model.Nodes
+        .Select(node => node.Name)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var targetOnlyModelNames = target.Model.Nodes
+        .Select(node => node.Name)
+        .Except(sourceModelNames, StringComparer.OrdinalIgnoreCase)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var compact = args.Contains("--compact", StringComparer.OrdinalIgnoreCase);
+    Console.WriteLine($"SOURCE_ANIMATION={animationPath} clips={pack.Animations.Count}");
+    Console.WriteLine($"TARGET_ANIMATION={targetAnimationPath} clips={targetPack.Animations.Count}");
+    Console.WriteLine($"MODEL_TARGET_ONLY count={targetOnlyModelNames.Count} names=" +
+        (compact ? "<suppressed>" : string.Join(", ", targetOnlyModelNames.OrderBy(name => name))));
+    for (var clipIndex = 0; clipIndex < Math.Min(pack.Animations.Count, targetPack.Animations.Count); clipIndex++)
+    {
+        var sourceAnimation = pack.Animations[clipIndex];
+        var targetAnimation = targetPack.Animations[clipIndex];
+        var sourceControllers = sourceAnimation.Controllers
+            .Where(controller => controller.TargetKind == TargetKind.Node)
+            .Select(controller => controller.TargetName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var targetControllers = targetAnimation.Controllers
+            .Where(controller => controller.TargetKind == TargetKind.Node)
+            .Select(controller => controller.TargetName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Console.WriteLine($"CLIP {clipIndex} sourceDuration={sourceAnimation.Duration} targetDuration={targetAnimation.Duration} " +
+            $"sourceNodeTracks={sourceControllers.Count} targetNodeTracks={targetControllers.Count}");
+        var targetOnlyTracks = targetControllers.Intersect(targetOnlyModelNames, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name)
+            .ToArray();
+        Console.WriteLine($"  TARGET_ONLY_MODEL_TRACKS count={targetOnlyTracks.Length} names=" +
+            (compact ? "<suppressed>" : string.Join(", ", targetOnlyTracks)));
+        if (!compact)
+        {
+            Console.WriteLine("  SOURCE_ONLY_TRACKS=" + string.Join(", ", sourceControllers.Except(targetControllers, StringComparer.OrdinalIgnoreCase).OrderBy(name => name)));
+            Console.WriteLine("  TARGET_ONLY_TRACKS=" + string.Join(", ", targetControllers.Except(sourceControllers, StringComparer.OrdinalIgnoreCase).OrderBy(name => name)));
+        }
+    }
+    return;
+}
 if (args.Contains("--native")) {
     var nativeRoot = $@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}";
     foreach (var suffix in new[] { "", "_26", "_f", "_h00" }) {
@@ -148,6 +267,28 @@ if (args.Contains("--nodes")) foreach (var (label, model) in new[] { ("SOURCE", 
 Console.WriteLine($"Source={animationPath}");
 Console.WriteLine($"Animations={pack.Animations.Count}");
 var port = Resource.Load<AnimationPack>(animationPath);
+if (args.Contains("--retarget-diff", StringComparer.OrdinalIgnoreCase))
+{
+    port.Retarget(source.Model, target.Model, false, useLocalBindSpace);
+    var compact = args.Contains("--compact", StringComparer.OrdinalIgnoreCase);
+    Console.WriteLine($"RETARGETED={animationPath} clips={port.Animations.Count} mode={(useLocalBindSpace ? "local-bind-space" : "legacy-world-space")}");
+    for (var clipIndex = 0; clipIndex < port.Animations.Count; clipIndex++)
+    {
+        var animation = port.Animations[clipIndex];
+        var controllers = animation.Controllers
+            .Where(controller => controller.TargetKind == TargetKind.Node)
+            .Select(controller => controller.TargetName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingTargetNodes = target.Model.Nodes
+            .Where(node => !controllers.Contains(node.Name))
+            .Select(node => node.Name)
+            .ToArray();
+        Console.WriteLine($"CLIP {clipIndex} controllers={controllers.Count} targetNodesWithoutTracks={missingTargetNodes.Length}");
+        if (!compact)
+            Console.WriteLine("  TARGET_NODES_WITHOUT_TRACKS=" + string.Join(", ", missingTargetNodes));
+    }
+    return;
+}
 var useKneeCorrection = args.Contains("--knee-correction", StringComparer.OrdinalIgnoreCase);
 if (useKneeCorrection)
 {
@@ -164,8 +305,10 @@ else if (referenceRootOption != null)
 {
     var referenceRoot = referenceRootOption.Substring("--reference-root=".Length);
     var result = P5dAnimationRetargeter.Retarget(
-        port, source.Model, target.Model, targetModelPath, referenceRoot, useLocalBindSpace);
+        port, source.Model, target.Model, animationPath, targetModelPath,
+        referenceRoot, useLocalBindSpace);
     Console.WriteLine($"KneeCorrection={result.ReferencePath ?? "none"}");
+    Console.WriteLine($"DestinationTracks={result.DestinationTracksApplied}");
 }
 else
 {
@@ -329,6 +472,6 @@ for (var clip = 0; clip < port.Animations.Count; clip++) {
 catch (Exception exception)
 {
     Console.SetOut(stdout);
-    Console.Error.WriteLine("Retarget probe failed: " + exception.Message);
+    Console.Error.WriteLine("Retarget probe failed: " + exception);
     Environment.ExitCode = 1;
 }
