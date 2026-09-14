@@ -2333,6 +2333,32 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
+        private void RefreshCurrentCharacterBrowserAnimation()
+        {
+            if (mCharacterBrowserRestoringSelection ||
+                mCharacterAnimationListBox?.SelectedItem is not CharacterAnimationEntry entry ||
+                mCharacterBrowserCurrentModelPack?.Model == null)
+                return;
+
+            try
+            {
+                var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
+                if (animation == null)
+                    return;
+
+                ModelViewControl.Instance.LoadAnimation(animation, true);
+                ApplySelectedCharacterBrowserBlend();
+                SetCharacterBrowserStatus(
+                    string.IsNullOrWhiteSpace(retargetNote)
+                        ? "Animation: " + entry.DisplayName
+                        : $"Animation: {entry.DisplayName} ({retargetNote})");
+            }
+            catch (Exception ex)
+            {
+                SetCharacterBrowserStatus("Animation refresh failed: " + ex.Message);
+            }
+        }
+
         private void SetCharacterBrowserAnimationAutoLoaded(
             CharacterAnimationEntry entry,
             IReadOnlyCollection<string> autoLoadedPackPaths)
