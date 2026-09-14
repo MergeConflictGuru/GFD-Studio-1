@@ -1919,15 +1919,17 @@ namespace GFDStudio.GUI.Forms
                 ? FindCharacterBrowserAnimationIndex(mCharacterBlendAnimationListBox, blendSelection)
                 : -1;
             var allAnimationsRestored = animationIndexes.Count == animationSelections.Count;
-            var currentAnimationIndexes = mCharacterAnimationListBox.SelectedIndices
-                .Cast<int>()
-                .OrderBy(index => index)
-                .ToList();
-            var targetAnimationIndexes = animationIndexes
-                .OrderBy(index => index)
+            var currentAnimationEntries = mCharacterAnimationListBox.SelectedItems
+                .Cast<object>()
+                .OfType<CharacterAnimationEntry>()
                 .ToList();
             var animationSelectionChanged = allAnimationsRestored &&
-                                            !currentAnimationIndexes.SequenceEqual(targetAnimationIndexes);
+                                            (currentAnimationEntries.Count != animationSelections.Count ||
+                                             currentAnimationEntries.Any(current =>
+                                                 !animationSelections.Any(saved =>
+                                                     saved.Kind == current.Kind &&
+                                                     saved.Index == current.Index &&
+                                                     AreSamePath(saved.PackPath, current.PackPath))));
             var blendSelectionChanged = blendIndex >= 0 &&
                                         mCharacterBlendAnimationListBox.SelectedIndex != blendIndex;
 
@@ -1937,6 +1939,14 @@ namespace GFDStudio.GUI.Forms
                                     animationSelections.Count > 0 || hasBlendSelection;
             if (!hasSavedSelection)
                 return false;
+
+            // ListBox selection changes are suppressed while scan batches are inserted.
+            // Therefore a saved item can already be selected without ever reaching the
+            // animation handler. Remember whether this scan has completed one full restore
+            // so the first complete selection is explicitly applied once.
+            var shouldApplySavedAnimation = allAnimationsRestored &&
+                                             animationSelections.Count > 0 &&
+                                             !mCharacterBrowserSelectionRestoredForScan;
 
             mCharacterBrowserRestoringSelection = true;
             try
@@ -1985,7 +1995,7 @@ namespace GFDStudio.GUI.Forms
                         : faceIndex >= 0 ? mCharacterFaceListBox : mCharacterHairListBox;
                     CharacterModelListBox_SelectedIndexChanged(modelSender, EventArgs.Empty);
                 }
-                else if (animationSelectionChanged)
+                else if (animationSelectionChanged || shouldApplySavedAnimation)
                     CharacterAnimationListBox_SelectedIndexChanged(mCharacterAnimationListBox, EventArgs.Empty);
             }
             finally
