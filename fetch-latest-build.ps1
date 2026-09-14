@@ -7,6 +7,8 @@ param(
     [string]$OutputDirectory,
     [string]$Commit,
     [string]$SourceCommit,
+    [ValidateRange(1, 2147483647)]
+    [int]$RunNumber,
     [switch]$Watch,
     [switch]$Launch,
     [ValidateRange(10, 86400)]
@@ -14,6 +16,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($PSBoundParameters.ContainsKey('RunNumber') -and $RunNumber -lt 1) {
+    throw 'The -RunNumber option must be a positive build number.'
+}
 
 . (Join-Path $PSScriptRoot 'build-inputs.ps1')
 
@@ -211,6 +217,34 @@ function Get-WorkflowRunForCommit {
         } |
         Sort-Object run_number -Descending |
         Select-Object -First 1
+}
+
+function Get-WorkflowRunForNumber {
+    param(
+        [hashtable]$RequestHeaders,
+        [string]$Repo,
+        [string]$WorkflowFile,
+        [int]$RequestedRunNumber
+    )
+
+    $page = 1
+    while ($true) {
+        $runListUri = "https://api.github.com/repos/$Repo/actions/workflows/$WorkflowFile/runs?per_page=100&page=$page"
+        $pageRuns = @( (Invoke-RestMethod -Uri $runListUri -Headers $RequestHeaders).workflow_runs )
+        $run = $pageRuns |
+            Where-Object { $_.run_number -eq $RequestedRunNumber } |
+            Select-Object -First 1
+
+        if ($run) {
+            return $run
+        }
+
+        if ($pageRuns.Count -lt 100) {
+            return $null
+        }
+
+        $page++
+    }
 }
 
 function Get-RunArtifactInfo {
@@ -451,8 +485,12 @@ function Download-PreferredBuild {
         -DestinationDirectory $DestinationDirectory -Run $Run
 }
 
-if (-not [string]::IsNullOrWhiteSpace($Commit) -and $Watch) {
-    throw 'The -Commit and -Watch options cannot be used together.'
+if (-not [string]::IsNullOrWhiteSpace($Commit) -and ($Watch -or $RunNumber -gt 0)) {
+    throw 'The -Commit option cannot be used with -RunNumber or -Watch.'
+}
+
+if ($RunNumber -gt 0 -and $Watch) {
+    throw 'The -RunNumber and -Watch options cannot be used together.'
 }
 
 if (-not [string]::IsNullOrWhiteSpace($Commit)) {
@@ -515,6 +553,25 @@ if (-not [string]::IsNullOrWhiteSpace($Commit)) {
 
         Start-Sleep -Seconds $IntervalSeconds
     }
+}
+
+if ($RunNumber -gt 0) {
+    Write-Host "Looking for $Repository/$Workflow run #$RunNumber."
+    $run = Get-WorkflowRunForNumber -RequestHeaders $headers -Repo $Repository `
+        -WorkflowFile $Workflow -RequestedRunNumber $RunNumber
+
+    if (-not $run) {
+        throw "No $Workflow workflow run #$RunNumber was found in $Repository."
+    }
+
+    if ($run.status -ne 'completed' -or $run.conclusion -ne 'success') {
+        $conclusion = if ([string]::IsNullOrWhiteSpace($run.conclusion)) { $run.status } else { $run.conclusion }
+        throw "GitHub Actions run #$RunNumber is not a successful completed build (status: $conclusion)."
+    }
+
+    Download-PreferredBuild -RequestHeaders $headers -Repo $Repository -FullArtifactName $Artifact `
+        -DestinationDirectory $OutputDirectory -Run $run
+    exit 0
 }
 
 if (-not $Watch) {

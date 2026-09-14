@@ -14,7 +14,7 @@ To fetch it without launching a new application instance, run `fetch-latest-buil
 
 Fetched builds record their commit in `GFDStudio-binary\gfdstudio-build.json`. When a matching source-to-target delta artifact is available, only changed build outputs are downloaded and overlaid; otherwise the complete archive is used.
 
-The same fetch operation is available in VS Code through `Terminal > Run Task > GFD Studio: Fetch latest binary`; it is also the default build task (`Ctrl+Shift+B`). Use `GFD Studio: Fetch and run latest binary` to launch the downloaded build.
+The same fetch operation is available in VS Code through `Terminal > Run Task > GFD Studio: Fetch latest binary`; it is also the default build task (`Ctrl+Shift+B`). Use `GFD Studio: Fetch build by number` to enter any GitHub Actions build number and fetch that successful build, or use `GFD Studio: Fetch and run latest binary` to launch the latest downloaded build.
 
 To have every successful build fetched automatically after `git push`, enable the repository's post-push hook once:
 

@@ -74,6 +74,29 @@
             }
         },
         {
+            "label": "GFD Studio: Fetch build by number",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/fetch-latest-build.ps1",
+                "-RunNumber",
+                "${input:gfdStudioBuildNumber}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "GFD Studio: Fetch and run latest binary",
             "type": "process",
             "command": "powershell.exe",
@@ -150,6 +173,13 @@
                 "clear": true
             },
             "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "gfdStudioBuildNumber",
+            "type": "promptString",
+            "description": "Build number to fetch (for example, 75)"
         }
     ]
 }
