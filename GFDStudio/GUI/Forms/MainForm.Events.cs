@@ -221,7 +221,8 @@ namespace GFDStudio.GUI.Forms
                             await Task.Run( () =>
                             {
                                 var animationPack = Resource.Load<AnimationPack>( filePath );
-                                animationPack.Retarget( originalScene, newScene, fixArms );
+                                animationPack.Retarget( originalScene, newScene, fixArms,
+                                    settings.UseLocalBindSpaceRetargeting );
                                 animationPack.Save( filePath );
                             } );
                         }
@@ -843,6 +844,12 @@ namespace GFDStudio.GUI.Forms
 
             // Change appearance of form elements
             Theme.Apply( this );
+        }
+
+        private void handleLocalBindSpaceRetargetingCheckedChanged( object sender, EventArgs e )
+        {
+            settings.UseLocalBindSpaceRetargeting = useLocalBindSpaceRetargetingToolStripMenuItem.Checked;
+            settings.SaveJson( settings );
         }
 
         private void handleSaveReplacedTexturesExternally( object sender, EventArgs e )

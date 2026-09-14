@@ -55,6 +55,7 @@ namespace GFDStudio.GUI.Forms
             retainTexNameToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             retainColorValuesToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             useDarkThemeToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            useLocalBindSpaceRetargetingToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             mContentPanel = new System.Windows.Forms.Panel();
             tabControl1 = new MetroSetTabControl();
             tabPage1 = new MetroSetSetTabPage();
@@ -229,7 +230,7 @@ namespace GFDStudio.GUI.Forms
             // optionsToolStripMenuItem
             // 
             optionsToolStripMenuItem.AutoSize = false;
-            optionsToolStripMenuItem.DropDownItems.AddRange( new System.Windows.Forms.ToolStripItem[] { retainTexNameToolStripMenuItem, retainColorValuesToolStripMenuItem, useDarkThemeToolStripMenuItem, metaphorSaveReplacedTexturesExternallyToolStripMenuItem } );
+            optionsToolStripMenuItem.DropDownItems.AddRange( new System.Windows.Forms.ToolStripItem[] { retainTexNameToolStripMenuItem, retainColorValuesToolStripMenuItem, useDarkThemeToolStripMenuItem, useLocalBindSpaceRetargetingToolStripMenuItem, metaphorSaveReplacedTexturesExternallyToolStripMenuItem } );
             optionsToolStripMenuItem.Name = "optionsToolStripMenuItem";
             optionsToolStripMenuItem.Size = new System.Drawing.Size( 75, 24 );
             optionsToolStripMenuItem.Text = "Options";
@@ -264,6 +265,17 @@ namespace GFDStudio.GUI.Forms
             useDarkThemeToolStripMenuItem.Size = new System.Drawing.Size( 459, 26 );
             useDarkThemeToolStripMenuItem.Text = "Use Dark Theme";
             useDarkThemeToolStripMenuItem.CheckedChanged +=  handleDarkThemeCheckedChanged ;
+            //
+            // useLocalBindSpaceRetargetingToolStripMenuItem
+            //
+            useLocalBindSpaceRetargetingToolStripMenuItem.AutoSize = false;
+            useLocalBindSpaceRetargetingToolStripMenuItem.Checked = true;
+            useLocalBindSpaceRetargetingToolStripMenuItem.CheckOnClick = true;
+            useLocalBindSpaceRetargetingToolStripMenuItem.CheckState = System.Windows.Forms.CheckState.Checked;
+            useLocalBindSpaceRetargetingToolStripMenuItem.Name = "useLocalBindSpaceRetargetingToolStripMenuItem";
+            useLocalBindSpaceRetargetingToolStripMenuItem.Size = new System.Drawing.Size( 459, 26 );
+            useLocalBindSpaceRetargetingToolStripMenuItem.Text = "Use local bind-space retargeting";
+            useLocalBindSpaceRetargetingToolStripMenuItem.CheckedChanged += handleLocalBindSpaceRetargetingCheckedChanged;
             // 
             // mContentPanel
             // 
@@ -632,6 +644,7 @@ namespace GFDStudio.GUI.Forms
         public System.Windows.Forms.ToolStripMenuItem retainTexNameToolStripMenuItem;
         public System.Windows.Forms.ToolStripMenuItem retainColorValuesToolStripMenuItem;
         public System.Windows.Forms.ToolStripMenuItem useDarkThemeToolStripMenuItem;
+        public System.Windows.Forms.ToolStripMenuItem useLocalBindSpaceRetargetingToolStripMenuItem;
         private System.Windows.Forms.SplitContainer splitContainer_Main;
         private System.Windows.Forms.TableLayoutPanel tableLayoutPanel_Leftside;
         private System.Windows.Forms.SplitContainer splitContainer_RightSide;

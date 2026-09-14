@@ -11,13 +11,38 @@ AssemblyLoadContext.Default.Resolving += (_, name) => {
 var stdout = Console.Out;
 Console.SetOut(TextWriter.Null);
 var otherCharacter = args.Contains("--other");
-var characterId = otherCharacter ? "0005" : "0004";
+var sourceOption = args.FirstOrDefault(a => a.StartsWith("--source=", StringComparison.OrdinalIgnoreCase));
+var targetOption = args.FirstOrDefault(a => a.StartsWith("--target=", StringComparison.OrdinalIgnoreCase));
+var p5rTarget = args.Contains("--p5r") || targetOption != null;
+var characterId = sourceOption != null ? sourceOption.Substring("--source=".Length) : otherCharacter ? "0005" : "0004";
+var targetCharacterId = targetOption != null ? targetOption.Substring("--target=".Length) : characterId;
 var danceId = otherCharacter ? "205" : "204";
+if (args.Contains("--batch", StringComparer.OrdinalIgnoreCase) ||
+    args.Contains("--batch-report", StringComparer.OrdinalIgnoreCase))
+{
+    Console.SetOut(TextWriter.Null);
+    try
+    {
+        Environment.ExitCode = BatchRunner.Run(args);
+    }
+    finally
+    {
+        Console.SetOut(stdout);
+    }
+    return;
+}
 var source = Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\c{characterId}_107_00.GMD");
-var target = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\pc{danceId}_26.GMD");
+var target = p5rTarget
+    ? Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{targetCharacterId}\c{targetCharacterId}_107_00.GMD")
+    : Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\pc{danceId}_26.GMD");
 var hairId = args.Contains("--h26") ? "h26" : "h00";
 var nativeAnimationId = otherCharacter ? "001" : "018";
-var animationPath = otherCharacter
+var animationOption = args.FirstOrDefault(a => a.StartsWith("--animation=", StringComparison.OrdinalIgnoreCase));
+var animationPath = animationOption != null
+    ? animationOption.Substring("--animation=".Length)
+    : p5rTarget
+    ? $@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\battle\ab{characterId}_051.GAP"
+    : otherCharacter
     ? $@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\battle\ab{characterId}_051.GAP"
     : @"Q:\_coding\DaYoBuO\modssrc\dayobuo\repacked_0004_selected.GAP";
 var pack = Resource.Load<AnimationPack>(animationPath);

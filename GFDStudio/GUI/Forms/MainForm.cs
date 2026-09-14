@@ -64,6 +64,7 @@ namespace GFDStudio.GUI.Forms
             retainColorValuesToolStripMenuItem.Checked = settings.RetainMaterialColors;
             retainTexNameToolStripMenuItem.Checked = settings.RetainTextureNames;
             useDarkThemeToolStripMenuItem.Checked = settings.DarkMode;
+            useLocalBindSpaceRetargetingToolStripMenuItem.Checked = settings.UseLocalBindSpaceRetargeting;
 #if DEBUG
             //ModelViewControl.Instance.LoadAnimation( Resource.Load<AnimationPack>( 
             //    @"D:\Modding\Persona 5 EU\Main game\ExtractedClean\data\model\character\0001\field\bf0001_002.GAP" ).Animations[2]);

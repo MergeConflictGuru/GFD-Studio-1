@@ -146,19 +146,19 @@ namespace GFDLibrary.Animations
             Bit29Data?.FixTargetIds( model );
         }
 
-        public void Retarget( Model originalModel, Model newModel, bool fixArms )
+        public void Retarget( Model originalModel, Model newModel, bool fixArms, bool useLocalBindSpace = true )
         {
             var retargetMap = AnimationRetargetMap.Create( originalModel, newModel );
             if (retargetMap.UsesDifferentHumanoidHierarchy && BlendAnimations.Any(a => a.Controllers.Count > 0))
                 throw new NotSupportedException("Cross-game additive animation retargeting requires a reference pose; export and retarget the base animation separately.");
 
             foreach ( var animation in Animations )
-                animation.Retarget( retargetMap, fixArms );
+                animation.Retarget( retargetMap, fixArms, useLocalBindSpace );
 
             foreach ( var animation in BlendAnimations )
                 animation.RetargetTargetIds( retargetMap ); // blend animations are already relative, only names and ids change
 
-            Bit29Data?.Retarget( retargetMap, fixArms );
+            Bit29Data?.Retarget( retargetMap, fixArms, useLocalBindSpace );
 
             // P5, P5R and P5D all use the legacy animation layout, but their
             // resource versions are still different. Carry the target version
@@ -167,7 +167,13 @@ namespace GFDLibrary.Animations
             SetVersion( newModel.Version );
         }
 
-        private void SetVersion( uint version )
+        /// <summary>
+        /// Updates this pack and every nested animation resource to one file
+        /// format version. GAP files can be assembled from source packs that
+        /// use adjacent legacy versions; leaving nested resources untouched
+        /// makes the resulting list unreadable by the pack header version.
+        /// </summary>
+        public void SetVersion( uint version )
         {
             Version = version;
 

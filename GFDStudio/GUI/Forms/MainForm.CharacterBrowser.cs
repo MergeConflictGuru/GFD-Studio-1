@@ -2566,7 +2566,8 @@ namespace GFDStudio.GUI.Forms
                     }
                     else
                     {
-                        animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false);
+                        animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false,
+                            settings.UseLocalBindSpaceRetargeting);
                         retargetNote = hasSplitComponents
                             ? "retargeted in preview with selected face/hair tracks"
                             : "retargeted in preview";

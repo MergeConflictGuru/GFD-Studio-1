@@ -5,6 +5,7 @@ using System.Windows.Forms;
 using GFDLibrary;
 using GFDLibrary.Animations;
 using GFDStudio.FormatModules;
+using GFDStudio.GUI.Forms;
 
 namespace GFDStudio.GUI.DataViewNodes
 {
@@ -64,7 +65,7 @@ namespace GFDStudio.GUI.DataViewNodes
                 bool fixArms = MessageBox.Show( "Fix arms? If unsure, select No.", "Question", MessageBoxButtons.YesNo,
                                                 MessageBoxIcon.Question, MessageBoxDefaultButton.Button2 ) == DialogResult.Yes;
 
-                Data.Retarget( originalScene, newScene, fixArms );
+                Data.Retarget( originalScene, newScene, fixArms, MainForm.settings.UseLocalBindSpaceRetargeting );
             } );
             RegisterCustomHandler("Tools", "Convert to P5", () =>
             {
@@ -98,7 +99,8 @@ namespace GFDStudio.GUI.DataViewNodes
                         Title = "Choose the output body GAP; face and hair GAPs will be placed beside it"
                     };
                     if (save.ShowDialog() != DialogResult.OK) return;
-                    var preview = SplitCharacterRetargeter.CreatePreview(source.Model, Data, body, face, hair, native.Animations[0]);
+                    var preview = SplitCharacterRetargeter.CreatePreview(source.Model, Data, body, face, hair, native.Animations[0],
+                        MainForm.settings.UseLocalBindSpaceRetargeting);
                     var outputDirectory = Path.GetDirectoryName(save.FileName);
                     var outputStem = Path.GetFileNameWithoutExtension(save.FileName);
                     var hairName = Path.GetFileNameWithoutExtension(hairPath);
