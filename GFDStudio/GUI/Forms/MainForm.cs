@@ -54,12 +54,14 @@ namespace GFDStudio.GUI.Forms
         //
         public MainForm()
         {
+            // Load options before any controls or showroom initialization can
+            // start work that depends on the selected retargeting mode.
+            settings = settings.LoadJson();
             InitializeComponent();
             InitializeState();
             InitializeEvents();
             InitializeAnimationMatching();
 
-            settings = settings.LoadJson();
             Theme.Apply( this );
             retainColorValuesToolStripMenuItem.Checked = settings.RetainMaterialColors;
             retainTexNameToolStripMenuItem.Checked = settings.RetainTextureNames;

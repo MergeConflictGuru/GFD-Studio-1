@@ -9,10 +9,14 @@ AssemblyLoadContext.Default.Resolving += (_, name) => {
     return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
 };
 var stdout = Console.Out;
+try
+{
 Console.SetOut(TextWriter.Null);
 var otherCharacter = args.Contains("--other");
+var useLocalBindSpace = !args.Contains("--world-space", StringComparer.OrdinalIgnoreCase);
 var sourceOption = args.FirstOrDefault(a => a.StartsWith("--source=", StringComparison.OrdinalIgnoreCase));
 var targetOption = args.FirstOrDefault(a => a.StartsWith("--target=", StringComparison.OrdinalIgnoreCase));
+var targetModelOption = args.FirstOrDefault(a => a.StartsWith("--target-model=", StringComparison.OrdinalIgnoreCase));
 var p5rTarget = args.Contains("--p5r") || targetOption != null;
 var characterId = sourceOption != null ? sourceOption.Substring("--source=".Length) : otherCharacter ? "0005" : "0004";
 var targetCharacterId = targetOption != null ? targetOption.Substring("--target=".Length) : characterId;
@@ -32,7 +36,9 @@ if (args.Contains("--batch", StringComparer.OrdinalIgnoreCase) ||
     return;
 }
 var source = Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\c{characterId}_107_00.GMD");
-var target = p5rTarget
+var target = targetModelOption != null
+    ? Resource.Load<ModelPack>(targetModelOption.Substring("--target-model=".Length))
+    : p5rTarget
     ? Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{targetCharacterId}\c{targetCharacterId}_107_00.GMD")
     : Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\pc{danceId}_26.GMD");
 var hairId = args.Contains("--h26") ? "h26" : "h00";
@@ -136,17 +142,53 @@ if (args.Contains("--nodes")) foreach (var (label, model) in new[] { ("SOURCE", 
 Console.WriteLine($"Source={animationPath}");
 Console.WriteLine($"Animations={pack.Animations.Count}");
 var port = Resource.Load<AnimationPack>(animationPath);
-port.Retarget(source.Model, target.Model, false);
+port.Retarget(source.Model, target.Model, false, useLocalBindSpace);
+if (args.Contains("--knee", StringComparer.OrdinalIgnoreCase))
+{
+    var targetKneeNames = new[] { "LeftUpLeg", "LeftLeg", "RightUpLeg", "RightLeg" };
+    Console.WriteLine("Knee probe: " + (useLocalBindSpace ? "local-bind-space" : "legacy-world-space"));
+    for (var clipIndex = 0; clipIndex < port.Animations.Count; clipIndex++)
+    {
+        var sourceAnimation = pack.Animations[clipIndex];
+        var targetAnimation = port.Animations[clipIndex];
+        Console.WriteLine($"Clip {clipIndex} duration={targetAnimation.Duration}");
+        foreach (var fraction in new[] { 0f, .25f, .5f, .75f, 1f })
+        {
+            var sourcePose = AnimationPoseEvaluator.Evaluate(
+                source.Model, sourceAnimation, sourceAnimation.Duration * fraction);
+            var targetPose = AnimationPoseEvaluator.Evaluate(
+                target.Model, targetAnimation, targetAnimation.Duration * fraction);
+            Console.Write($"  f={fraction:F2}");
+            foreach (var name in targetKneeNames)
+            {
+                var node = target.Model.Nodes.First(n => n.Name == name);
+                var parent = node.Parent == null ? Matrix4x4.Identity : targetPose[node.Parent];
+                Matrix4x4.Invert(parent, out var parentInverse);
+                Matrix4x4.Decompose(targetPose[node] * parentInverse, out _, out var rotation, out var position);
+                Console.Write($" {name}:P={position} R={rotation}");
+            }
+            var sourceLeftCalf = source.Model.Nodes.First(n => n.Name == "Bip01 L Calf");
+            var sourceParent = sourcePose[sourceLeftCalf.Parent];
+            Matrix4x4.Invert(sourceParent, out var sourceParentInverse);
+            Matrix4x4.Decompose(sourcePose[sourceLeftCalf] * sourceParentInverse,
+                out _, out var sourceRotation, out var sourcePosition);
+            Console.WriteLine($" source LCalf:P={sourcePosition} R={sourceRotation}");
+        }
+    }
+    return;
+}
 var outputDirectory = Path.GetFullPath(args.Contains("--assembled")
-    ? $"artifacts/retarget-{characterId}-{danceId}-assembled"
-    : $"artifacts/retarget-{characterId}-{danceId}");
+    ? $"artifacts/retarget-{characterId}-{danceId}-assembled-{(useLocalBindSpace ? "local" : "world")}"
+    : $"artifacts/retarget-{characterId}-{danceId}-{(useLocalBindSpace ? "local" : "world")}");
 Directory.CreateDirectory(outputDirectory);
+Console.WriteLine($"RetargetMode={(useLocalBindSpace ? "local-bind-space" : "legacy-world-space")}");
 if (args.Contains("--assembled")) {
     Console.SetOut(TextWriter.Null);
     var face = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\face\pc{danceId}_f1.GMD");
     var hair = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\hair\pc{danceId}_{hairId}.GMD");
     var native = Resource.Load<AnimationPack>($@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}\pc{danceId}_{nativeAnimationId}_p.GAP");
-    var combined = SplitCharacterRetargeter.CreatePreview(source.Model, pack, target, face, hair, native.Animations[0]);
+    var combined = SplitCharacterRetargeter.CreatePreview(
+        source.Model, pack, target, face, hair, native.Animations[0], useLocalBindSpace);
     combined.Save(Path.Combine(outputDirectory, $"pc{danceId}_26_preview.GMD"));
     foreach (var (part, suffix) in new[] {(target.Model, ""), (face.Model, "_f"), (hair.Model, "_" + hairId)}) {
         var partKind = suffix == "" ? SplitCharacterPart.Body :
@@ -249,4 +291,11 @@ for (var clip = 0; clip < port.Animations.Count; clip++) {
         var dstPose = AnimationPoseEvaluator.Evaluate(target.Model, anim, time);
         PoseRender.Draw(source.Model, srcPose, target.Model, dstPose, Path.Combine(outputDirectory, $"clip-{clip}-{frame}.png"), $"c{characterId} clip {clip}, {time:F2}s: P5R original / Dance retarget");
     }
+}
+}
+catch (Exception exception)
+{
+    Console.SetOut(stdout);
+    Console.Error.WriteLine("Retarget probe failed: " + exception.Message);
+    Environment.ExitCode = 1;
 }

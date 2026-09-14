@@ -2587,16 +2587,19 @@ namespace GFDStudio.GUI.Forms
                             entry.PackPath, sourceModelEntry, selectedFacePath, selectedHairPath))
                     {
                         retargetNote = hasSplitComponents
-                            ? "loaded with selected face/hair tracks"
-                            : "loaded without retargeting";
+                            ? "already target-rig; loaded with selected face/hair tracks"
+                            : "already target-rig; no retargeting";
                     }
                     else
                     {
                         animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false,
                             settings.UseLocalBindSpaceRetargeting);
+                        var mode = settings.UseLocalBindSpaceRetargeting
+                            ? "local bind-space"
+                            : "legacy world-space";
                         retargetNote = hasSplitComponents
-                            ? "retargeted in preview with selected face/hair tracks"
-                            : "retargeted in preview";
+                            ? $"retargeted in preview ({mode}) with selected face/hair tracks"
+                            : $"retargeted in preview ({mode})";
                     }
                     break;
 
