@@ -172,11 +172,15 @@ namespace GFDStudio.GUI.Forms
 
         private void HandleRetargetAnimationsToolStripMenuItemClick( object sender, EventArgs e )
         {
-            var originalScene = ModuleImportUtilities.SelectImportFile<ModelPack>( "Select the original model file." )?.Model;
+            var originalPack = ModuleImportUtilities.SelectImportFile<ModelPack>(
+                "Select the original model file.", out _);
+            var originalScene = originalPack?.Model;
             if ( originalScene == null )
                 return;
 
-            var newScene = ModuleImportUtilities.SelectImportFile<ModelPack>( "Select the new model file." )?.Model;
+            var newPack = ModuleImportUtilities.SelectImportFile<ModelPack>(
+                "Select the new model file.", out var newModelPath);
+            var newScene = newPack?.Model;
             if ( newScene == null )
                 return;
 
@@ -221,8 +225,10 @@ namespace GFDStudio.GUI.Forms
                             await Task.Run( () =>
                             {
                                 var animationPack = Resource.Load<AnimationPack>( filePath );
-                                animationPack.Retarget( originalScene, newScene, fixArms,
-                                    settings.UseLocalBindSpaceRetargeting );
+                                P5dAnimationRetargeter.Retarget(
+                                    animationPack, originalScene, newScene,
+                                    filePath, newModelPath, directoryPath,
+                                    settings.UseLocalBindSpaceRetargeting, fixArms);
                                 animationPack.Save( filePath );
                             } );
                         }

@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using GFDLibrary;
@@ -117,14 +118,25 @@ namespace GFDStudio.GUI.DataViewNodes
                 if ( originalModel == null )
                     return;
 
-                var newModel = ModuleImportUtilities.SelectImportFile<ModelPack>( "Select the new model file." )?.Model;
+                var newModelPack = ModuleImportUtilities.SelectImportFile<ModelPack>(
+                    "Select the new model file.", out var newModelPath);
+                var newModel = newModelPack?.Model;
                 if ( newModel == null )
                     return;
 
                 bool fixArms = MessageBox.Show( "Fix arms? If unsure, select No.", "Question", MessageBoxButtons.YesNo,
                                                 MessageBoxIcon.Question, MessageBoxDefaultButton.Button2 ) == DialogResult.Yes;
 
-                Data.Retarget( originalModel, newModel, fixArms, MainForm.settings.UseLocalBindSpaceRetargeting );
+                var sourceAnimationPath = MainForm.Instance?.LastOpenedFilePath;
+                if (!string.Equals(Path.GetExtension(sourceAnimationPath), ".GAP",
+                    StringComparison.OrdinalIgnoreCase))
+                    sourceAnimationPath = null;
+                var sourceAnimationIndex = (Parent as AnimationListViewNode)?.Data?.IndexOf(Data) ?? 0;
+                var referenceRoot = Path.GetDirectoryName(newModelPath);
+                P5dAnimationRetargeter.Retarget(
+                    Data, originalModel, newModel, sourceAnimationPath,
+                    sourceAnimationIndex, newModelPath, referenceRoot,
+                    MainForm.settings.UseLocalBindSpaceRetargeting, fixArms);
             } );
         }
 
