@@ -20,6 +20,14 @@ namespace GFDLibrary.Animations
 
     public static class SplitCharacterRetargeter
     {
+        // Keep the pre-option overload available for already-built tools and
+        // plugins. Its old implementation used model-space retargeting.
+        public static ModelPack CreatePreview(Model source, AnimationPack animations,
+            ModelPack body, ModelPack face, ModelPack hair, Animation nativeBase)
+        {
+            return CreatePreview(source, animations, body, face, hair, nativeBase, false);
+        }
+
         /// <summary>
         /// Creates an independent combined preview, keeping all three parts on
         /// one skeleton before retargeting. Input resources are never mutated.
@@ -28,7 +36,7 @@ namespace GFDLibrary.Animations
         /// </summary>
         public static ModelPack CreatePreview(Model source, AnimationPack animations,
             ModelPack body, ModelPack face, ModelPack hair, Animation nativeBase,
-            bool useLocalBindSpace = true)
+            bool useLocalBindSpace = false)
         {
             var combined = Copy(body);
             combined.Textures ??= new TextureDictionary(combined.Version);

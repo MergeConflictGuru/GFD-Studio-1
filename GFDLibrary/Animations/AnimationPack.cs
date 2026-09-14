@@ -146,7 +146,14 @@ namespace GFDLibrary.Animations
             Bit29Data?.FixTargetIds( model );
         }
 
-        public void Retarget( Model originalModel, Model newModel, bool fixArms, bool useLocalBindSpace = true )
+        // Keep the pre-option overload available for already-built tools and
+        // plugins. Its old implementation used model-space retargeting.
+        public void Retarget( Model originalModel, Model newModel, bool fixArms )
+        {
+            Retarget( originalModel, newModel, fixArms, false );
+        }
+
+        public void Retarget( Model originalModel, Model newModel, bool fixArms, bool useLocalBindSpace = false )
         {
             var retargetMap = AnimationRetargetMap.Create( originalModel, newModel );
             if (retargetMap.UsesDifferentHumanoidHierarchy && BlendAnimations.Any(a => a.Controllers.Count > 0))

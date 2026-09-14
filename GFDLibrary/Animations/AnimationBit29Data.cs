@@ -65,7 +65,14 @@ namespace GFDLibrary.Animations
             Field0C.FixTargetIds( model );
         }
 
-        public void Retarget( Model originalModel, Model newModel, bool fixArms, bool useLocalBindSpace = true )
+        // Keep the pre-option overload available for already-built tools and
+        // plugins.
+        public void Retarget( Model originalModel, Model newModel, bool fixArms )
+        {
+            Retarget( originalModel, newModel, fixArms, false );
+        }
+
+        public void Retarget( Model originalModel, Model newModel, bool fixArms, bool useLocalBindSpace = false )
         {
             Field00.Retarget( originalModel, newModel, fixArms, useLocalBindSpace );
             Field04.Retarget( originalModel, newModel, fixArms, useLocalBindSpace );

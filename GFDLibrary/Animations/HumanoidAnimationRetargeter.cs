@@ -76,7 +76,8 @@ namespace GFDLibrary.Animations
                             // the calf/foot or forearm/hand began moving.
                             var sourceBindLocalRotation = Rotation(source.LocalTransform);
                             Matrix4x4.Invert(sourceBindLocalRotation, out var inverseSourceBindLocalRotation);
-                            var sourceAnimatedLocalRotation = Rotation(LocalPose(source, sourcePose));
+                            var sourceAnimatedLocalRotation = Matrix4x4.CreateFromQuaternion(
+                                EvaluateLocalRotation(source, animation, time));
                             var desiredLocalRotation = Rotation(target.LocalTransform) *
                                                        inverseSourceBindLocalRotation *
                                                        sourceAnimatedLocalRotation;
@@ -141,14 +142,22 @@ namespace GFDLibrary.Animations
                    ReferenceEquals(mappedSourceParent, target.Parent);
         }
 
-        private static Matrix4x4 LocalPose(Node node, IReadOnlyDictionary<Node, Matrix4x4> pose)
+        private static Quaternion EvaluateLocalRotation(Node node, Animation animation, float time)
         {
-            if (node.Parent == null)
-                return pose[node];
+            var position = node.Translation;
+            var rotation = node.Rotation;
+            var scale = node.Scale;
+            foreach (var controller in animation.Controllers)
+            {
+                if (controller.TargetKind != TargetKind.Node ||
+                    !string.Equals(controller.TargetName, node.Name, StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-            if (!Matrix4x4.Invert(pose[node.Parent], out var inverseParent))
-                throw new InvalidOperationException("Cannot invert an animated skeleton parent transform.");
-            return pose[node] * inverseParent;
+                foreach (var layer in controller.Layers)
+                    AnimationPoseEvaluator.Sample(layer, time, ref position, ref rotation, ref scale);
+            }
+
+            return Quaternion.Normalize(rotation);
         }
 
         private static Matrix4x4 Rotation(Matrix4x4 transform)

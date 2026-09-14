@@ -269,9 +269,9 @@ namespace GFDStudio.GUI.Forms
             // useLocalBindSpaceRetargetingToolStripMenuItem
             //
             useLocalBindSpaceRetargetingToolStripMenuItem.AutoSize = false;
-            useLocalBindSpaceRetargetingToolStripMenuItem.Checked = true;
+            useLocalBindSpaceRetargetingToolStripMenuItem.Checked = false;
             useLocalBindSpaceRetargetingToolStripMenuItem.CheckOnClick = true;
-            useLocalBindSpaceRetargetingToolStripMenuItem.CheckState = System.Windows.Forms.CheckState.Checked;
+            useLocalBindSpaceRetargetingToolStripMenuItem.CheckState = System.Windows.Forms.CheckState.Unchecked;
             useLocalBindSpaceRetargetingToolStripMenuItem.Name = "useLocalBindSpaceRetargetingToolStripMenuItem";
             useLocalBindSpaceRetargetingToolStripMenuItem.Size = new System.Drawing.Size( 459, 26 );
             useLocalBindSpaceRetargetingToolStripMenuItem.Text = "Use local bind-space retargeting";
