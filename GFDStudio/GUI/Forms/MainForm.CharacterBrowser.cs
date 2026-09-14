@@ -118,27 +118,6 @@ namespace GFDStudio.GUI.Forms
         private const string CharacterBrowserFilterFormat = "filters-v1";
         private const string CharacterBrowserNoneSelection = "(none)";
 
-        // These are the native P5D body clips used to calibrate the corrective
-        // knee helper bones. The skeleton is shared by the outfit variants, so
-        // the dance character id is enough to select the reference clip.
-        private static readonly IReadOnlyDictionary<string, string>
-            CharacterBrowserP5dKneeReferenceStems =
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["201"] = "pc201_003_p",
-                    ["202"] = "pc202_002_p",
-                    ["203"] = "pc203_001_p",
-                    ["204"] = "pc204_018_p",
-                    ["205"] = "pc205_001_p",
-                    ["206"] = "pc206_001_p",
-                    ["207"] = "pc207_002_p",
-                    ["208"] = "pc208_001_p",
-                    ["209"] = "pc209_029",
-                    ["210"] = "pc210_002_p",
-                    ["211"] = "pc211_002_p",
-                    ["212"] = "pc212_030"
-                };
-
         private sealed class CharacterBrowserAnimationSelection
         {
             public string PackPath { get; init; }
@@ -2614,15 +2593,17 @@ namespace GFDStudio.GUI.Forms
                     }
                     else
                     {
-                        animation.Retarget(sourceModelPack.Model, targetModelPack.Model, false,
+                        var p5dRetarget = P5dAnimationRetargeter.Retarget(
+                            animation, sourceModelPack.Model, targetModelPack.Model,
+                            mCharacterBrowserCurrentModelPath,
+                            mCharacterBrowserRoot,
                             settings.UseLocalBindSpaceRetargeting);
-                        var kneeHelpersApplied =
-                            TryApplyCharacterBrowserP5dKneeCorrection(
-                                animation, targetModelPack.Model, mCharacterBrowserCurrentModelPath);
                         var mode = settings.UseLocalBindSpaceRetargeting
                             ? "local bind-space"
                             : "legacy world-space";
-                        var kneeNote = kneeHelpersApplied ? ", P5D knee helpers" : string.Empty;
+                        var kneeNote = p5dRetarget.KneeCorrectionApplied
+                            ? ", P5D knee helpers"
+                            : string.Empty;
                         retargetNote = hasSplitComponents
                             ? $"retargeted in preview ({mode}{kneeNote}) with selected face/hair tracks"
                             : $"retargeted in preview ({mode}{kneeNote})";
@@ -2641,175 +2622,6 @@ namespace GFDStudio.GUI.Forms
             }
 
             return animation;
-        }
-
-        private static bool TryApplyCharacterBrowserP5dKneeCorrection(
-            Animation animation, Model targetModel, string targetModelPath)
-        {
-            if (animation == null || targetModel == null ||
-                !HasCharacterBrowserP5dKneeHelpers(targetModel))
-                return false;
-
-            var reference = LoadCharacterBrowserP5dKneeReference(
-                targetModelPath, out var referencePath);
-            if (reference == null)
-                return false;
-
-            try
-            {
-                var pack = new AnimationPack(animation.Version)
-                {
-                    Animations = new List<Animation> { animation }
-                };
-                DancingKneeCorrection.Apply(pack, targetModel, reference);
-                Logger.Debug($"CharacterBrowser: applied P5D knee correction from {referencePath}");
-                return true;
-            }
-            catch (Exception exception)
-            {
-                // A missing optional calibration clip must not prevent the
-                // animation from being previewed or produce an error dialog.
-                Logger.Debug($"CharacterBrowser: P5D knee correction unavailable: {exception}");
-                return false;
-            }
-        }
-
-        private static bool HasCharacterBrowserP5dKneeHelpers(Model model)
-        {
-            var names = model.Nodes
-                .Select(node => node.Name)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return new[] { "L_Knee_Roll_01", "L_Knee_Roll_02", "L_ExKnee" }
-                .All(names.Contains) ||
-                new[] { "R_Knee_Roll_01", "R_Knee_Roll_02", "R_ExKnee" }
-                .All(names.Contains);
-        }
-
-        private static Animation LoadCharacterBrowserP5dKneeReference(
-            string targetModelPath, out string referencePath)
-        {
-            referencePath = null;
-            var danceId = ExtractCharacterBrowserP5dDanceId(targetModelPath);
-            if (string.IsNullOrWhiteSpace(danceId))
-                return null;
-
-            var directories = GetCharacterBrowserP5dAnimationDirectories(targetModelPath, danceId);
-            var candidatePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var directory in directories)
-            {
-                if (!Directory.Exists(directory))
-                    continue;
-
-                if (CharacterBrowserP5dKneeReferenceStems.TryGetValue(danceId, out var stem))
-                {
-                    foreach (var suffix in new[] { ".GAP", "_26.GAP", "_p.GAP", "_01.GAP" })
-                        candidatePaths.Add(Path.Combine(directory, stem + suffix));
-                }
-
-                // Keep unknown/future P5D character ids usable as well. The
-                // helper-track check below prevents choosing a face/hair clip.
-                try
-                {
-                    foreach (var path in Directory.EnumerateFiles(
-                                 directory, "pc" + danceId + "_*_p.GAP", SearchOption.TopDirectoryOnly))
-                        candidatePaths.Add(path);
-                }
-                catch (Exception exception)
-                {
-                    Logger.Debug($"CharacterBrowser: failed to scan knee references in {directory}: {exception}");
-                }
-            }
-
-            foreach (var path in candidatePaths)
-            {
-                if (!File.Exists(path))
-                    continue;
-
-                try
-                {
-                    var pack = Resource.Load<AnimationPack>(path);
-                    var reference = pack?.Animations?.FirstOrDefault(
-                        candidate => candidate.Duration > 0 &&
-                                     HasCharacterBrowserP5dKneeReferenceTracks(candidate));
-                    if (reference != null)
-                    {
-                        referencePath = path;
-                        return reference;
-                    }
-                }
-                catch (Exception exception)
-                {
-                    Logger.Debug($"CharacterBrowser: failed to load knee reference {path}: {exception}");
-                }
-            }
-
-            return null;
-        }
-
-        private static bool HasCharacterBrowserP5dKneeReferenceTracks(Animation animation)
-        {
-            var names = animation.Controllers
-                .Where(controller => controller.TargetKind == TargetKind.Node)
-                .Select(controller => controller.TargetName)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return new[] { "LeftLeg", "L_Knee_Roll_01", "L_Knee_Roll_02", "L_ExKnee" }
-                .All(names.Contains) ||
-                new[] { "RightLeg", "R_Knee_Roll_01", "R_Knee_Roll_02", "R_ExKnee" }
-                .All(names.Contains);
-        }
-
-        private static string ExtractCharacterBrowserP5dDanceId(string modelPath)
-        {
-            var stem = Path.GetFileNameWithoutExtension(modelPath) ?? string.Empty;
-            return Regex.Match(stem, @"^pc(?<id>\d{3})_", RegexOptions.IgnoreCase)
-                .Groups["id"].Value;
-        }
-
-        private static IEnumerable<string> GetCharacterBrowserP5dAnimationDirectories(
-            string targetModelPath, string danceId)
-        {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var modelDirectory = Path.GetDirectoryName(targetModelPath);
-            var yieldPaths = new List<string>();
-
-            void Add(string path)
-            {
-                if (!string.IsNullOrWhiteSpace(path))
-                {
-                    try
-                    {
-                        if (seen.Add(Path.GetFullPath(path)))
-                            yieldPaths.Add(Path.GetFullPath(path));
-                    }
-                    catch
-                    {
-                        // Ignore malformed optional search paths.
-                    }
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(modelDirectory))
-            {
-                var extractedGame = Regex.Match(
-                    modelDirectory,
-                    @"^(?<root>.*?)[\\/](?:data[\\/])?ps4[\\/]dance[\\/]player[\\/]p5$",
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-                if (extractedGame.Success)
-                {
-                    Add(Path.Combine(extractedGame.Groups["root"].Value,
-                        "data", "data", "dance", "player", "p5", danceId));
-                }
-            }
-
-            for (var directory = modelDirectory;
-                 !string.IsNullOrWhiteSpace(directory);
-                 directory = Path.GetDirectoryName(directory))
-            {
-                Add(Path.Combine(directory, "p5d modding", "game", "Image0", "data",
-                    "data", "dance", "player", "p5", danceId));
-            }
-
-            return yieldPaths;
         }
 
         private bool CanUseCharacterBrowserAnimationWithoutRetarget(

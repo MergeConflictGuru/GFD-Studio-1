@@ -14,6 +14,20 @@ namespace GFDLibrary.Animations
     /// </summary>
     public static class DancingKneeCorrection
     {
+        public static bool SupportsTarget(Model target)
+        {
+            if (target?.RootNode == null)
+                return false;
+
+            var names = target.Nodes
+                .Select(node => node.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return new[] { "L_Knee_Roll_01", "L_Knee_Roll_02", "L_ExKnee" }
+                .All(names.Contains) ||
+                new[] { "R_Knee_Roll_01", "R_Knee_Roll_02", "R_ExKnee" }
+                .All(names.Contains);
+        }
+
         public static void Apply(AnimationPack pack, Model target, Animation reference)
         {
             if (reference == null || reference.Duration <= 0)

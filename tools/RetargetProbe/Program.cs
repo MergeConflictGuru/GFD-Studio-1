@@ -19,6 +19,7 @@ var targetOption = args.FirstOrDefault(a => a.StartsWith("--target=", StringComp
 var sourceModelOption = args.FirstOrDefault(a => a.StartsWith("--source-model=", StringComparison.OrdinalIgnoreCase));
 var targetModelOption = args.FirstOrDefault(a => a.StartsWith("--target-model=", StringComparison.OrdinalIgnoreCase));
 var kneeReferenceOption = args.FirstOrDefault(a => a.StartsWith("--knee-reference=", StringComparison.OrdinalIgnoreCase));
+var referenceRootOption = args.FirstOrDefault(a => a.StartsWith("--reference-root=", StringComparison.OrdinalIgnoreCase));
 var p5rTarget = args.Contains("--p5r") || targetOption != null;
 var characterId = sourceOption != null ? sourceOption.Substring("--source=".Length) : otherCharacter ? "0005" : "0004";
 var targetCharacterId = targetOption != null ? targetOption.Substring("--target=".Length) : characterId;
@@ -40,11 +41,12 @@ if (args.Contains("--batch", StringComparer.OrdinalIgnoreCase) ||
 var source = sourceModelOption != null
     ? Resource.Load<ModelPack>(sourceModelOption.Substring("--source-model=".Length))
     : Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\c{characterId}_107_00.GMD");
-var target = targetModelOption != null
-    ? Resource.Load<ModelPack>(targetModelOption.Substring("--target-model=".Length))
+var targetModelPath = targetModelOption != null
+    ? targetModelOption.Substring("--target-model=".Length)
     : p5rTarget
-    ? Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{targetCharacterId}\c{targetCharacterId}_107_00.GMD")
-    : Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\pc{danceId}_26.GMD");
+    ? $@"M:\_P_backup\p5 modding\dataR\model\character\{targetCharacterId}\c{targetCharacterId}_107_00.GMD"
+    : $@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\pc{danceId}_26.GMD";
+var target = Resource.Load<ModelPack>(targetModelPath);
 var hairId = args.Contains("--h26") ? "h26" : "h00";
 var nativeAnimationId = otherCharacter ? "001" : "018";
 var animationOption = args.FirstOrDefault(a => a.StartsWith("--animation=", StringComparison.OrdinalIgnoreCase));
@@ -146,7 +148,6 @@ if (args.Contains("--nodes")) foreach (var (label, model) in new[] { ("SOURCE", 
 Console.WriteLine($"Source={animationPath}");
 Console.WriteLine($"Animations={pack.Animations.Count}");
 var port = Resource.Load<AnimationPack>(animationPath);
-port.Retarget(source.Model, target.Model, false, useLocalBindSpace);
 var useKneeCorrection = args.Contains("--knee-correction", StringComparer.OrdinalIgnoreCase);
 if (useKneeCorrection)
 {
@@ -155,8 +156,20 @@ if (useKneeCorrection)
         : $@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}\pc{danceId}_{nativeAnimationId}_p.GAP";
     var kneeReferencePack = Resource.Load<AnimationPack>(kneeReferencePath);
     var kneeReference = kneeReferencePack.Animations.First(animation => animation.Duration > 0);
-    DancingKneeCorrection.Apply(port, target.Model, kneeReference);
+    P5dAnimationRetargeter.Retarget(
+        port, source.Model, target.Model, kneeReference, useLocalBindSpace);
     Console.WriteLine($"KneeCorrection={kneeReferencePath}");
+}
+else if (referenceRootOption != null)
+{
+    var referenceRoot = referenceRootOption.Substring("--reference-root=".Length);
+    var result = P5dAnimationRetargeter.Retarget(
+        port, source.Model, target.Model, targetModelPath, referenceRoot, useLocalBindSpace);
+    Console.WriteLine($"KneeCorrection={result.ReferencePath ?? "none"}");
+}
+else
+{
+    port.Retarget(source.Model, target.Model, false, useLocalBindSpace);
 }
 if (args.Contains("--knee", StringComparer.OrdinalIgnoreCase))
 {
