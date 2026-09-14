@@ -16,7 +16,9 @@ var otherCharacter = args.Contains("--other");
 var useLocalBindSpace = !args.Contains("--world-space", StringComparer.OrdinalIgnoreCase);
 var sourceOption = args.FirstOrDefault(a => a.StartsWith("--source=", StringComparison.OrdinalIgnoreCase));
 var targetOption = args.FirstOrDefault(a => a.StartsWith("--target=", StringComparison.OrdinalIgnoreCase));
+var sourceModelOption = args.FirstOrDefault(a => a.StartsWith("--source-model=", StringComparison.OrdinalIgnoreCase));
 var targetModelOption = args.FirstOrDefault(a => a.StartsWith("--target-model=", StringComparison.OrdinalIgnoreCase));
+var kneeReferenceOption = args.FirstOrDefault(a => a.StartsWith("--knee-reference=", StringComparison.OrdinalIgnoreCase));
 var p5rTarget = args.Contains("--p5r") || targetOption != null;
 var characterId = sourceOption != null ? sourceOption.Substring("--source=".Length) : otherCharacter ? "0005" : "0004";
 var targetCharacterId = targetOption != null ? targetOption.Substring("--target=".Length) : characterId;
@@ -35,7 +37,9 @@ if (args.Contains("--batch", StringComparer.OrdinalIgnoreCase) ||
     }
     return;
 }
-var source = Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\c{characterId}_107_00.GMD");
+var source = sourceModelOption != null
+    ? Resource.Load<ModelPack>(sourceModelOption.Substring("--source-model=".Length))
+    : Resource.Load<ModelPack>($@"M:\_P_backup\p5 modding\dataR\model\character\{characterId}\c{characterId}_107_00.GMD");
 var target = targetModelOption != null
     ? Resource.Load<ModelPack>(targetModelOption.Substring("--target-model=".Length))
     : p5rTarget
@@ -143,10 +147,26 @@ Console.WriteLine($"Source={animationPath}");
 Console.WriteLine($"Animations={pack.Animations.Count}");
 var port = Resource.Load<AnimationPack>(animationPath);
 port.Retarget(source.Model, target.Model, false, useLocalBindSpace);
+var useKneeCorrection = args.Contains("--knee-correction", StringComparer.OrdinalIgnoreCase);
+if (useKneeCorrection)
+{
+    var kneeReferencePath = kneeReferenceOption != null
+        ? kneeReferenceOption.Substring("--knee-reference=".Length)
+        : $@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}\pc{danceId}_{nativeAnimationId}_p.GAP";
+    var kneeReferencePack = Resource.Load<AnimationPack>(kneeReferencePath);
+    var kneeReference = kneeReferencePack.Animations.First(animation => animation.Duration > 0);
+    DancingKneeCorrection.Apply(port, target.Model, kneeReference);
+    Console.WriteLine($"KneeCorrection={kneeReferencePath}");
+}
 if (args.Contains("--knee", StringComparer.OrdinalIgnoreCase))
 {
     var targetKneeNames = new[] { "LeftUpLeg", "LeftLeg", "RightUpLeg", "RightLeg" };
     Console.WriteLine("Knee probe: " + (useLocalBindSpace ? "local-bind-space" : "legacy-world-space"));
+    var helperNames = new[] { "L_Knee_Roll_01", "L_Knee_Roll_02", "L_ExKnee",
+        "R_Knee_Roll_01", "R_Knee_Roll_02", "R_ExKnee" };
+    Console.WriteLine("Knee helper controllers per clip: " + string.Join(", ",
+        port.Animations.Select(animation => animation.Controllers.Count(controller =>
+            helperNames.Contains(controller.TargetName, StringComparer.OrdinalIgnoreCase)))));
     for (var clipIndex = 0; clipIndex < port.Animations.Count; clipIndex++)
     {
         var sourceAnimation = pack.Animations[clipIndex];
