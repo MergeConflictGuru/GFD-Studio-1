@@ -126,6 +126,49 @@ namespace GFDLibrary.Rendering.OpenGL
             IsVisible = true;
         }
 
+        /// <summary>
+        /// Calculates the local-space bounds for the mesh using the current bone
+        /// transforms without creating or replacing its OpenGL buffers. This is
+        /// used when a caller needs to inspect several future animation poses.
+        /// </summary>
+        public BoundingBox? CalculateVertexBounds( List<Bone> bones, List<GLNode> nodes, Matrix4x4 modelMatrix )
+        {
+            if ( Mesh == null )
+                return VertexBounds;
+
+            if ( Mesh.VertexWeights == null )
+                return VertexBounds ?? Mesh.BoundingBox ??
+                       ( Mesh.Vertices.Length > 0 ? BoundingBox.Calculate( Mesh.Vertices ) : null );
+
+            if ( !Matrix4x4.Invert( modelMatrix, out var modelMatrixInv ) )
+                return null;
+
+            var minimum = new Vector3( float.PositiveInfinity );
+            var maximum = new Vector3( float.NegativeInfinity );
+            for ( var i = 0; i < Mesh.VertexCount; i++ )
+            {
+                var position = Mesh.Vertices[i];
+                var normal = Mesh.Normals?[i] ?? Vector3.Zero;
+                var newPosition = Vector3.Zero;
+                var newNormal = Vector3.Zero;
+                for ( var j = 0; j < Mesh.VertexWeights[i].Weights.Length; j++ )
+                {
+                    var weight = Mesh.VertexWeights[i].Weights[j];
+                    if ( weight == 0 )
+                        continue;
+
+                    var boneIndex = Mesh.VertexWeights[i].Indices[j];
+                    TransformVertex( bones, nodes, position, normal, ref newPosition, ref newNormal, weight, boneIndex );
+                }
+
+                var transformedPosition = Vector3.Transform( newPosition, modelMatrixInv );
+                minimum = Vector3.Min( minimum, transformedPosition );
+                maximum = Vector3.Max( maximum, transformedPosition );
+            }
+
+            return new BoundingBox( minimum, maximum );
+        }
+
         private static void TransformVertex( List<Bone> bones, List<GLNode> nodes, Vector3 position, Vector3 normal, ref Vector3 newPosition, ref Vector3 newNormal, float weight, ushort boneIndex )
         {
             var bone = bones[boneIndex];

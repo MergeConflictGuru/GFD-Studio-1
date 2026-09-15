@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using GFDLibrary.Animations;
+using GFDLibrary.Common;
 using GFDLibrary.Materials;
 using GFDLibrary.Models;
 using OpenTK.Mathematics;
@@ -122,6 +123,78 @@ namespace GFDLibrary.Rendering.OpenGL
             }
         }
 
+        /// <summary>
+        /// Updates node and bone transforms for an animation pose without
+        /// rebuilding the GPU meshes. This keeps future-bound sampling CPU-only.
+        /// </summary>
+        public void UpdateAnimationPose( double animationTime )
+        {
+            if ( Animation != null )
+                AnimateNodes( animationTime );
+        }
+
+        /// <summary>
+        /// Calculates the visible model bounds for the current node and bone
+        /// transforms without allocating replacement OpenGL buffers.
+        /// </summary>
+        public bool TryGetWorldBounds( out BoundingBox bounds )
+        {
+            var minimum = new Vector3( float.PositiveInfinity );
+            var maximum = new Vector3( float.NegativeInfinity );
+            var hasBounds = false;
+
+            foreach ( var glNode in Nodes )
+            {
+                if ( !glNode.IsVisible )
+                    continue;
+
+                foreach ( var glMesh in glNode.Meshes )
+                {
+                    if ( !glMesh.IsVisible || glMesh.CalculateVertexBounds( ModelPack.Model.Bones, Nodes, glNode.WorldTransform ) is not { } meshBounds )
+                        continue;
+
+                    for ( var x = -1; x <= 1; x += 2 )
+                    for ( var y = -1; y <= 1; y += 2 )
+                    for ( var z = -1; z <= 1; z += 2 )
+                    {
+                        var localPoint = new Vector3(
+                            x < 0 ? meshBounds.Min.X : meshBounds.Max.X,
+                            y < 0 ? meshBounds.Min.Y : meshBounds.Max.Y,
+                            z < 0 ? meshBounds.Min.Z : meshBounds.Max.Z );
+                        var worldPoint = Vector3.Transform( localPoint, glNode.WorldTransform );
+                        if ( !float.IsFinite( worldPoint.X ) || !float.IsFinite( worldPoint.Y ) || !float.IsFinite( worldPoint.Z ) )
+                            continue;
+
+                        minimum = Vector3.Min( minimum, worldPoint );
+                        maximum = Vector3.Max( maximum, worldPoint );
+                        hasBounds = true;
+                    }
+                }
+            }
+
+            bounds = new BoundingBox( minimum, maximum );
+            return hasBounds;
+        }
+
+        private void RebuildAnimatedMeshes()
+        {
+            foreach ( var glNode in Nodes )
+            {
+                if ( !glNode.IsVisible )
+                    continue;
+
+                for ( var i = 0; i < glNode.Meshes.Count; i++ )
+                {
+                    var oldGlMesh = glNode.Meshes[i];
+                    if ( oldGlMesh.Mesh == null )
+                        continue;
+
+                    glNode.Meshes[i] = new GLMesh( oldGlMesh.Mesh, glNode.WorldTransform, ModelPack.Model.Bones, Nodes, Materials );
+                    oldGlMesh.Dispose();
+                }
+            }
+        }
+
         private GLShaderProgram GetTargetShader(ShaderRegistry shaderRegistry, GLMesh glMesh, Matrix4 view, Matrix4 projection, HashSet<ResourceType> shaderPrograms )
         {
             if ( typeof( GLMetaphorMaterial ).IsInstanceOfType( glMesh.Material )
@@ -146,7 +219,10 @@ namespace GFDLibrary.Rendering.OpenGL
         public void Draw( DrawContext context )
         {
             if ( Animation != null )
-                AnimateNodes( context.AnimationTime );
+            {
+                UpdateAnimationPose( context.AnimationTime );
+                RebuildAnimatedMeshes();
+            }
             context.ShaderRegistry.mDefaultShader.Use();
             context.ShaderRegistry.mDefaultShader.SetUniform( "uView", context.Camera.View );
             context.ShaderRegistry.mDefaultShader.SetUniform( "uProjection", context.Camera.Projection );
@@ -165,13 +241,6 @@ namespace GFDLibrary.Rendering.OpenGL
                 for ( var i = 0; i < glNode.Meshes.Count; i++ )
                 {
                     var glMesh = glNode.Meshes[i];
-
-                    if ( Animation != null && glMesh.Mesh != null )
-                    {
-                        var oldGlMesh = glMesh;
-                        glMesh = glNode.Meshes[i] = new GLMesh( oldGlMesh.Mesh, glNode.WorldTransform, ModelPack.Model.Bones, Nodes, Materials );
-                        oldGlMesh.Dispose();
-                    }
                     GLShaderProgram targetShader = GetTargetShader( context.ShaderRegistry, glMesh, context.Camera.View, context.Camera.Projection, shaderProgramsInUse );
                     if ( !glMesh.Material.IsMaterialTransparent() ) // If opaque
                     {

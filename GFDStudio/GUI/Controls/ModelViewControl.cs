@@ -77,6 +77,8 @@ namespace GFDStudio.GUI.Controls
 
         private const float GuideArrowFadeTime = 0.24f;
         private const float GuideArrowFocusMargin = 1.12f;
+        private const double GuideArrowFutureFrameSeconds = 3.0;
+        private const int GuideArrowFutureSampleCount = 90;
 
         public Animation Animation { get; private set; }
 
@@ -971,6 +973,85 @@ namespace GFDStudio.GUI.Controls
             extents = new Vector3( 1.0f );
         }
 
+        private void GetGuideArrowFramingBounds( out Vector3 center, out Vector3 minimum,
+                                                 out Vector3 maximum )
+        {
+            GetGuideArrowTargetBounds( out center, out var currentExtents, out var hasTargetGeometry );
+            minimum = center - currentExtents;
+            maximum = center + currentExtents;
+
+            if ( !hasTargetGeometry || !IsFinite( center ) || !IsFinite( currentExtents ) ||
+                 mModel?.Animation is not { Duration: > 0 } animation )
+                return;
+
+            var currentTime = Math.Clamp( mAnimationTime, 0.0, (double)animation.Duration );
+            var playbackSpeed = animation.Speed.GetValueOrDefault( 1.0f );
+            if ( !float.IsFinite( playbackSpeed ) )
+                playbackSpeed = 1.0f;
+            playbackSpeed = MathF.Max( 0.0f, playbackSpeed );
+            var futureAnimationDuration = GuideArrowFutureFrameSeconds * playbackSpeed;
+
+            try
+            {
+                // Evaluate the current pose through the same CPU path used for
+                // future poses. This avoids relying on a stale GPU mesh bound if
+                // the click happens between two paint callbacks.
+                mModel.UpdateAnimationPose( currentTime );
+                if ( mModel.TryGetWorldBounds( out var currentBounds ) &&
+                     IsFinite( currentBounds.Min ) && IsFinite( currentBounds.Max ) )
+                {
+                    var currentMinimum = currentBounds.Min.ToOpenTK();
+                    var currentMaximum = currentBounds.Max.ToOpenTK();
+                    if ( IsFinite( currentMinimum ) && IsFinite( currentMaximum ) )
+                    {
+                        minimum = currentMinimum;
+                        maximum = currentMaximum;
+                        center = ( minimum + maximum ) * 0.5f;
+                    }
+                }
+
+                if ( futureAnimationDuration > 0.0001 )
+                {
+                    for ( var sample = 1; sample <= GuideArrowFutureSampleCount; sample++ )
+                    {
+                        var sampleTime = currentTime + futureAnimationDuration * sample / GuideArrowFutureSampleCount;
+                        sampleTime %= animation.Duration;
+                        mModel.UpdateAnimationPose( sampleTime );
+
+                        if ( !mModel.TryGetWorldBounds( out var sampleBounds ) ||
+                             !IsFinite( sampleBounds.Min ) || !IsFinite( sampleBounds.Max ) )
+                            continue;
+
+                        var sampleMinimum = sampleBounds.Min.ToOpenTK();
+                        var sampleMaximum = sampleBounds.Max.ToOpenTK();
+                        if ( !IsFinite( sampleMinimum ) || !IsFinite( sampleMaximum ) )
+                            continue;
+
+                        minimum = new Vector3(
+                            MathF.Min( minimum.X, sampleMinimum.X ),
+                            MathF.Min( minimum.Y, sampleMinimum.Y ),
+                            MathF.Min( minimum.Z, sampleMinimum.Z ) );
+                        maximum = new Vector3(
+                            MathF.Max( maximum.X, sampleMaximum.X ),
+                            MathF.Max( maximum.Y, sampleMaximum.Y ),
+                            MathF.Max( maximum.Z, sampleMaximum.Z ) );
+                    }
+                }
+            }
+            catch ( Exception exception )
+            {
+                // Keep the click action usable for malformed animation data;
+                // the current-pose bounds are still a safe framing fallback.
+                Trace.TraceWarning( $"Could not pre-calculate guide-arrow framing bounds: {exception.Message}" );
+            }
+            finally
+            {
+                // Sampling only changes the in-memory pose. Restore the pose
+                // that is actually displayed before changing the camera.
+                mModel.UpdateAnimationPose( currentTime );
+            }
+        }
+
         private bool IsGuideArrowTargetInView( Vector3 center, Vector3 extents )
         {
             var minimumX = float.PositiveInfinity;
@@ -1189,8 +1270,9 @@ namespace GFDStudio.GUI.Controls
 
         private void FocusOnGuideArrow( Vector3 anchor )
         {
-            GetGuideArrowTargetBounds( out var target, out var targetExtents, out _ );
-            if ( !IsFinite( anchor ) || !IsFinite( target ) || !IsFinite( targetExtents ) )
+            GetGuideArrowFramingBounds( out var target, out var targetMinimum, out var targetMaximum );
+            if ( !IsFinite( anchor ) || !IsFinite( target ) ||
+                 !IsFinite( targetMinimum ) || !IsFinite( targetMaximum ) )
                 return;
 
             var forward = target - anchor;
@@ -1219,7 +1301,7 @@ namespace GFDStudio.GUI.Controls
                 ? MathF.Atan2( forward.X, -forward.Z )
                 : 0.0f;
             var rotation = Matrix4.CreateRotationY( yaw ) * Matrix4.CreateRotationX( pitch );
-            var distance = CalculateGuideArrowFitDistance( targetExtents, rotation );
+            var distance = CalculateGuideArrowFitDistance( target, targetMinimum, targetMaximum, rotation );
 
             // Keep the camera's normal orbit origin intact so Space still restores
             // the viewer's original framing. In the camera's transform stack the
@@ -1238,7 +1320,8 @@ namespace GFDStudio.GUI.Controls
             Invalidate();
         }
 
-        private float CalculateGuideArrowFitDistance( Vector3 targetExtents, Matrix4 rotation )
+        private float CalculateGuideArrowFitDistance( Vector3 targetCenter, Vector3 targetMinimum,
+                                                      Vector3 targetMaximum, Matrix4 rotation )
         {
             var verticalFov = MathHelper.DegreesToRadians( mCamera.FieldOfView ) * 0.5f;
             var tangentVertical = MathF.Max( 0.0001f, MathF.Tan( verticalFov ) );
@@ -1250,9 +1333,9 @@ namespace GFDStudio.GUI.Controls
             for ( var z = -1; z <= 1; z += 2 )
             {
                 var relative = new Vector4(
-                    targetExtents.X * x,
-                    targetExtents.Y * y,
-                    targetExtents.Z * z,
+                    ( x < 0 ? targetMinimum.X : targetMaximum.X ) - targetCenter.X,
+                    ( y < 0 ? targetMinimum.Y : targetMaximum.Y ) - targetCenter.Y,
+                    ( z < 0 ? targetMinimum.Z : targetMaximum.Z ) - targetCenter.Z,
                     0.0f );
                 var viewRelative = Vector4.TransformRow( relative, rotation );
 
