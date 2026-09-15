@@ -990,6 +990,8 @@ namespace GFDStudio.GUI.Controls
                 playbackSpeed = 1.0f;
             playbackSpeed = MathF.Max( 0.0f, playbackSpeed );
             var futureAnimationDuration = GuideArrowFutureFrameSeconds * playbackSpeed;
+            var averageCenter = center;
+            var centerSampleCount = 1;
 
             try
             {
@@ -1007,6 +1009,8 @@ namespace GFDStudio.GUI.Controls
                         minimum = currentMinimum;
                         maximum = currentMaximum;
                         center = ( minimum + maximum ) * 0.5f;
+                        averageCenter = center;
+                        centerSampleCount = 1;
                     }
                 }
 
@@ -1027,6 +1031,9 @@ namespace GFDStudio.GUI.Controls
                         if ( !IsFinite( sampleMinimum ) || !IsFinite( sampleMaximum ) )
                             continue;
 
+                        averageCenter += ( sampleMinimum + sampleMaximum ) * 0.5f;
+                        centerSampleCount++;
+
                         minimum = new Vector3(
                             MathF.Min( minimum.X, sampleMinimum.X ),
                             MathF.Min( minimum.Y, sampleMinimum.Y ),
@@ -1046,6 +1053,11 @@ namespace GFDStudio.GUI.Controls
             }
             finally
             {
+                // Center on the average body position across all valid poses,
+                // while the min/max bounds above still cover the full motion.
+                if ( centerSampleCount > 0 )
+                    center = averageCenter / centerSampleCount;
+
                 // Sampling only changes the in-memory pose. Restore the pose
                 // that is actually displayed before changing the camera.
                 mModel.UpdateAnimationPose( currentTime );
