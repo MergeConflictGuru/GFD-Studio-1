@@ -76,6 +76,7 @@ namespace GFDStudio.GUI.Controls
         private double mGuideArrowLastUpdateTime = -1.0;
 
         private const float GuideArrowFadeTime = 0.24f;
+        private const float GuideArrowFocusMargin = 1.12f;
 
         public Animation Animation { get; private set; }
 
@@ -1139,6 +1140,148 @@ namespace GFDStudio.GUI.Controls
             return t * t * ( 3.0f - 2.0f * t );
         }
 
+        private bool TryHitGuideArrow( Point location, out Vector3 anchor )
+        {
+            anchor = Vector3.Zero;
+            if ( !mIsModelLoaded || mGuideArrow == null || mShaderRegistry?.mGuideArrowShader == null ||
+                 Width <= 0 || Height <= 0 )
+                return false;
+
+            GetGuideArrowTargetBounds( out var target, out var targetExtents, out var hasTargetGeometry );
+            if ( !IsFinite( target ) )
+                return false;
+
+            var targetClip = ProjectGuideArrowPoint( target, out var targetInFrontOfCamera );
+            var targetInView = hasTargetGeometry && IsGuideArrowTargetInView( target, targetExtents );
+            var desiredOpacity = CalculateGuideArrowOpacity( targetClip, targetInFrontOfCamera, targetInView );
+            if ( desiredOpacity <= 0.001f && mGuideArrowOpacity <= 0.02f )
+                return false;
+
+            anchor = ResolveGuideArrowAnchor();
+            var anchorClip = ProjectGuideArrowPoint( anchor, out var anchorInFrontOfCamera );
+            if ( !anchorInFrontOfCamera || !IsFinite( anchorClip ) || anchorClip.W <= 0.0001f )
+                return false;
+
+            var normalizedX = anchorClip.X / anchorClip.W;
+            var normalizedY = anchorClip.Y / anchorClip.W;
+            if ( !float.IsFinite( normalizedX ) || !float.IsFinite( normalizedY ) )
+                return false;
+
+            var anchorX = ( normalizedX + 1.0f ) * 0.5f * Width;
+            var anchorY = ( 1.0f - normalizedY ) * 0.5f * Height;
+
+            // The arrow is deliberately large enough to be useful at the edge of
+            // the viewport. Derive the hit ellipse from the same depth-scaled size
+            // used for rendering, then add a small forgiving screen-space margin.
+            var viewAnchor = Vector4.TransformRow( new Vector4( anchor, 1.0f ), mCamera.View );
+            var viewDepth = MathF.Max( 0.25f, -viewAnchor.Z );
+            var scale = GetGuideArrowScale( anchor );
+            var radiusX = scale * 1.10f * MathF.Abs( mCamera.Projection.M11 ) / viewDepth * Width * 0.5f + 10.0f;
+            var radiusY = scale * 1.10f * MathF.Abs( mCamera.Projection.M22 ) / viewDepth * Height * 0.5f + 10.0f;
+            radiusX = MathF.Max( 24.0f, radiusX );
+            radiusY = MathF.Max( 24.0f, radiusY );
+
+            var deltaX = (float)location.X - anchorX;
+            var deltaY = (float)location.Y - anchorY;
+            return ( deltaX * deltaX ) / ( radiusX * radiusX ) +
+                   ( deltaY * deltaY ) / ( radiusY * radiusY ) <= 1.0f;
+        }
+
+        private void FocusOnGuideArrow( Vector3 anchor )
+        {
+            GetGuideArrowTargetBounds( out var target, out var targetExtents, out _ );
+            if ( !IsFinite( anchor ) || !IsFinite( target ) || !IsFinite( targetExtents ) )
+                return;
+
+            var forward = target - anchor;
+            if ( forward.LengthSquared < 0.0001f )
+            {
+                // A degenerate target/anchor pair can occur for an empty or
+                // origin-centred asset. Preserve the current viewing side in that
+                // case instead of inventing a random orbit direction.
+                var inverseView = Matrix4.Invert( mCamera.View );
+                var cameraForward = Vector4.TransformRow(
+                    new Vector4( 0.0f, 0.0f, -1.0f, 0.0f ), inverseView );
+                forward = new Vector3( cameraForward.X, cameraForward.Y, cameraForward.Z );
+                if ( !IsFinite( forward ) || forward.LengthSquared < 0.0001f )
+                    forward = -Vector3.UnitZ;
+            }
+            forward.Normalize();
+
+            // ModelRotation is a world-to-view rotation. These two angles map the
+            // clicked arrow-to-subject direction to camera -Z while keeping world
+            // Y as the up reference. With roll fixed at zero, the resulting view
+            // remains upright even when the guide points above or below the model.
+            var verticalLength = MathF.Sqrt( forward.Y * forward.Y + forward.Z * forward.Z );
+            var firstPitch = MathF.Atan2( -forward.Y, -forward.Z );
+            var firstYaw = MathF.Atan2( forward.X, verticalLength );
+            var secondPitch = MathF.Atan2( forward.Y, forward.Z );
+            var secondYaw = MathF.Atan2( forward.X, -verticalLength );
+            var firstRotation = Matrix4.CreateRotationX( firstPitch ) * Matrix4.CreateRotationY( firstYaw );
+            var secondRotation = Matrix4.CreateRotationX( secondPitch ) * Matrix4.CreateRotationY( secondYaw );
+
+            // There are two equivalent X/Y Euler solutions for a direction. Pick
+            // the one that keeps world-up on the upper side of the camera rather
+            // than accidentally turning the subject upside down when it is behind
+            // the arrow's anchor.
+            var firstUp = Vector4.TransformRow( new Vector4( 0.0f, 1.0f, 0.0f, 0.0f ), firstRotation );
+            var secondUp = Vector4.TransformRow( new Vector4( 0.0f, 1.0f, 0.0f, 0.0f ), secondRotation );
+            var useFirstRotation = firstUp.Y >= secondUp.Y;
+            var pitch = useFirstRotation ? firstPitch : secondPitch;
+            var yaw = useFirstRotation ? firstYaw : secondYaw;
+            var rotation = useFirstRotation ? firstRotation : secondRotation;
+            var distance = CalculateGuideArrowFitDistance( targetExtents, rotation );
+
+            // Keep the camera's normal orbit origin intact so Space still restores
+            // the viewer's original framing. ModelTranslation places the subject
+            // at the calculated view-space depth after the new upright rotation.
+            var viewTarget = new Vector3( 0.0f, 0.0f, -distance );
+            var baseTranslation = mCamera.Translation;
+            var translationBeforeBaseCamera = viewTarget - mCamera.Offset + baseTranslation;
+            var inverseRotation = Matrix4.Invert( rotation );
+            var modelPosition = Vector4.TransformRow(
+                new Vector4( translationBeforeBaseCamera, 1.0f ), inverseRotation );
+
+            mCamera.ModelRotation = new Vector3( pitch, yaw, 0.0f );
+            mCamera.ModelTranslation = new Vector3(
+                modelPosition.X - target.X,
+                modelPosition.Y - target.Y,
+                modelPosition.Z - target.Z );
+            Invalidate();
+        }
+
+        private float CalculateGuideArrowFitDistance( Vector3 targetExtents, Matrix4 rotation )
+        {
+            var verticalFov = MathHelper.DegreesToRadians( mCamera.FieldOfView ) * 0.5f;
+            var tangentVertical = MathF.Max( 0.0001f, MathF.Tan( verticalFov ) );
+            var tangentHorizontal = MathF.Max( 0.0001f, tangentVertical * MathF.Max( 0.1f, mCamera.AspectRatio ) );
+            var requiredDistance = mCamera.ZNear + 0.1f;
+
+            for ( var x = -1; x <= 1; x += 2 )
+            for ( var y = -1; y <= 1; y += 2 )
+            for ( var z = -1; z <= 1; z += 2 )
+            {
+                var relative = new Vector4(
+                    targetExtents.X * x,
+                    targetExtents.Y * y,
+                    targetExtents.Z * z,
+                    0.0f );
+                var viewRelative = Vector4.TransformRow( relative, rotation );
+
+                // The target centre will be at -distance on camera Z. Account for
+                // the corner's depth before solving the horizontal/vertical FOV
+                // inequalities, so elongated poses fit from oblique viewpoints too.
+                requiredDistance = MathF.Max( requiredDistance,
+                    viewRelative.Z + MathF.Abs( viewRelative.X ) / tangentHorizontal );
+                requiredDistance = MathF.Max( requiredDistance,
+                    viewRelative.Z + MathF.Abs( viewRelative.Y ) / tangentVertical );
+                requiredDistance = MathF.Max( requiredDistance, viewRelative.Z + mCamera.ZNear + 0.1f );
+            }
+
+            return MathF.Max( mCamera.ZNear + 0.5f,
+                requiredDistance * GuideArrowFocusMargin + 0.15f );
+        }
+
         private void DrawGrid( Matrix4 view, Matrix4 projection )
         {
             mShaderRegistry.mLineShader.Use();
@@ -1454,7 +1597,12 @@ namespace GFDStudio.GUI.Controls
         protected override void OnMouseUp( System.Windows.Forms.MouseEventArgs e )
         {
             if ( e.Button == MouseButtons.Left )
-                Raypick( e.X, e.Y );
+            {
+                if ( TryHitGuideArrow( e.Location, out var anchor ) )
+                    FocusOnGuideArrow( anchor );
+                else
+                    Raypick( e.X, e.Y );
+            }
         }
 
         protected override void OnMouseDown( System.Windows.Forms.MouseEventArgs e )
