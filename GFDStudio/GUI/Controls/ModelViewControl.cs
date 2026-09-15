@@ -1208,45 +1208,33 @@ namespace GFDStudio.GUI.Controls
             }
             forward.Normalize();
 
-            // ModelRotation is a world-to-view rotation. These two angles map the
-            // clicked arrow-to-subject direction to camera -Z while keeping world
-            // Y as the up reference. With roll fixed at zero, the resulting view
-            // remains upright even when the guide points above or below the model.
-            var verticalLength = MathF.Sqrt( forward.Y * forward.Y + forward.Z * forward.Z );
-            var firstPitch = MathF.Atan2( -forward.Y, -forward.Z );
-            var firstYaw = MathF.Atan2( forward.X, verticalLength );
-            var secondPitch = MathF.Atan2( forward.Y, forward.Z );
-            var secondYaw = MathF.Atan2( forward.X, -verticalLength );
-            var firstRotation = Matrix4.CreateRotationX( firstPitch ) * Matrix4.CreateRotationY( firstYaw );
-            var secondRotation = Matrix4.CreateRotationX( secondPitch ) * Matrix4.CreateRotationY( secondYaw );
-
-            // There are two equivalent X/Y Euler solutions for a direction. Pick
-            // the one that keeps world-up on the upper side of the camera rather
-            // than accidentally turning the subject upside down when it is behind
-            // the arrow's anchor.
-            var firstUp = Vector4.TransformRow( new Vector4( 0.0f, 1.0f, 0.0f, 0.0f ), firstRotation );
-            var secondUp = Vector4.TransformRow( new Vector4( 0.0f, 1.0f, 0.0f, 0.0f ), secondRotation );
-            var useFirstRotation = firstUp.Y >= secondUp.Y;
-            var pitch = useFirstRotation ? firstPitch : secondPitch;
-            var yaw = useFirstRotation ? firstYaw : secondYaw;
-            var rotation = useFirstRotation ? firstRotation : secondRotation;
+            // ModelRotation is applied as Y then X by GLPerspectiveCamera. These
+            // angles map the clicked arrow-to-subject direction to camera -Z while
+            // keeping world Y as the up reference. With roll fixed at zero, the
+            // resulting view remains upright even when the guide points above or
+            // below the model.
+            var horizontalLength = MathF.Sqrt( forward.X * forward.X + forward.Z * forward.Z );
+            var pitch = MathF.Atan2( -forward.Y, horizontalLength );
+            var yaw = horizontalLength > 0.0001f
+                ? MathF.Atan2( forward.X, -forward.Z )
+                : 0.0f;
+            var rotation = Matrix4.CreateRotationY( yaw ) * Matrix4.CreateRotationX( pitch );
             var distance = CalculateGuideArrowFitDistance( targetExtents, rotation );
 
             // Keep the camera's normal orbit origin intact so Space still restores
-            // the viewer's original framing. ModelTranslation places the subject
-            // at the calculated view-space depth after the new upright rotation.
+            // the viewer's original framing. In the camera's transform stack the
+            // offset is applied before rotation and ModelTranslation is applied
+            // after it, so solve the target position directly in view space.
             var viewTarget = new Vector3( 0.0f, 0.0f, -distance );
             var baseTranslation = mCamera.Translation;
-            var translationBeforeBaseCamera = viewTarget - mCamera.Offset + baseTranslation;
-            var inverseRotation = Matrix4.Invert( rotation );
-            var modelPosition = Vector4.TransformRow(
-                new Vector4( translationBeforeBaseCamera, 1.0f ), inverseRotation );
+            var targetViewBeforeTranslation = Vector4.TransformRow(
+                new Vector4( target + mCamera.Offset, 1.0f ), rotation );
 
             mCamera.ModelRotation = new Vector3( pitch, yaw, 0.0f );
             mCamera.ModelTranslation = new Vector3(
-                modelPosition.X - target.X,
-                modelPosition.Y - target.Y,
-                modelPosition.Z - target.Z );
+                viewTarget.X - targetViewBeforeTranslation.X + baseTranslation.X,
+                viewTarget.Y - targetViewBeforeTranslation.Y + baseTranslation.Y,
+                viewTarget.Z - targetViewBeforeTranslation.Z + baseTranslation.Z );
             Invalidate();
         }
 
