@@ -19,9 +19,6 @@ namespace GFDStudio.AnimationMatching.Stitching;
 /// </summary>
 public sealed class StitchedAnimation : IAnimationClip
 {
-    private const int HeadingLookaheadFrames = 3;
-    private const float MinimumHeadingLengthSquared = 1e-8f;
-
     private readonly IAnimationClip _source;
     private readonly IAnimationClip _candidate;
     private readonly int _sourceFrame;
@@ -167,57 +164,23 @@ public sealed class StitchedAnimation : IAnimationClip
         candidate.SampleGlobalPose(candidateFrame, candidatePose);
         var sourceRoot = sourcePose[source.Skeleton.RootBoneIndex];
         var candidateRoot = candidatePose[candidate.Skeleton.RootBoneIndex];
-        var yaw = CalculateYawAlignment(
-            source,
-            sourceFrame,
-            sourceRoot,
-            candidate,
-            candidateFrame,
-            candidateRoot);
+        var yaw = CalculateYawAlignment(sourceRoot, candidateRoot);
         var translation = sourceRoot.Position - Vector3.Transform(candidateRoot.Position, yaw);
         return (yaw, translation);
     }
 
     private static Quaternion CalculateYawAlignment(
-        IAnimationClip source,
-        int sourceFrame,
         BoneTransform sourceRoot,
-        IAnimationClip candidate,
-        int candidateFrame,
         BoneTransform candidateRoot)
     {
-        var sourceHeading = GetForwardRootHeading(source, sourceFrame);
-        var candidateHeading = GetForwardRootHeading(candidate, candidateFrame);
-        if (sourceHeading.HasValue && candidateHeading.HasValue)
-        {
-            var sourceYaw = MathF.Atan2(sourceHeading.Value.X, sourceHeading.Value.Z);
-            var candidateYaw = MathF.Atan2(candidateHeading.Value.X, candidateHeading.Value.Z);
-            return Quaternion.CreateFromAxisAngle(Vector3.UnitY, sourceYaw - candidateYaw);
-        }
-
-        // In-place clips do not provide a usable trajectory. Their root facing is the only
-        // stable heading available, so retain the old behavior for that case.
-        return Quaternion.Normalize(
-            PoseFeatureExtractor.ExtractYaw(sourceRoot.Rotation) *
-            Quaternion.Inverse(PoseFeatureExtractor.ExtractYaw(candidateRoot.Rotation)));
-    }
-
-    private static Vector3? GetForwardRootHeading(IAnimationClip clip, int frame)
-    {
-        var lastFrame = Math.Min(clip.FrameCount - 1, frame + HeadingLookaheadFrames);
-        if (lastFrame <= frame)
-            return null;
-
-        var firstPose = new BoneTransform[clip.Skeleton.BoneCount];
-        var lastPose = new BoneTransform[clip.Skeleton.BoneCount];
-        clip.SampleGlobalPose(frame, firstPose);
-        clip.SampleGlobalPose(lastFrame, lastPose);
-        var displacement = lastPose[clip.Skeleton.RootBoneIndex].Position -
-                           firstPose[clip.Skeleton.RootBoneIndex].Position;
-        displacement.Y = 0f;
-        return displacement.LengthSquared() >= MinimumHeadingLengthSquared
-            ? Vector3.Normalize(displacement)
-            : null;
+        // Align the character's actual facing, not its travel direction. Strafes, backpedals,
+        // pivots, and turn-in-place clips intentionally allow those two directions to differ.
+        // Wrapping the delta selects the shortest yaw and avoids a sign flip at +/- PI during
+        // the optional crossfade.
+        var sourceYaw = PoseFeatureExtractor.YawRadians(sourceRoot.Rotation);
+        var candidateYaw = PoseFeatureExtractor.YawRadians(candidateRoot.Rotation);
+        var delta = PoseFeatureExtractor.WrapAngle(sourceYaw - candidateYaw);
+        return Quaternion.CreateFromAxisAngle(Vector3.UnitY, delta);
     }
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
