@@ -130,16 +130,9 @@ namespace GFDStudio.GUI.Forms
             private readonly HashSet<string> mDefinitionHashes =
                 new HashSet<string>(StringComparer.Ordinal);
 
-            public bool Add(CharacterAnimationScanItem item, string root)
+            public bool Add(string definitionHash)
             {
-                if (item?.Entry == null || string.IsNullOrWhiteSpace(item.DefinitionHash))
-                    return false;
-
-                // Identical animation definitions are common within one game, but the same
-                // motion can also legitimately exist in P5D and P5R. Keep one copy per game
-                // namespace so the cross-game matcher can actually return both variants.
-                var gameScope = GetCharacterAnimationGameScope(root, item.Entry.PackPath);
-                return mDefinitionHashes.Add(gameScope + "|" + item.DefinitionHash);
+                return mDefinitionHashes.Add(definitionHash);
             }
         }
 
@@ -681,7 +674,7 @@ namespace GFDStudio.GUI.Forms
 
                         foreach (var item in scan.Items)
                         {
-                            if (animationDefinitions.Add(item, root))
+                            if (animationDefinitions.Add(item.DefinitionHash))
                                 batch.Add(CloneCharacterAnimationEntry(item, root));
                         }
 
@@ -1059,7 +1052,7 @@ namespace GFDStudio.GUI.Forms
 
                 foreach (var item in scan.Items)
                 {
-                    if (animationDefinitions.Add(item, root))
+                    if (animationDefinitions.Add(item.DefinitionHash))
                         result.Entries.Add(CloneCharacterAnimationEntry(item, root));
                 }
             }
@@ -2988,25 +2981,6 @@ namespace GFDStudio.GUI.Forms
             var parts = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
                                        StringSplitOptions.RemoveEmptyEntries);
             return parts.Length > 1 ? parts[0] : null;
-        }
-
-        private static string GetCharacterAnimationGameScope(string root, string packPath)
-        {
-            if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(packPath))
-                return string.Empty;
-
-            try
-            {
-                var relative = Path.GetRelativePath(root, packPath);
-                var parts = relative.Split(
-                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-                    StringSplitOptions.RemoveEmptyEntries);
-                return parts.Length > 1 ? parts[0].ToUpperInvariant() : string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
         }
 
         private static string ExtractCharacterModelKey(string path)
