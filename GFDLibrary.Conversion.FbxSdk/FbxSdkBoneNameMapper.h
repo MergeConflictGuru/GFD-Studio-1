@@ -71,7 +71,7 @@ namespace GFDLibrary::Conversion::FbxSdk
             if (EqualsRole(limbRole, "toe"))      return "ball" + sideSuffix;
 
             auto finger = MapFinger(limbRole, sideSuffix);
-            return finger ?? node->Name;
+            return finger != nullptr ? finger : node->Name;
         }
 
     private:
