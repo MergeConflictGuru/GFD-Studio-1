@@ -832,17 +832,37 @@ namespace GFDLibrary::Conversion::FbxSdk
 		fbxGlobalSettings.SetAxisSystem(FbxAxisSystem::OpenGL);
 		fbxGlobalSettings.SetSystemUnit(FbxSystemUnit::m);
 
-		// Export textures
+		// Export textures as real PNG files instead of blindly renaming the
+		// game-native payload to .dds. P5D model packs commonly contain GNF
+		// textures; writing those bytes with a .dds extension produces files that
+		// Blender cannot load, so most imported materials appear white.
 		System::IO::Directory::CreateDirectory(mTextureBaseDirectoryPath);
 		auto textureNameToExportTextureNameLookup = gcnew Dictionary<String^, String^>();
+		auto textureNameToExportRelativePathLookup = gcnew Dictionary<String^, String^>();
 		for each (auto texture in modelPack->Textures)
 		{
-			// TODO: handle other texture types (TGA, GTF, etc.)
-			auto texturePath = System::IO::Path::Combine(mTextureBaseDirectoryPath, texture.Key);
-			if (!System::IO::Path::GetExtension(texturePath)->Equals(".dds", System::StringComparison::OrdinalIgnoreCase))
-				texturePath += ".dds";
-			System::IO::File::WriteAllBytes(texturePath, texture.Value->Data);
+			auto relativeTexturePath = System::IO::Path::ChangeExtension(texture.Key, ".png");
+			auto texturePath = System::IO::Path::Combine(mTextureBaseDirectoryPath, relativeTexturePath);
+			auto textureDirectory = System::IO::Path::GetDirectoryName(texturePath);
+			if (!System::String::IsNullOrEmpty(textureDirectory))
+				System::IO::Directory::CreateDirectory(textureDirectory);
+
+			auto bitmap = TextureDecoder::Decode(texture.Value);
+			try
+			{
+				bitmap->Save(texturePath, System::Drawing::Imaging::ImageFormat::Png);
+			}
+			finally
+			{
+				delete bitmap;
+			}
+
 			textureNameToExportTextureNameLookup->Add(texture.Key, texturePath);
+			textureNameToExportRelativePathLookup->Add(
+				texture.Key,
+				System::IO::Path::Combine(
+					System::IO::Path::GetFileName(mTextureBaseDirectoryPath),
+					relativeTexturePath));
 		}
 
 		// Create materials
@@ -853,29 +873,34 @@ namespace GFDLibrary::Conversion::FbxSdk
 
 			if (material->DiffuseMap)
 			{
-				auto texturePath = textureNameToExportTextureNameLookup[material->DiffuseMap->Name];
-				
-				// Create & connect file texture to material diffuse
-				IntPtr fbxTexturePtr;
-				FbxFileTexture* fbxTexture;
-				if (!mTextureNameToFbxFileTexture->TryGetValue(texturePath, fbxTexturePtr))
+				auto textureName = material->DiffuseMap->Name;
+				String^ texturePath;
+				String^ relativeTexturePath;
+				if (textureNameToExportTextureNameLookup->TryGetValue(textureName, texturePath) &&
+					textureNameToExportRelativePathLookup->TryGetValue(textureName, relativeTexturePath))
 				{
-					fbxTexture = FbxFileTexture::Create(mFbxScene, "Bitmaptexture");
-					fbxTexture->SetFileName(Utf8String(texturePath).ToCStr());
+					// Create & connect file texture to material diffuse.
+					IntPtr fbxTexturePtr;
+					FbxFileTexture* fbxTexture;
+					if (!mTextureNameToFbxFileTexture->TryGetValue(texturePath, fbxTexturePtr))
+					{
+						fbxTexture = FbxFileTexture::Create(mFbxScene, "Bitmaptexture");
+						fbxTexture->SetFileName(Utf8String(texturePath).ToCStr());
+						fbxTexture->SetRelativeFileName(Utf8String(relativeTexturePath).ToCStr());
+						fbxTexture->TextureUse.Set(FbxTexture::eStandard);
+						fbxTexture->MappingType.Set(FbxTexture::eUV);
+						fbxTexture->UVSet.Set("UVChannel_1");
+						fbxTexture->UseMaterial.Set(true);
 
-					// 3ds Max sets these by default
-					fbxTexture->UVSet.Set("UVChannel_1");
-					fbxTexture->UseMaterial.Set(true);
+						mTextureNameToFbxFileTexture[texturePath] = (IntPtr)fbxTexture;
+					}
+					else
+					{
+						fbxTexture = (FbxFileTexture*)fbxTexturePtr.ToPointer();
+					}
 
-					mTextureNameToFbxFileTexture[texturePath] = (IntPtr)fbxTexture;
+					fbxMaterial->Diffuse.ConnectSrcObject(fbxTexture);
 				}
-				else
-				{
-					fbxTexture = (FbxFileTexture*)fbxTexturePtr.ToPointer();
-				}
-
-
-				fbxMaterial->Diffuse.ConnectSrcObject(fbxTexture);
 			}
 
 			mMaterialNameToFbxSurfaceMaterial[material->Name] = (IntPtr)fbxMaterial;
