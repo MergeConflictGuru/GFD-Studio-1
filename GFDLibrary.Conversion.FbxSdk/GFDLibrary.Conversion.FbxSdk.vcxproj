@@ -138,6 +138,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="FbxSdkBoneNameMapper.h" />
     <ClInclude Include="FbxSdkModelPackExporter.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Resource.h" />
