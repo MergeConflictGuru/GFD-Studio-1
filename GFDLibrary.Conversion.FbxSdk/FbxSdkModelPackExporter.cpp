@@ -397,18 +397,17 @@ namespace GFDLibrary::Conversion::FbxSdk
 	static FbxAMatrix ConvertToFbxAMatrix(Matrix4x4& m)
 	{
 		typedef float Matrix4x4Data[4][4];
-		auto data = (Matrix4x4Data*)&m;
 
-		// System.Numerics.Matrix4x4 uses row-vector transforms (translation in
-		// M41..M43), whereas FbxAMatrix uses the conventional FBX column-vector
-		// layout. A raw element-for-element copy therefore writes transposed bind
-		// transforms. Blender can partially hide this, but strict importers such as
-		// Cascadeur interpret the skin clusters with badly warped geometry.
+		// FbxAMatrix stores affine translation in the same row used by
+		// System.Numerics (M41..M43). Do not transpose this memory layout.
+		// Transposing moves translation into the affine matrix's last column,
+		// which FbxAMatrix discards/normalizes and leaves skin-cluster bind
+		// transforms with zero translation.
 		FbxAMatrix fm;
 		for (int y = 0; y < 4; y++)
 		{
 			for (int x = 0; x < 4; x++)
-				fm[y][x] = (*data)[x][y];
+				fm[y][x] = (*(Matrix4x4Data*)&m)[y][x];
 		}
 
 		return fm;
