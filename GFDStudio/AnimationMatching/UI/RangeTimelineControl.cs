@@ -24,8 +24,30 @@ public sealed class RangeTimelineControl : Control
     public int FrameCount { get => _frameCount; set { _frameCount = Math.Max(1, value); ClearSelection(); Invalidate(); } }
     public (int start, int end)? Selection => _selectionStart < 0 ? null : (Math.Min(_selectionStart, _selectionEnd), Math.Max(_selectionStart, _selectionEnd));
     public int TransitionFrame { get => _transitionFrame; set { _transitionFrame = value; Invalidate(); } }
+    public event EventHandler SelectionChanged;
 
-    public void ClearSelection() { _selectionStart = _selectionEnd = -1; Invalidate(); }
+    public void ClearSelection()
+    {
+        _selectionStart = _selectionEnd = -1;
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void SetSelection((int start, int end)? selection)
+    {
+        if (selection is { } value)
+        {
+            _selectionStart = Math.Clamp(value.start, 0, _frameCount - 1);
+            _selectionEnd = Math.Clamp(value.end, 0, _frameCount - 1);
+        }
+        else
+        {
+            _selectionStart = _selectionEnd = -1;
+        }
+
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
@@ -53,6 +75,7 @@ public sealed class RangeTimelineControl : Control
         _dragStart = -1;
         // A click selects one explicit frame. Right click clears and restores implicit last-frame mode.
         Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnMouseClick(MouseEventArgs e)

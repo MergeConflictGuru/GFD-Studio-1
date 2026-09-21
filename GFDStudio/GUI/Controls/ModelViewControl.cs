@@ -75,6 +75,8 @@ namespace GFDStudio.GUI.Controls
         private Timer mUpdateTimer;
         private AnimationPlaybackState mAnimationPlayback = AnimationPlaybackState.Stopped;
         private double mAnimationTime;
+        private double? mAnimationLoopStart;
+        private double? mAnimationLoopEnd;
         private float mGuideArrowOpacity;
         private double mGuideArrowLastUpdateTime = -1.0;
 
@@ -89,6 +91,9 @@ namespace GFDStudio.GUI.Controls
 
         public bool IsAnimationLoaded => Animation != null;
 
+        public double? AnimationLoopStart => mAnimationLoopStart;
+        public double? AnimationLoopEnd => mAnimationLoopEnd;
+
         public AnimationPlaybackState AnimationPlayback
         {
             get => mAnimationPlayback;
@@ -102,7 +107,7 @@ namespace GFDStudio.GUI.Controls
                 switch ( AnimationPlayback )
                 {
                     case AnimationPlaybackState.Stopped:
-                        AnimationTime = 0;
+                        AnimationTime = mAnimationLoopStart ?? 0;
                         mModel?.UnloadAnimation();
                         ResetAnimationClock();
                         break;
@@ -110,6 +115,12 @@ namespace GFDStudio.GUI.Controls
                         ResetAnimationClock();
                         break;
                     case AnimationPlaybackState.Playing:
+                        if (mAnimationLoopStart.HasValue &&
+                            (!double.IsFinite(AnimationTime) || AnimationTime < mAnimationLoopStart.Value ||
+                             AnimationTime >= mAnimationLoopEnd.Value))
+                        {
+                            AnimationTime = mAnimationLoopStart.Value;
+                        }
                         ResetAnimationClock();
                         if ( mModel?.Animation == null && IsAnimationLoaded )
                         {
@@ -519,6 +530,7 @@ namespace GFDStudio.GUI.Controls
 
         public void LoadAnimation( Animation animation, bool reset = true )
         {
+            ClearAnimationLoop();
             Animation = animation;
             AnimationOverlay = null;
             mModel?.LoadAnimation( Animation );
@@ -709,7 +721,10 @@ namespace GFDStudio.GUI.Controls
             if ( AnimationPlayback == AnimationPlaybackState.Playing )
             {
                 var nextAnimationTime = AnimationTime + ( deltaTime * Animation.Speed.GetValueOrDefault( 1f ) );
-                AnimationTime = nextAnimationTime >= Animation.Duration ? 0 : nextAnimationTime;
+                if (mAnimationLoopStart.HasValue && nextAnimationTime >= mAnimationLoopEnd.Value)
+                    AnimationTime = mAnimationLoopStart.Value;
+                else
+                    AnimationTime = nextAnimationTime >= Animation.Duration ? 0 : nextAnimationTime;
             }
 
             action();
@@ -1065,6 +1080,38 @@ namespace GFDStudio.GUI.Controls
                 // that is actually displayed before changing the camera.
                 mModel.UpdateAnimationPose( currentTime );
             }
+        }
+
+        public void SetAnimationLoop(double? start, double? end)
+        {
+            if (Animation == null || !start.HasValue || !end.HasValue ||
+                !double.IsFinite(start.Value) || !double.IsFinite(end.Value))
+            {
+                ClearAnimationLoop();
+                return;
+            }
+
+            var duration = Math.Max(0d, (double)Animation.Duration);
+            var loopStart = Math.Clamp(start.Value, 0d, duration);
+            var loopEnd = Math.Clamp(end.Value, loopStart, duration);
+            if (loopEnd <= loopStart)
+            {
+                ClearAnimationLoop();
+                return;
+            }
+
+            mAnimationLoopStart = loopStart;
+            mAnimationLoopEnd = loopEnd;
+            if (!double.IsFinite(AnimationTime) || AnimationTime < loopStart || AnimationTime >= loopEnd)
+                AnimationTime = loopStart;
+            else
+                Invalidate();
+        }
+
+        public void ClearAnimationLoop()
+        {
+            mAnimationLoopStart = null;
+            mAnimationLoopEnd = null;
         }
 
         private bool IsGuideArrowTargetInView( Vector3 center, Vector3 extents )

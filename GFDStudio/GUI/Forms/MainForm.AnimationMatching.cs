@@ -45,6 +45,7 @@ namespace GFDStudio.GUI.Forms
                 Dock = DockStyle.Fill,
                 Margin = Padding.Empty
             };
+            mAnimationMatchTimeline.SelectionChanged += HandleAnimationMatchTimelineSelectionChanged;
 
             var timelineStack = new TableLayoutPanel
             {
@@ -332,6 +333,7 @@ namespace GFDStudio.GUI.Forms
 
                 mAnimationMatchTimeline.FrameCount = clip.FrameCount;
                 mAnimationMatchTimeline.TransitionFrame = transitionFrame;
+                ConfigureAnimationMatchPreviewLoop(clip, transitionFrame);
                 mAnimationMatchView.SetStatus("Stitched preview");
             }
             catch (Exception ex)
@@ -339,6 +341,35 @@ namespace GFDStudio.GUI.Forms
                 if (!IsDisposed && generation == mAnimationMatchPreviewGeneration)
                     mAnimationMatchView.SetStatus("Preview failed: " + ex.Message);
             }
+        }
+
+        private void HandleAnimationMatchTimelineSelectionChanged(object sender, EventArgs e)
+        {
+            var selection = mAnimationMatchTimeline?.Selection;
+            if (selection is not { } range)
+            {
+                ModelViewControl.Instance.ClearAnimationLoop();
+                return;
+            }
+
+            var frameRate = AnimationMatchingFramesPerSecond;
+            var loopStart = range.start / (double)frameRate;
+            var loopEnd = (range.end + 1) / (double)frameRate;
+            ModelViewControl.Instance.SetAnimationLoop(loopStart, loopEnd);
+        }
+
+        private void ConfigureAnimationMatchPreviewLoop(IAnimationClip clip, int transitionFrame)
+        {
+            if (clip == null || clip.FrameCount <= 0)
+                return;
+
+            var sourceFrame = Math.Clamp(transitionFrame, 0, clip.FrameCount - 1);
+            var sourceWindowFrames = Math.Max(1, (int)Math.Ceiling(2.5f * clip.FramesPerSecond));
+            var candidateWindowFrames = Math.Max(1, (int)Math.Ceiling(5f * clip.FramesPerSecond));
+            var startFrame = Math.Max(0, sourceFrame - sourceWindowFrames + 1);
+            var endFrame = Math.Min(clip.FrameCount - 1, sourceFrame + candidateWindowFrames);
+
+            mAnimationMatchTimeline.SetSelection((startFrame, endFrame));
         }
 
         async Task<IReadOnlyList<Image>> IGfdAnimationMatchingHost.RenderCandidateThumbnailAsync(
