@@ -775,8 +775,16 @@ namespace GFDStudio.GUI.Forms
 
             mLastAnimationTime = e;
             var value = e * 1000;
-            mIgnoreNextTrackBarChange = true;
-            mAnimationTrackBar.Value = ( int ) value;
+            var trackBarValue = ( int ) value;
+            if ( mAnimationTrackBar.Value != trackBarValue )
+            {
+                mIgnoreNextTrackBarChange = true;
+                mAnimationTrackBar.Value = trackBarValue;
+            }
+            else
+            {
+                mIgnoreNextTrackBarChange = false;
+            }
         }
 
 
@@ -809,6 +817,29 @@ namespace GFDStudio.GUI.Forms
             {
                 mIgnoreNextTrackBarChange = false;
             }
+        }
+
+        private void HandleTrackbarMouseDown( object sender, MouseEventArgs e )
+        {
+            if ( e.Button != MouseButtons.Left || !ModelViewControl.Instance.IsAnimationLoaded )
+                return;
+
+            var trackBar = ( TrackBar )sender;
+            var width = Math.Max( 1, trackBar.ClientSize.Width - 1 );
+            var position = Math.Clamp( e.X, 0, width ) / ( double )width;
+            var range = trackBar.Maximum - trackBar.Minimum;
+            var targetTime = Math.Max( 0d, ( trackBar.Minimum + position * range ) / 1000d );
+            if ( ModelViewControl.Instance.AnimationLoopStart is double loopStart &&
+                 ModelViewControl.Instance.AnimationLoopEnd is double loopEnd )
+            {
+                targetTime = Math.Clamp( targetTime, loopStart, loopEnd );
+            }
+
+            // A click on the channel should jump directly to that point in the animation.
+            mIgnoreNextTrackBarChange = false;
+            trackBar.Value = Math.Clamp( trackBar.Minimum + ( int )Math.Round( targetTime * 1000d ),
+                                         trackBar.Minimum,
+                                         trackBar.Maximum );
         }
 
         private void HandleAnimationTreeViewAfterSelect( object sender, TreeViewEventArgs e )

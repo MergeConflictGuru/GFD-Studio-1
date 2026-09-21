@@ -104,6 +104,7 @@ namespace GFDStudio.GUI.Forms
             ModelViewControl.Instance.AnimationLoaded += HandleModelAnimationLoaded;
             ModelViewControl.Instance.AnimationPlaybackStateChanged += HandleModelAnimationPlaybackStateChanged;
             ModelViewControl.Instance.AnimationTimeChanged += HandleModelAnimationTimeChanged;
+            mAnimationTrackBar.MouseDown += HandleTrackbarMouseDown;
             mAnimationTrackBar.ValueChanged += HandleTrackbarValueChanged;
             mAnimationPlaybackButton.Click += HandleAnimationPlaybackButtonClick;
         }
