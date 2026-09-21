@@ -888,8 +888,8 @@ namespace GFDLibrary::Conversion::FbxSdk
 						fbxTexture = FbxFileTexture::Create(mFbxScene, "Bitmaptexture");
 						fbxTexture->SetFileName(Utf8String(texturePath).ToCStr());
 						fbxTexture->SetRelativeFileName(Utf8String(relativeTexturePath).ToCStr());
-						fbxTexture->TextureUse.Set(FbxTexture::eStandard);
-						fbxTexture->MappingType.Set(FbxTexture::eUV);
+						fbxTexture->SetTextureUse(FbxTexture::eStandard);
+						fbxTexture->SetMappingType(FbxTexture::eUV);
 						fbxTexture->UVSet.Set("UVChannel_1");
 						fbxTexture->UseMaterial.Set(true);
 
