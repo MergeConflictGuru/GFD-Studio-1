@@ -525,6 +525,7 @@ namespace GFDLibrary::Conversion::FbxSdk
 						fbxCluster = FbxCluster::Create(mFbxScene, "");
 						fbxCluster->SetLink(fbxNode);
 						fbxCluster->SetLinkMode(FbxCluster::ELinkMode::eNormalize);
+						fbxCluster->SetTransformMatrix(FbxAMatrix());
 
 						// NOTE: DO NOT USE 'EvaluateGlobalTransform', IT IS BROKEN
 						// AND DOES NOT ALWAYS RETURN THE CORRECT MATRIX!!!!
@@ -556,6 +557,7 @@ namespace GFDLibrary::Conversion::FbxSdk
 				fbxCluster = FbxCluster::Create(mFbxScene, "");
 				fbxCluster->SetLink(fbxNode);
 				fbxCluster->SetLinkMode(FbxCluster::ELinkMode::eNormalize);
+				fbxCluster->SetTransformMatrix(FbxAMatrix());
 
 				// NOTE: DO NOT USE 'EvaluateGlobalTransform', IT IS BROKEN
 				// AND DOES NOT ALWAYS RETURN THE CORRECT MATRIX!!!!
