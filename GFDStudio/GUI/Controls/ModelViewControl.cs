@@ -38,6 +38,9 @@ namespace GFDStudio.GUI.Controls
         private Point mLastMouseLocation;
         private Vector3 mRaypickStart;
         private Vector3 mRaypickEnd;
+        private bool mOrbitAroundModel;
+        private Vector3 mOrbitPivot;
+        private Vector3 mOrbitPivotView;
 
         // Grid
         private int mGridVertexArrayID;
@@ -1552,43 +1555,122 @@ namespace GFDStudio.GUI.Controls
             return true;
         }
 
+        private bool TryCreateMouseRay( int mouseX, int mouseY, out Vector3 rayOrigin, out Vector3 rayDirection )
+        {
+            rayOrigin = Vector3.Zero;
+            rayDirection = Vector3.Zero;
+            if ( mCamera == null || ClientRectangle.Width <= 0 || ClientRectangle.Height <= 0 )
+                return false;
+
+            var x = ( 2.0f * mouseX ) / ClientRectangle.Width - 1.0f;
+            var y = 1.0f - ( 2.0f * mouseY ) / ClientRectangle.Height;
+            var rayNDC = new Vector4( x, y, -1.0f, 1.0f );
+            var invProjectionMatrix = Matrix4.Invert( mCamera.Projection );
+            var invViewMatrix = Matrix4.Invert( mCamera.View );
+            var rayCamera = invProjectionMatrix * rayNDC;
+            rayCamera.Z = -1.0f;
+            rayCamera.W = 0.0f;
+
+            var rayWorld4 = invViewMatrix * rayCamera;
+            rayDirection = new Vector3( rayWorld4.X, rayWorld4.Y, rayWorld4.Z );
+            if ( !IsFinite( rayDirection ) || rayDirection.LengthSquared < 0.0001f )
+                return false;
+            rayDirection.Normalize();
+            rayOrigin = new Vector3( invViewMatrix.M41, invViewMatrix.M42, invViewMatrix.M43 );
+            return IsFinite( rayOrigin );
+        }
+
+        private bool TryGetModelOrbitPivot( int mouseX, int mouseY, out Vector3 pivot )
+        {
+            pivot = Vector3.Zero;
+            if ( !mIsModelLoaded || mModel == null || !TryCreateMouseRay( mouseX, mouseY, out var rayOrigin, out var rayDirection ) ||
+                 !mModel.TryGetWorldBounds( out var bounds ) )
+                return false;
+
+            var boxMin = bounds.Min.ToOpenTK();
+            var boxMax = bounds.Max.ToOpenTK();
+            if ( !IsFinite( boxMin ) || !IsFinite( boxMax ) ||
+                 !RayIntersectsBox( rayOrigin, rayDirection, boxMin, boxMax, out _ ) )
+                return false;
+
+            pivot = ( boxMin + boxMax ) * 0.5f;
+            return IsFinite( pivot );
+        }
+
+        private Matrix4 GetModelOrbitRotation()
+        {
+            return Matrix4.CreateRotationY( mCamera.ModelRotation.Y ) *
+                   Matrix4.CreateRotationX( mCamera.ModelRotation.X ) *
+                   Matrix4.CreateRotationZ( mCamera.ModelRotation.Z );
+        }
+
+        private void BeginModelOrbit( Vector3 pivot )
+        {
+            mOrbitAroundModel = true;
+            mOrbitPivot = pivot;
+
+            var transformedPivot = Vector4.TransformRow(
+                new Vector4( pivot + mCamera.Offset, 1.0f ),
+                GetModelOrbitRotation() );
+            mOrbitPivotView = new Vector3(
+                transformedPivot.X + mCamera.ModelTranslation.X - mCamera.Translation.X,
+                transformedPivot.Y + mCamera.ModelTranslation.Y - mCamera.Translation.Y,
+                transformedPivot.Z + mCamera.ModelTranslation.Z - mCamera.Translation.Z );
+        }
+
+        private void KeepModelOrbitPivotInPlace()
+        {
+            if ( !mOrbitAroundModel )
+                return;
+
+            var transformedPivot = Vector4.TransformRow(
+                new Vector4( mOrbitPivot + mCamera.Offset, 1.0f ),
+                GetModelOrbitRotation() );
+            mCamera.ModelTranslation = new Vector3(
+                mOrbitPivotView.X - transformedPivot.X + mCamera.Translation.X,
+                mOrbitPivotView.Y - transformedPivot.Y + mCamera.Translation.Y,
+                mOrbitPivotView.Z - transformedPivot.Z + mCamera.Translation.Z );
+        }
+
+        private void FocusModelFromDoubleClick()
+        {
+            if ( !mIsModelLoaded )
+                return;
+
+            // This deliberately calls the same focus path as the visible guide arrow. The model
+            // can be double-clicked even while the arrow is hidden because the character is already
+            // inside the viewport.
+            FocusOnGuideArrow( ResolveGuideArrowAnchor() );
+        }
+
         public bool RayIntersectsBox( Vector3 rayOrigin, Vector3 rayDir, Vector3 boxMin, Vector3 boxMax, out float distance )
         {
-            float tMin = ( boxMin.X - rayOrigin.X ) / rayDir.X;
-            float tMax = ( boxMax.X - rayOrigin.X ) / rayDir.X;
+            var tMin = 0.0f;
+            var tMax = float.PositiveInfinity;
 
-            if ( tMin > tMax ) (tMin, tMax) = (tMax, tMin);
-
-            float tyMin = ( boxMin.Y - rayOrigin.Y ) / rayDir.Y;
-            float tyMax = ( boxMax.Y - rayOrigin.Y ) / rayDir.Y;
-
-            if ( tyMin > tyMax ) (tyMin, tyMax) = (tyMax, tyMin);
-
-            if ( ( tMin > tyMax ) || ( tyMin > tMax ) )
+            bool UpdateInterval( float origin, float direction, float minimum, float maximum )
             {
-                distance = 0;
-                return false;
+                if ( MathF.Abs( direction ) < 0.000001f )
+                    return origin >= minimum && origin <= maximum;
+
+                var near = ( minimum - origin ) / direction;
+                var far = ( maximum - origin ) / direction;
+                if ( near > far ) (near, far) = (far, near);
+                tMin = MathF.Max( tMin, near );
+                tMax = MathF.Min( tMax, far );
+                return tMin <= tMax;
             }
 
-            if ( tyMin > tMin ) tMin = tyMin;
-            if ( tyMax < tMax ) tMax = tyMax;
-
-            float tzMin = ( boxMin.Z - rayOrigin.Z ) / rayDir.Z;
-            float tzMax = ( boxMax.Z - rayOrigin.Z ) / rayDir.Z;
-
-            if ( tzMin > tzMax ) (tzMin, tzMax) = (tzMax, tzMin);
-
-            if ( ( tMin > tzMax ) || ( tzMin > tMax ) )
+            if ( !UpdateInterval( rayOrigin.X, rayDir.X, boxMin.X, boxMax.X ) ||
+                 !UpdateInterval( rayOrigin.Y, rayDir.Y, boxMin.Y, boxMax.Y ) ||
+                 !UpdateInterval( rayOrigin.Z, rayDir.Z, boxMin.Z, boxMax.Z ) )
             {
-                distance = 0;
+                distance = 0.0f;
                 return false;
             }
-
-            if ( tzMin > tMin ) tMin = tzMin;
-            if ( tzMax < tMax ) tMax = tzMax;
 
             distance = tMin;
-            return tMin >= 0;
+            return float.IsFinite( distance ) && tMax >= 0.0f;
         }
 
         private bool Raypick(int mouseX, int mouseY)
@@ -1685,13 +1767,31 @@ namespace GFDStudio.GUI.Controls
                     FocusOnGuideArrow( anchor );
                 else
                     Raypick( e.X, e.Y );
+
+                mOrbitAroundModel = false;
             }
         }
 
         protected override void OnMouseDown( System.Windows.Forms.MouseEventArgs e )
         {
             mLastMouseLocation = e.Location;
+            mOrbitAroundModel = false;
+            if ( e.Button == MouseButtons.Left && TryGetModelOrbitPivot( e.X, e.Y, out var pivot ) )
+                BeginModelOrbit( pivot );
             base.OnMouseDown( e );
+        }
+
+        protected override void OnMouseDoubleClick( System.Windows.Forms.MouseEventArgs e )
+        {
+            if ( e.Button == MouseButtons.Left && TryGetModelOrbitPivot( e.X, e.Y, out _ ) )
+            {
+                FocusModelFromDoubleClick();
+                mOrbitAroundModel = false;
+                Invalidate();
+                return;
+            }
+
+            base.OnMouseDoubleClick( e );
         }
 
         protected override void OnMouseMove( System.Windows.Forms.MouseEventArgs e )
@@ -1715,11 +1815,15 @@ namespace GFDStudio.GUI.Controls
                 }
                 else if ( left )
                 {
+                    if ( !mOrbitAroundModel && TryGetModelOrbitPivot( e.X, e.Y, out var pivot ) )
+                        BeginModelOrbit( pivot );
+
                     float multiplier = CalculateMultiplier();
                     mCamera.ModelRotation = new Vector3(
                         mCamera.ModelRotation.X + locationDelta.Y * 0.01f * multiplier,
                         mCamera.ModelRotation.Y + locationDelta.X * 0.01f * multiplier,
                         mCamera.ModelRotation.Z );
+                    KeepModelOrbitPivotInPlace();
                 }
                 else if ( middle )
                 {
