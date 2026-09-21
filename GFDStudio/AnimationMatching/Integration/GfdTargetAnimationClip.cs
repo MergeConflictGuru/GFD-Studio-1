@@ -55,7 +55,7 @@ public sealed class GfdTargetAnimationClip : IAnimationClip
     public string DisplayName { get; }
     public SkeletonDefinition Skeleton => _skeleton;
     public float FramesPerSecond { get; }
-    public int FrameCount => Math.Max(1, (int)MathF.Ceiling(_animation.Duration * FramesPerSecond) + 1);
+    public int FrameCount => GfdAnimationFrameCount.Calculate(_animation, FramesPerSecond, DisplayName);
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
     {
