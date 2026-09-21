@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using GFDStudio.AnimationMatching.Core;
@@ -10,6 +11,11 @@ namespace GFDStudio.AnimationMatching.Index;
 
 public sealed class AnimationSearchDatabase : IDisposable
 {
+    // The descriptor array is only an intermediate build buffer. Keep it bounded so a very large
+    // corpus automatically falls back to a coarser temporal stride instead of overflowing the
+    // int-backed CLR array length (or exhausting the process before the mapped cache is written).
+    private const long DescriptorBuildBudgetBytes = 512L * 1024 * 1024;
+
     private readonly FrameAddress[]? _addresses;
     private readonly float[]? _descriptors;
     private readonly float[]? _projected;
@@ -163,12 +169,24 @@ public sealed class AnimationSearchDatabase : IDisposable
                 featureBones[i] = featureBones[i][..commonBoneCount];
 
         var frameCounts = new int[corpus.Clips.Count];
+        var skippedClips = new string[corpus.Clips.Count];
         Parallel.For(0, corpus.Clips.Count, new ParallelOptions { CancellationToken = cancellationToken }, clipIndex =>
         {
             var clip = corpus.Clips[clipIndex];
             try
             {
                 frameCounts[clipIndex] = clip.FrameCount;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                // A single corrupt or unsupported animation must not prevent the global index from
+                // being built for every other valid clip in a large corpus.
+                skippedClips[clipIndex] = $"{clip.DisplayName}: {ex.Message}";
+                frameCounts[clipIndex] = 0;
             }
             finally
             {
@@ -178,19 +196,21 @@ public sealed class AnimationSearchDatabase : IDisposable
         });
 
         var dimensions = extractor.GetDescriptorLength(commonBoneCount);
-        var addresses = new List<FrameAddress>();
-        var clipSampleStarts = new int[corpus.Clips.Count + 1];
-        for (var clipIndex = 0; clipIndex < corpus.Clips.Count; clipIndex++)
+        var effectiveIndexStride = ChooseIndexStride(corpus, frameCounts, options, dimensions);
+        if (effectiveIndexStride > options.IndexStride)
         {
-            clipSampleStarts[clipIndex] = addresses.Count;
-            var clip = corpus.Clips[clipIndex];
-            var minContinuationFrames = Math.Max(1, (int)MathF.Ceiling(options.MinimumContinuationSeconds * clip.FramesPerSecond));
-            if (frameCounts[clipIndex] <= minContinuationFrames) continue;
-            var last = frameCounts[clipIndex] - 1 - minContinuationFrames;
-            for (var frame = 0; frame <= last; frame += options.IndexStride)
-                addresses.Add(new FrameAddress(clipIndex, frame));
+            Debug.WriteLine(
+                $"AniMatch: corpus requires index stride {effectiveIndexStride} " +
+                $"(requested {options.IndexStride}) to fit the descriptor build budget.");
         }
-        clipSampleStarts[corpus.Clips.Count] = addresses.Count;
+
+        var (addresses, clipSampleStarts) = BuildAddresses(
+            corpus, frameCounts, effectiveIndexStride, options.MinimumContinuationSeconds);
+        foreach (var skipped in skippedClips)
+        {
+            if (!string.IsNullOrWhiteSpace(skipped))
+                Debug.WriteLine("AniMatch: skipped invalid clip " + skipped);
+        }
 
         var addressArray = addresses.ToArray();
         if (addressArray.Length == 0)
@@ -245,6 +265,90 @@ public sealed class AnimationSearchDatabase : IDisposable
 
         var tree = new VpTree(projected, projection.OutputDimensions);
         return new AnimationSearchDatabase(corpus, options, extractor, featureBones, addressArray, packed, mean, invStd, dimensionWeights, projection, projected, tree);
+    }
+
+    private static int ChooseIndexStride(
+        AnimationCorpus corpus,
+        int[] frameCounts,
+        AnimationMatchOptions options,
+        int dimensions)
+    {
+        var maxSampleCount = Math.Max(
+            1L,
+            Math.Min(
+                int.MaxValue,
+                DescriptorBuildBudgetBytes / sizeof(float) / Math.Max(1, dimensions)));
+        var requestedStride = options.IndexStride;
+        if (CountIndexSamples(corpus, frameCounts, requestedStride, options.MinimumContinuationSeconds) <= maxSampleCount)
+            return requestedStride;
+
+        var low = requestedStride;
+        var high = requestedStride;
+        while (CountIndexSamples(corpus, frameCounts, high, options.MinimumContinuationSeconds) > maxSampleCount)
+        {
+            if (high >= int.MaxValue / 2)
+            {
+                high = int.MaxValue;
+                break;
+            }
+            high *= 2;
+        }
+
+        while (low < high)
+        {
+            var middle = low + (int)(((long)high - low) / 2);
+            if (CountIndexSamples(corpus, frameCounts, middle, options.MinimumContinuationSeconds) <= maxSampleCount)
+                high = middle;
+            else
+                low = middle + 1;
+        }
+
+        return low;
+    }
+
+    private static long CountIndexSamples(
+        AnimationCorpus corpus,
+        int[] frameCounts,
+        int stride,
+        float minimumContinuationSeconds)
+    {
+        long count = 0;
+        for (var clipIndex = 0; clipIndex < corpus.Clips.Count; clipIndex++)
+        {
+            var clip = corpus.Clips[clipIndex];
+            var minContinuationFrames = Math.Max(
+                1,
+                (int)MathF.Ceiling(minimumContinuationSeconds * clip.FramesPerSecond));
+            var last = (long)frameCounts[clipIndex] - 1 - minContinuationFrames;
+            if (last >= 0)
+                count += last / stride + 1;
+        }
+
+        return count;
+    }
+
+    private static (List<FrameAddress> addresses, int[] clipSampleStarts) BuildAddresses(
+        AnimationCorpus corpus,
+        int[] frameCounts,
+        int stride,
+        float minimumContinuationSeconds)
+    {
+        var addresses = new List<FrameAddress>();
+        var clipSampleStarts = new int[corpus.Clips.Count + 1];
+        for (var clipIndex = 0; clipIndex < corpus.Clips.Count; clipIndex++)
+        {
+            clipSampleStarts[clipIndex] = addresses.Count;
+            var clip = corpus.Clips[clipIndex];
+            var minContinuationFrames = Math.Max(
+                1,
+                (int)MathF.Ceiling(minimumContinuationSeconds * clip.FramesPerSecond));
+            var last = (long)frameCounts[clipIndex] - 1 - minContinuationFrames;
+            for (long frame = 0; frame <= last; frame += stride)
+                addresses.Add(new FrameAddress(clipIndex, checked((int)frame)));
+        }
+
+        clipSampleStarts[corpus.Clips.Count] = addresses.Count;
+        return (addresses, clipSampleStarts);
     }
 
     public void NormalizeQuery(Span<float> descriptor)

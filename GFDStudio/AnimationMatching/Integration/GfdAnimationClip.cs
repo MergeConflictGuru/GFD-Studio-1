@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Threading;
@@ -89,8 +90,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             if (cached > 0)
                 return cached;
 
-            var animation = Animation;
-            var calculated = Math.Max(1, (int)MathF.Ceiling(animation.Duration * FramesPerSecond) + 1);
+            var calculated = GfdAnimationFrameCount.Calculate(Animation, FramesPerSecond, DisplayName);
             Interlocked.CompareExchange(ref _frameCount, calculated, 0);
             return Volatile.Read(ref _frameCount);
         }
@@ -153,7 +153,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         var frameCount = Volatile.Read(ref _frameCount);
         if (frameCount <= 0)
         {
-            frameCount = Math.Max(1, (int)MathF.Ceiling(animation.Duration * FramesPerSecond) + 1);
+            frameCount = GfdAnimationFrameCount.Calculate(animation, FramesPerSecond, DisplayName);
             Interlocked.CompareExchange(ref _frameCount, frameCount, 0);
             frameCount = Volatile.Read(ref _frameCount);
         }
@@ -317,5 +317,25 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             maxY = MathF.Max(maxY, y);
         }
         return MathF.Max(0.01f, maxY - minY);
+    }
+}
+
+internal static class GfdAnimationFrameCount
+{
+    public static int Calculate(Animation animation, float framesPerSecond, string displayName)
+    {
+        if (animation == null)
+            throw new ArgumentNullException(nameof(animation));
+        if (!float.IsFinite(framesPerSecond) || framesPerSecond <= 0f)
+            throw new InvalidDataException($"Animation '{displayName}' has an invalid frame rate ({framesPerSecond}).");
+        if (!float.IsFinite(animation.Duration) || animation.Duration < 0f)
+            throw new InvalidDataException($"Animation '{displayName}' has an invalid duration ({animation.Duration}).");
+
+        var frameCountWithoutFinalSample = MathF.Ceiling(animation.Duration * framesPerSecond);
+        if (!float.IsFinite(frameCountWithoutFinalSample) || frameCountWithoutFinalSample >= int.MaxValue)
+            throw new InvalidDataException(
+                $"Animation '{displayName}' is too long to index ({animation.Duration:0.###} seconds at {framesPerSecond:0.###} FPS).");
+
+        return Math.Max(1, checked((int)frameCountWithoutFinalSample + 1));
     }
 }
