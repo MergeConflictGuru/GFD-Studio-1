@@ -397,12 +397,18 @@ namespace GFDLibrary::Conversion::FbxSdk
 	static FbxAMatrix ConvertToFbxAMatrix(Matrix4x4& m)
 	{
 		typedef float Matrix4x4Data[4][4];
+		auto data = (Matrix4x4Data*)&m;
 
+		// System.Numerics.Matrix4x4 uses row-vector transforms (translation in
+		// M41..M43), whereas FbxAMatrix uses the conventional FBX column-vector
+		// layout. A raw element-for-element copy therefore writes transposed bind
+		// transforms. Blender can partially hide this, but strict importers such as
+		// Cascadeur interpret the skin clusters with badly warped geometry.
 		FbxAMatrix fm;
 		for (int y = 0; y < 4; y++)
 		{
 			for (int x = 0; x < 4; x++)
-				fm[y][x] = (*(Matrix4x4Data*)&m)[y][x];
+				fm[y][x] = (*data)[x][y];
 		}
 
 		return fm;
@@ -440,7 +446,12 @@ namespace GFDLibrary::Conversion::FbxSdk
 		}
 
 		// 3ds Max requires every node including nodes not used for skeletal animation to be in the bind pose, otherwise it is ignored entirely.
-		mFbxBindPose->Add(fbxMeshNode, fbxMeshNode->EvaluateGlobalTransform());
+		// Mesh control points are baked into model/world space by mesh->Transform()
+		// below, and animated meshes are attached directly to the FBX scene root.
+		// Their bind-pose transform is therefore identity. Do not ask the FBX SDK
+		// to evaluate it here; this exporter already avoids EvaluateGlobalTransform
+		// for skinning because it is unreliable for these hierarchies.
+		mFbxBindPose->Add(fbxMeshNode, FbxAMatrix());
 
 		auto fbxMesh = FbxMesh::Create(fbxMeshNode, "");
 		fbxMeshNode->SetNodeAttribute(fbxMesh);
@@ -734,8 +745,11 @@ namespace GFDLibrary::Conversion::FbxSdk
 		fbxSkeleton->SetSkeletonType(FbxSkeleton::EType::eLimbNode);
 		fbxNode->SetNodeAttribute(fbxSkeleton);
 
-		// Add to bind pose
-		mFbxBindPose->Add(fbxNode, fbxNode->EvaluateGlobalTransform());
+		// Add the exact GFD bind transform.  Using EvaluateGlobalTransform here
+		// disagrees with the cluster matrices for some hierarchies and produces an
+		// invalid bind pose in importers that validate it (notably Cascadeur).
+		auto bindWorld = node->WorldTransform;
+		mFbxBindPose->Add(fbxNode, ConvertToFbxAMatrix(bindWorld));
 
 		if (node->HasAttachments)
 		{
@@ -810,7 +824,11 @@ namespace GFDLibrary::Conversion::FbxSdk
 			throw gcnew Exception("Failed to create scene");
 
 		auto& fbxGlobalSettings = mFbxScene->GetGlobalSettings();
-		fbxGlobalSettings.SetAxisSystem(FbxAxisSystem::DirectX);
+		// GFD Studio's model/viewer math is Y-up and right-handed. Advertising the
+		// file as DirectX makes the same numeric transforms left-handed, which some
+		// importers compensate differently (Blender ended up importing the model
+		// inverted). Keep the FBX metadata consistent with the transforms we write.
+		fbxGlobalSettings.SetAxisSystem(FbxAxisSystem::OpenGL);
 		fbxGlobalSettings.SetSystemUnit(FbxSystemUnit::m);
 
 		// Export textures

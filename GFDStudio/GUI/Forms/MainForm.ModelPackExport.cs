@@ -204,7 +204,17 @@ namespace GFDStudio.GUI.Forms
             bool includeAnimations,
             AnimationPack animationPack )
         {
-            var modelPack = node.Data;
+            // Character Browser / showroom previews can be composed from separate
+            // body, face and hair GMDs while the editor tree still points at the primary
+            // (usually body) file. Export what is actually being shown, not just that
+            // primary source file, so split dancing characters keep all selected parts.
+            var modelPack =
+                mCharacterBrowserPanel != null &&
+                mCharacterBrowserPanel.Visible &&
+                mCharacterBrowserCurrentModelPack?.Model != null
+                    ? mCharacterBrowserCurrentModelPack
+                    : node.Data;
+
             if ( modelPack.Model == null )
             {
                 MessageBox.Show(
