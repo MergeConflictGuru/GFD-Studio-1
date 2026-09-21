@@ -832,7 +832,8 @@ namespace GFDStudio.GUI.Forms
             if ( ModelViewControl.Instance.AnimationLoopStart is double loopStart &&
                  ModelViewControl.Instance.AnimationLoopEnd is double loopEnd )
             {
-                targetTime = Math.Clamp( targetTime, loopStart, loopEnd );
+                if ( targetTime < loopStart || targetTime > loopEnd )
+                    mAnimationMatchTimeline?.ClearSelection();
             }
 
             // A click on the channel should jump directly to that point in the animation.
