@@ -19,7 +19,10 @@ namespace GFDLibrary::Conversion::FbxSdk
 	public:
 		inline FbxSdkModelPackExporterConfig()
 		{
+			UseUnrealBoneNames = false;
 		}
+
+		property bool UseUnrealBoneNames;
 	};
 
 	public ref class FbxSdkModelPackExporterException : public Exception
