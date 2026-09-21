@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "FbxSdkModelPackExporter.h"
+#include "FbxSdkBoneNameMapper.h"
 #include "Utf8String.h"
 
 /*
@@ -917,7 +918,9 @@ namespace GFDLibrary::Conversion::FbxSdk
 		// references to other nodes down the tree gracefully.
 		for each (auto node in mModelNodes)
 		{
-			auto fbxNode = FbxNode::Create(mFbxScene, Utf8String(node->Name).ToCStr());
+			auto exportName = FbxSdkBoneNameMapper::GetExportName(
+				mModel, node, mConfig != nullptr && mConfig->UseUnrealBoneNames);
+			auto fbxNode = FbxNode::Create(mFbxScene, Utf8String(exportName).ToCStr());
 			mNodeToFbxNodeLookup->Add(node, (IntPtr)fbxNode);
 			mNodeIndexToFbxNodeLookup->Add(mModelNodes->IndexOf(node), (IntPtr)fbxNode);
 		}
