@@ -23,8 +23,22 @@ public sealed class AnimationMatcher
         int? sourceRangeStart = null,
         int? sourceRangeEnd = null,
         CancellationToken cancellationToken = default)
+        => Search(source, sourceRangeStart, sourceRangeEnd, _database.Options.ResultCount, cancellationToken);
+
+    /// <summary>
+    /// Searches the complete corpus using the full normalized descriptor. The result limit only
+    /// controls how many globally ranked animation representatives are returned; it does not
+    /// limit the frame search used to establish that ranking.
+    /// </summary>
+    public IReadOnlyList<AnimationMatchResult> Search(
+        IAnimationClip source,
+        int? sourceRangeStart,
+        int? sourceRangeEnd,
+        int resultCount,
+        CancellationToken cancellationToken = default)
     {
         var options = _database.Options;
+        resultCount = Math.Max(1, resultCount);
         var start = sourceRangeStart ?? source.FrameCount - 1;
         var end = sourceRangeEnd ?? source.FrameCount - 1;
         if (start > end) (start, end) = (end, start);
@@ -40,65 +54,46 @@ public sealed class AnimationMatcher
         var bestByAddress = new Dictionary<(int clip, int frame), AnimationMatchResult>();
         var rangeLength = Math.Max(1, end - start);
 
-        // ApproximateNeighborCount is a frame-level search width, while the result grid is
-        // animation-level. A long or very similar clip can occupy the whole initial neighbor
-        // window, leaving only one animation after identity deduplication. Expand the window
-        // until the requested number of distinct animations is available or the index is
-        // exhausted.
-        var neighborCount = Math.Min(
-            _database.SampleCount,
-            Math.Max(1, options.ApproximateNeighborCount));
-        IReadOnlyList<AnimationMatchResult> output;
-        while (true)
-        {
-            SearchNeighbors(
-                source,
-                sourceBones,
-                start,
-                end,
-                rangeLength,
-                neighborCount,
-                bestByAddress,
-                cancellationToken);
+        SearchAllFrames(
+            source,
+            sourceBones,
+            start,
+            end,
+            rangeLength,
+            bestByAddress,
+            cancellationToken);
 
-            output = BuildResults(bestByAddress.Values, options);
-            if (output.Count >= options.ResultCount || neighborCount >= _database.SampleCount)
-                return output;
-
-            var expanded = neighborCount <= _database.SampleCount / 2
-                ? neighborCount * 2
-                : _database.SampleCount;
-            if (expanded == neighborCount)
-                return output;
-            neighborCount = expanded;
-        }
+        return BuildResults(bestByAddress.Values, resultCount);
     }
 
-    private void SearchNeighbors(
+    private void SearchAllFrames(
         IAnimationClip source,
         int[] sourceBones,
         int start,
         int end,
         int rangeLength,
-        int neighborCount,
         Dictionary<(int clip, int frame), AnimationMatchResult> bestByAddress,
         CancellationToken cancellationToken)
     {
         var options = _database.Options;
         var query = new float[_database.DescriptorDimensions];
         var candidateDescriptor = new float[_database.DescriptorDimensions];
-        var projected = new float[_database.Projection.OutputDimensions];
 
         for (var sourceFrame = start; sourceFrame <= end; sourceFrame += options.QueryStride)
         {
             cancellationToken.ThrowIfCancellationRequested();
             _database.Extractor.Extract(source, sourceFrame, sourceBones, query);
             _database.NormalizeQuery(query);
-            _database.Projection.Project(query, projected);
-            var neighbors = _database.Tree.FindNearest(projected, neighborCount);
 
-            foreach (var sampleIndex in neighbors)
+            // The VP-tree is exact only in the reduced projection space. Searching its first
+            // 128 nodes and reranking those nodes can hide a better full descriptor match. Walk
+            // every indexed frame here so pagination is over one real global ranking rather than
+            // an approximate shortlist.
+            for (var sampleIndex = 0; sampleIndex < _database.SampleCount; sampleIndex++)
             {
+                if ((sampleIndex & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+
                 var address = _database.GetAddress(sampleIndex);
                 var candidate = _database.Corpus.Clips[address.ClipIndex];
                 if (ShouldExcludeSelf(source, sourceFrame, candidate, address.FrameIndex, options)) continue;
@@ -119,7 +114,7 @@ public sealed class AnimationMatcher
 
     private static IReadOnlyList<AnimationMatchResult> BuildResults(
         IEnumerable<AnimationMatchResult> candidates,
-        AnimationMatchOptions options)
+        int resultCount)
     {
         // The same animation identity can be present at several transition frames, and stale or
         // externally supplied corpora can contain the same definition more than once. The result
@@ -141,16 +136,14 @@ public sealed class AnimationMatcher
             .OrderBy(r => r.Distance)
             .ThenBy(r => r.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase);
 
-        var output = new List<AnimationMatchResult>(options.ResultCount);
+        var output = new List<AnimationMatchResult>(Math.Min(resultCount, 4096));
+        var outputIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var candidate in sorted)
         {
-            var radius = Math.Max(0, (int)MathF.Round(options.ResultSuppressionSeconds * candidate.Candidate.FramesPerSecond));
-            var duplicate = output.Any(existing =>
-                string.Equals(existing.Candidate.Id, candidate.Candidate.Id, StringComparison.Ordinal) &&
-                Math.Abs(existing.CandidateFrame - candidate.CandidateFrame) <= radius);
-            if (duplicate) continue;
+            if (!outputIds.Add(candidate.Candidate.Id))
+                continue;
             output.Add(candidate);
-            if (output.Count >= options.ResultCount) break;
+            if (output.Count >= resultCount) break;
         }
         return output;
     }
