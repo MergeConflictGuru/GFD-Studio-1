@@ -175,6 +175,9 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     private (int start, int end)? _selection;
     private AnimationMatchResult? _selectedResult;
+    private bool _canLoadMore;
+    private bool _loadMoreArmed = true;
+    private bool _loadMoreCheckPending;
 
     public AnimationMatchingModeControl()
     {
@@ -260,6 +263,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         _reindex.Click += (_, _) => ReindexRequested?.Invoke(this, EventArgs.Empty);
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
         _exportParts.Click += (_, _) => ExportPartsRequested?.Invoke(this, EventArgs.Empty);
+        _results.Scroll += (_, _) => MaybeRequestMoreResults();
         _alignPositionAndYaw.CheckedChanged += (_, _) => ReactivateSelected();
         _blend.CheckedChanged += (_, _) => ReactivateSelected();
         _blendMs.ValueChanged += (_, _) => ReactivateSelected();
@@ -276,6 +280,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     public event EventHandler? SearchRequested;
     public event EventHandler? ExportRequested;
     public event EventHandler? ExportPartsRequested;
+    public event EventHandler? LoadMoreRequested;
     public event AnimationMatchResultEventHandler? CandidateActivated;
     public event AnimationMatchResultEventHandler? CandidateOpened;
     public event EventHandler<ThumbnailRequest>? ThumbnailRequested;
@@ -312,6 +317,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     public void SetResults(IReadOnlyList<AnimationMatchResult> results)
     {
         _selectedResult = null;
+        _loadMoreArmed = true;
         _results.SuspendLayout();
         try
         {
@@ -325,6 +331,55 @@ public sealed class AnimationMatchingModeControl : UserControl
         {
             _results.ResumeLayout();
         }
+    }
+
+    public void AppendResults(IReadOnlyList<AnimationMatchResult> results)
+    {
+        if (results == null || results.Count == 0)
+            return;
+
+        _results.SuspendLayout();
+        try
+        {
+            foreach (var result in results)
+                _results.Controls.Add(CreateResultCard(result));
+        }
+        finally
+        {
+            _results.ResumeLayout();
+        }
+    }
+
+    public void SetCanLoadMore(bool canLoadMore)
+    {
+        _canLoadMore = canLoadMore;
+        if (canLoadMore)
+        {
+            _loadMoreArmed = true;
+            if (IsHandleCreated && !IsDisposed && !_loadMoreCheckPending)
+            {
+                _loadMoreCheckPending = true;
+                BeginInvoke((Action)(() =>
+                {
+                    _loadMoreCheckPending = false;
+                    MaybeRequestMoreResults();
+                }));
+            }
+        }
+    }
+
+    private void MaybeRequestMoreResults()
+    {
+        if (!_canLoadMore || !_loadMoreArmed)
+            return;
+
+        var scroll = _results.VerticalScroll;
+        var remaining = scroll.Maximum - scroll.Value - scroll.LargeChange;
+        if (remaining > 2 * 172)
+            return;
+
+        _loadMoreArmed = false;
+        LoadMoreRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void ReactivateSelected()

@@ -14,8 +14,8 @@ public sealed class AnimationMatchOptions
     public int QueryStride { get; set; } = 1;
 
     /// <summary>
-    /// Initial number of frame neighbors reranked with the full descriptor. The matcher expands
-    /// this window when animation-level deduplication leaves fewer than ResultCount candidates.
+    /// Retained for compatibility with older settings and cache callers. Current matching is
+    /// exhaustive in the full descriptor and does not use an approximate neighbor shortlist.
     /// </summary>
     public int ApproximateNeighborCount { get; set; } = 128;
 

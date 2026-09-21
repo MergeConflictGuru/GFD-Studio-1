@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using GFDStudio.AnimationMatching.Core;
@@ -27,6 +28,8 @@ public sealed class AnimationMatchingModeController : IDisposable
     private CancellationTokenSource? _work;
     private Task? _cachePreload;
     private readonly SemaphoreSlim _thumbnailGate = new(1, 1);
+    private IReadOnlyList<AnimationMatchResult> _allResults = Array.Empty<AnimationMatchResult>();
+    private int _shownResultCount;
 
     public AnimationMatchingModeController(
         IGfdAnimationMatchingHost host,
@@ -44,6 +47,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.CandidateOpened += OnCandidateOpened;
         _view.ExportRequested += OnExportRequested;
         _view.ExportPartsRequested += OnExportPartsRequested;
+        _view.LoadMoreRequested += OnLoadMoreRequested;
         _view.ThumbnailRequested += OnThumbnailRequested;
     }
 
@@ -63,6 +67,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         if (source is null) return;
         _sourceForResults = source;
         _stitched = null;
+        ResetResultStream();
         _view.SetSource(source.DisplayName, source.FrameCount, source.FramesPerSecond);
     }
 
@@ -93,6 +98,7 @@ public sealed class AnimationMatchingModeController : IDisposable
             return;
         }
 
+        ResetResultStream();
         _view.SetBusy(true, "Preparing animation match…");
         try
         {
@@ -127,19 +133,56 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SetStatus("Searching…");
         var matcher = new AnimationMatcher(_database);
         var selection = _view.Selection;
-        var results = await Task.Run(() => matcher.Search(
+        var allResults = await Task.Run(() => matcher.Search(
             source,
             selection?.start,
             selection?.end,
+            int.MaxValue,
             cancellationToken), cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
         _sourceForResults = source;
         _stitched = null;
-        _view.SetResults(results);
-        _view.SetStatus(results.Count == 0
+        _allResults = allResults;
+        _shownResultCount = Math.Min(_options.ResultCount, allResults.Count);
+        _view.SetResults(TakeResults(allResults, 0, _shownResultCount));
+        _view.SetCanLoadMore(_shownResultCount < allResults.Count);
+        _view.SetStatus(allResults.Count == 0
             ? "No matches found · no similarity cutoff"
-            : $"{results.Count:N0} matches · no similarity cutoff");
+            : $"Showing {_shownResultCount:N0} of {allResults.Count:N0} globally ranked matches · scroll for more");
+    }
+
+    private void OnLoadMoreRequested(object? sender, EventArgs e)
+    {
+        if (_shownResultCount >= _allResults.Count)
+        {
+            _view.SetCanLoadMore(false);
+            return;
+        }
+
+        var nextCount = Math.Min(_allResults.Count, _shownResultCount + _options.ResultCount);
+        _view.AppendResults(TakeResults(_allResults, _shownResultCount, nextCount - _shownResultCount));
+        _shownResultCount = nextCount;
+        _view.SetCanLoadMore(_shownResultCount < _allResults.Count);
+        _view.SetStatus($"Showing {_shownResultCount:N0} of {_allResults.Count:N0} globally ranked matches · scroll for more");
+    }
+
+    private void ResetResultStream()
+    {
+        _allResults = Array.Empty<AnimationMatchResult>();
+        _shownResultCount = 0;
+        _view.SetCanLoadMore(false);
+        _view.SetResults(Array.Empty<AnimationMatchResult>());
+    }
+
+    private static IReadOnlyList<AnimationMatchResult> TakeResults(
+        IReadOnlyList<AnimationMatchResult> results,
+        int start,
+        int count)
+    {
+        if (count <= 0)
+            return Array.Empty<AnimationMatchResult>();
+        return results.Skip(start).Take(count).ToArray();
     }
 
     private async Task BuildIndexAsync(bool force, bool restartWork = true)
@@ -260,6 +303,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         var cancellationToken = _work.Token;
         _sourceForResults = tail;
         _stitched = null;
+        ResetResultStream();
         _view.SetSelection(null);
         _view.SetSource(tail.DisplayName, tail.FrameCount, tail.FramesPerSecond);
         _view.SetBusy(true, "Opening matched tail…");
@@ -356,6 +400,7 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.CandidateOpened -= OnCandidateOpened;
         _view.ExportRequested -= OnExportRequested;
         _view.ExportPartsRequested -= OnExportPartsRequested;
+        _view.LoadMoreRequested -= OnLoadMoreRequested;
         _view.ThumbnailRequested -= OnThumbnailRequested;
     }
 }
