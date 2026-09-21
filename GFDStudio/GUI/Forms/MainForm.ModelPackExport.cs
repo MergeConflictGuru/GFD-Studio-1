@@ -18,6 +18,7 @@ namespace GFDStudio.GUI.Forms
         private const uint AsciiFbxSaveFilterIndex = 5;
         private const uint IncludeAnimationsControlId = 0x4701;
         private const uint UnrealBoneNamesControlId = 0x4702;
+        private const uint ExportAllAnimationsControlId = 0x4703;
         private const int HResultCancelled = unchecked( (int)0x800704C7 );
 
         private const uint FileOpenOptionsOverwritePrompt = 0x00000002;
@@ -34,7 +35,11 @@ namespace GFDStudio.GUI.Forms
                 throw new ArgumentNullException( nameof( node ) );
 
             var animationPack = ResolveFbxAnimationPack( node.Data.Version, out _ );
-            var selection = ShowModelPackSaveDialog( node.Text, animationPack != null );
+            var allAnimationsAvailable = CanExportAllAnimationsInCurrentPack();
+            var selection = ShowModelPackSaveDialog(
+                node.Text,
+                animationPack != null,
+                allAnimationsAvailable );
             if ( selection == null )
                 return null;
 
@@ -51,6 +56,9 @@ namespace GFDStudio.GUI.Forms
             {
                 return null;
             }
+
+            if ( selection.ExportAllAnimations )
+                animationPack = ResolveAllFbxAnimationsInCurrentPack( node.Data.Version ) ?? animationPack;
 
             switch ( selection.FilterIndex )
             {
@@ -80,7 +88,8 @@ namespace GFDStudio.GUI.Forms
 
         private ModelPackSaveDialogSelection ShowModelPackSaveDialog(
             string fileName,
-            bool animationAvailable )
+            bool animationAvailable,
+            bool allAnimationsAvailable )
         {
             INativeFileSaveDialog dialog = null;
             INativeShellItem resultItem = null;
@@ -121,6 +130,13 @@ namespace GFDStudio.GUI.Forms
                 }
 
                 customize.AddCheckButton(
+                    ExportAllAnimationsControlId,
+                    "Export all animations in current pack",
+                    false );
+                if ( !allAnimationsAvailable )
+                    customize.SetControlState( ExportAllAnimationsControlId, ControlStateVisible );
+
+                customize.AddCheckButton(
                     UnrealBoneNamesControlId,
                     "Export Unreal bone names (FBX)",
                     false );
@@ -133,6 +149,7 @@ namespace GFDStudio.GUI.Forms
 
                 dialog.GetFileTypeIndex( out var filterIndex );
                 customize.GetCheckButtonState( IncludeAnimationsControlId, out var includeAnimations );
+                customize.GetCheckButtonState( ExportAllAnimationsControlId, out var exportAllAnimations );
                 customize.GetCheckButtonState( UnrealBoneNamesControlId, out var useUnrealBoneNames );
                 dialog.GetResult( out resultItem );
                 resultItem.GetDisplayName( ShellItemDisplayNameFileSystemPath, out resultPathPointer );
@@ -143,8 +160,10 @@ namespace GFDStudio.GUI.Forms
                 return new ModelPackSaveDialogSelection(
                     path,
                     filterIndex,
-                    includeAnimations && animationAvailable,
-                    useUnrealBoneNames );
+                    ( includeAnimations && animationAvailable ) ||
+                    ( exportAllAnimations && allAnimationsAvailable ),
+                    useUnrealBoneNames,
+                    exportAllAnimations && allAnimationsAvailable );
             }
             finally
             {
@@ -266,6 +285,68 @@ namespace GFDStudio.GUI.Forms
             return null;
         }
 
+        private bool CanExportAllAnimationsInCurrentPack()
+        {
+            if ( mCharacterAnimationListBox?.SelectedItem is CharacterAnimationEntry entry &&
+                 entry.Kind == CharacterAnimationListKind.Animation )
+            {
+                try
+                {
+                    var pack = GFDLibrary.Resource.Load<AnimationPack>( entry.PackPath );
+                    return pack?.Animations?.Count > 1;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            return ModelEditorTreeView.TopNode is ModelPackViewNode modelPackNode &&
+                   modelPackNode.Data.AnimationPack?.Animations?.Count > 1;
+        }
+
+        private AnimationPack ResolveAllFbxAnimationsInCurrentPack( uint version )
+        {
+            if ( mCharacterAnimationListBox?.SelectedItem is CharacterAnimationEntry selectedEntry &&
+                 selectedEntry.Kind == CharacterAnimationListKind.Animation )
+            {
+                var sourcePack = GFDLibrary.Resource.Load<AnimationPack>( selectedEntry.PackPath );
+                if ( sourcePack?.Animations == null || sourcePack.Animations.Count == 0 )
+                    return null;
+
+                // Prepare every clip exactly like the currently previewed clip. This matters for
+                // P5/P5R/P5D because the raw packs can use different skeleton conventions, and
+                // split P5D animations can pull face/hair tracks from companion GAP files.
+                var output = new AnimationPack( version );
+                for ( var animationIndex = 0; animationIndex < sourcePack.Animations.Count; animationIndex++ )
+                {
+                    var entry = new CharacterAnimationEntry
+                    {
+                        PackPath = selectedEntry.PackPath,
+                        Kind = CharacterAnimationListKind.Animation,
+                        Index = animationIndex,
+                        DisplayName = selectedEntry.DisplayName,
+                        DefinitionHash = selectedEntry.DefinitionHash,
+                        BodyTargetNames = selectedEntry.BodyTargetNames
+                    };
+
+                    var animation = PrepareCharacterBrowserAnimation( entry, out _ );
+                    if ( animation != null )
+                        output.Animations.Add( animation );
+                }
+
+                return output.Animations.Count > 0 ? output : null;
+            }
+
+            if ( ModelEditorTreeView.TopNode is ModelPackViewNode modelPackNode &&
+                 modelPackNode.Data.AnimationPack?.Animations?.Count > 0 )
+            {
+                return modelPackNode.Data.AnimationPack;
+            }
+
+            return null;
+        }
+
         private AnimationPack ResolveFbxAnimationPack( uint version, out string description )
         {
             var loadedAnimation = ModelViewControl.Instance.Animation;
@@ -295,18 +376,21 @@ namespace GFDStudio.GUI.Forms
                 string path,
                 uint filterIndex,
                 bool includeAnimations,
-                bool useUnrealBoneNames )
+                bool useUnrealBoneNames,
+                bool exportAllAnimations )
             {
                 Path = path;
                 FilterIndex = filterIndex;
                 IncludeAnimations = includeAnimations;
                 UseUnrealBoneNames = useUnrealBoneNames;
+                ExportAllAnimations = exportAllAnimations;
             }
 
             public string Path { get; }
             public uint FilterIndex { get; }
             public bool IncludeAnimations { get; }
             public bool UseUnrealBoneNames { get; }
+            public bool ExportAllAnimations { get; }
         }
 
         [StructLayout( LayoutKind.Sequential, CharSet = CharSet.Unicode )]
