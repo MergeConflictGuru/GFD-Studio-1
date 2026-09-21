@@ -98,21 +98,29 @@ namespace GFDLibrary::Conversion::FbxSdk
 
         static String^ MapFinger(String^ limbRole, String^ sideSuffix)
         {
-            array<String^>^ names = { "thumb", "index", "middle", "ring", "pinky" };
-            for each (auto name in names)
-            {
-                if (!limbRole->StartsWith(name, StringComparison::OrdinalIgnoreCase))
-                    continue;
+            auto mapped = MapFingerKind(limbRole, "thumb", sideSuffix);
+            if (mapped != nullptr) return mapped;
+            mapped = MapFingerKind(limbRole, "index", sideSuffix);
+            if (mapped != nullptr) return mapped;
+            mapped = MapFingerKind(limbRole, "middle", sideSuffix);
+            if (mapped != nullptr) return mapped;
+            mapped = MapFingerKind(limbRole, "ring", sideSuffix);
+            if (mapped != nullptr) return mapped;
+            return MapFingerKind(limbRole, "pinky", sideSuffix);
+        }
 
-                auto segmentText = limbRole->Substring(name->Length);
-                int segment = 0;
-                if (!Int32::TryParse(segmentText, segment) || segment < 1 || segment > 3)
-                    return nullptr;
+        static String^ MapFingerKind(String^ limbRole, String^ fingerName, String^ sideSuffix)
+        {
+            if (!limbRole->StartsWith(fingerName, StringComparison::OrdinalIgnoreCase) ||
+                limbRole->Length != fingerName->Length + 1)
+                return nullptr;
 
-                return String::Format("{0}_{1:D2}{2}", name, segment, sideSuffix);
-            }
+            auto segmentChar = limbRole[fingerName->Length];
+            if (segmentChar < '1' || segmentChar > '3')
+                return nullptr;
 
-            return nullptr;
+            auto segment = segmentChar - '0';
+            return String::Format("{0}_{1:D2}{2}", fingerName, segment, sideSuffix);
         }
     };
 }
