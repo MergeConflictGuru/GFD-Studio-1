@@ -182,7 +182,7 @@ public sealed class AnimationMatcherTests
     }
 
     [TestMethod]
-    public void StitchAlignmentFollowsRootMotionWhenFacingAndTravelDisagree()
+    public void StitchAlignmentFollowsRootFacingWhenFacingAndTravelDisagree()
     {
         var source = new FakeClip("source", Vector3.Zero, 0f);
         var candidate = new FakeClip(
@@ -193,20 +193,13 @@ public sealed class AnimationMatcherTests
             facingYaw: MathF.PI);
         var stitched = new StitchedAnimation(source, 5, candidate, 5, 0f, alignPositionAndYaw: true);
         var sourcePrevious = new BoneTransform[source.Skeleton.BoneCount];
-        var sourceCurrent = new BoneTransform[source.Skeleton.BoneCount];
         var stitchedCurrent = new BoneTransform[source.Skeleton.BoneCount];
-        var stitchedNext = new BoneTransform[source.Skeleton.BoneCount];
 
         source.SampleGlobalPose(5, sourcePrevious);
-        source.SampleGlobalPose(6, sourceCurrent);
         stitched.SampleGlobalPose(6, stitchedCurrent);
-        stitched.SampleGlobalPose(7, stitchedNext);
 
         AssertPositionEqual(sourcePrevious[0].Position, stitchedCurrent[0].Position);
-        var sourceTravel = Vector3.Normalize(sourceCurrent[0].Position - sourcePrevious[0].Position);
-        var stitchedTravel = Vector3.Normalize(stitchedNext[0].Position - stitchedCurrent[0].Position);
-        Assert.IsTrue(Vector3.Dot(sourceTravel, stitchedTravel) > 0.999f,
-            "Aligned locomotion must continue in the source travel direction even when the root's facing is opposite.");
+        AssertRotationEqual(sourcePrevious[0].Rotation, stitchedCurrent[0].Rotation);
     }
 
     [TestMethod]
