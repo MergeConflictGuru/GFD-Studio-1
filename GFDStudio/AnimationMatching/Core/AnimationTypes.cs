@@ -49,7 +49,9 @@ public enum CanonicalJoint
 /// </summary>
 public static class CanonicalSkeleton
 {
-    public const int Version = 2;
+    // v3 normalizes sampled clips into their source rig's bind-root frame before feature
+    // extraction. This keeps P5/P5D and P5R's different model-space bases comparable.
+    public const int Version = 3;
     public const int JointCount = 18;
 
     public static readonly string[] Names =

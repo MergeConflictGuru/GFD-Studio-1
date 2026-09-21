@@ -26,9 +26,9 @@ public sealed class AnimationMatcher
         => Search(source, sourceRangeStart, sourceRangeEnd, _database.Options.ResultCount, cancellationToken);
 
     /// <summary>
-    /// Searches the complete corpus using the full normalized descriptor. The result limit only
-    /// controls how many globally ranked animation representatives are returned; it does not
-    /// limit the frame search used to establish that ranking.
+    /// Searches an expanding projected-space frame window and reranks each window with the full
+    /// descriptor. Larger result limits expand the window, allowing the UI to progressively
+    /// improve coverage without blocking the first page on the entire corpus.
     /// </summary>
     public IReadOnlyList<AnimationMatchResult> Search(
         IAnimationClip source,
@@ -54,30 +54,48 @@ public sealed class AnimationMatcher
         var bestByAddress = new Dictionary<(int clip, int frame), AnimationMatchResult>();
         var rangeLength = Math.Max(1, end - start);
 
-        SearchAllFrames(
-            source,
-            sourceBones,
-            start,
-            end,
-            rangeLength,
-            bestByAddress,
-            cancellationToken);
+        var neighborCount = Math.Min(
+            _database.SampleCount,
+            Math.Max(1, options.ApproximateNeighborCount));
+        while (true)
+        {
+            SearchNeighbors(
+                source,
+                sourceBones,
+                start,
+                end,
+                rangeLength,
+                neighborCount,
+                bestByAddress,
+                cancellationToken);
 
-        return BuildResults(bestByAddress.Values, resultCount);
+            var output = BuildResults(bestByAddress.Values, resultCount);
+            if (output.Count >= resultCount || neighborCount >= _database.SampleCount)
+                return output;
+
+            var expanded = neighborCount <= _database.SampleCount / 2
+                ? neighborCount * 2
+                : _database.SampleCount;
+            if (expanded == neighborCount)
+                return output;
+            neighborCount = expanded;
+        }
     }
 
-    private void SearchAllFrames(
+    private void SearchNeighbors(
         IAnimationClip source,
         int[] sourceBones,
         int start,
         int end,
         int rangeLength,
+        int neighborCount,
         Dictionary<(int clip, int frame), AnimationMatchResult> bestByAddress,
         CancellationToken cancellationToken)
     {
         var options = _database.Options;
         var query = new float[_database.DescriptorDimensions];
         var candidateDescriptor = new float[_database.DescriptorDimensions];
+        var projected = new float[_database.Projection.OutputDimensions];
 
         for (var sourceFrame = start; sourceFrame <= end; sourceFrame += options.QueryStride)
         {
@@ -85,15 +103,11 @@ public sealed class AnimationMatcher
             _database.Extractor.Extract(source, sourceFrame, sourceBones, query);
             _database.NormalizeQuery(query);
 
-            // The VP-tree is exact only in the reduced projection space. Searching its first
-            // 128 nodes and reranking those nodes can hide a better full descriptor match. Walk
-            // every indexed frame here so pagination is over one real global ranking rather than
-            // an approximate shortlist.
-            for (var sampleIndex = 0; sampleIndex < _database.SampleCount; sampleIndex++)
-            {
-                if ((sampleIndex & 1023) == 0)
-                    cancellationToken.ThrowIfCancellationRequested();
+            _database.Projection.Project(query, projected);
+            var neighbors = _database.Tree.FindNearest(projected, neighborCount);
 
+            foreach (var sampleIndex in neighbors)
+            {
                 var address = _database.GetAddress(sampleIndex);
                 var candidate = _database.Corpus.Clips[address.ClipIndex];
                 if (ShouldExcludeSelf(source, sourceFrame, candidate, address.FrameIndex, options)) continue;

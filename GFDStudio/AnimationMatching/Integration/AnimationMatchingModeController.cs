@@ -28,8 +28,13 @@ public sealed class AnimationMatchingModeController : IDisposable
     private CancellationTokenSource? _work;
     private Task? _cachePreload;
     private readonly SemaphoreSlim _thumbnailGate = new(1, 1);
-    private IReadOnlyList<AnimationMatchResult> _allResults = Array.Empty<AnimationMatchResult>();
+    private AnimationMatcher? _matcher;
+    private IAnimationClip? _searchSource;
+    private int? _searchRangeStart;
+    private int? _searchRangeEnd;
+    private readonly HashSet<string> _shownResultIds = new(StringComparer.Ordinal);
     private int _shownResultCount;
+    private bool _loadingMoreResults;
 
     public AnimationMatchingModeController(
         IGfdAnimationMatchingHost host,
@@ -133,56 +138,82 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SetStatus("Searching…");
         var matcher = new AnimationMatcher(_database);
         var selection = _view.Selection;
-        var allResults = await Task.Run(() => matcher.Search(
+        var results = await Task.Run(() => matcher.Search(
             source,
             selection?.start,
             selection?.end,
-            int.MaxValue,
+            _options.ResultCount,
             cancellationToken), cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
         _sourceForResults = source;
         _stitched = null;
-        _allResults = allResults;
-        _shownResultCount = Math.Min(_options.ResultCount, allResults.Count);
-        _view.SetResults(TakeResults(allResults, 0, _shownResultCount));
-        _view.SetCanLoadMore(_shownResultCount < allResults.Count);
-        _view.SetStatus(allResults.Count == 0
+        _matcher = matcher;
+        _searchSource = source;
+        _searchRangeStart = selection?.start;
+        _searchRangeEnd = selection?.end;
+        _shownResultIds.Clear();
+        foreach (var result in results)
+            _shownResultIds.Add(result.Candidate.Id);
+        _shownResultCount = results.Count;
+        _view.SetResults(results);
+        _view.SetCanLoadMore(results.Count >= _options.ResultCount);
+        _view.SetStatus(results.Count == 0
             ? "No matches found · no similarity cutoff"
-            : $"Showing {_shownResultCount:N0} of {allResults.Count:N0} globally ranked matches · scroll for more");
+            : $"Showing {results.Count:N0} matches · scroll for deeper search");
     }
 
-    private void OnLoadMoreRequested(object? sender, EventArgs e)
+    private async void OnLoadMoreRequested(object? sender, EventArgs e)
     {
-        if (_shownResultCount >= _allResults.Count)
-        {
-            _view.SetCanLoadMore(false);
+        if (_loadingMoreResults || _matcher is null || _searchSource is null || _work is null)
             return;
-        }
 
-        var nextCount = Math.Min(_allResults.Count, _shownResultCount + _options.ResultCount);
-        _view.AppendResults(TakeResults(_allResults, _shownResultCount, nextCount - _shownResultCount));
-        _shownResultCount = nextCount;
-        _view.SetCanLoadMore(_shownResultCount < _allResults.Count);
-        _view.SetStatus($"Showing {_shownResultCount:N0} of {_allResults.Count:N0} globally ranked matches · scroll for more");
+        _loadingMoreResults = true;
+        _view.SetCanLoadMore(false);
+        _view.SetStatus("Searching deeper…");
+        try
+        {
+            var targetCount = _shownResultCount + _options.ResultCount;
+            var cancellationToken = _work.Token;
+            var expandedResults = await Task.Run(() => _matcher.Search(
+                _searchSource,
+                _searchRangeStart,
+                _searchRangeEnd,
+                targetCount,
+                cancellationToken), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var newResults = expandedResults
+                .Where(result => _shownResultIds.Add(result.Candidate.Id))
+                .ToArray();
+            if (newResults.Length > 0)
+            {
+                _view.AppendResults(newResults);
+                _shownResultCount += newResults.Length;
+            }
+
+            var canSearchDeeper = expandedResults.Count >= targetCount && newResults.Length > 0;
+            _view.SetCanLoadMore(canSearchDeeper);
+            _view.SetStatus(canSearchDeeper
+                ? $"Showing {_shownResultCount:N0} matches · scroll for deeper search"
+                : $"Showing {_shownResultCount:N0} matches · search exhausted");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _view.SetStatus(ex.Message); }
+        finally { _loadingMoreResults = false; }
     }
 
     private void ResetResultStream()
     {
-        _allResults = Array.Empty<AnimationMatchResult>();
+        _matcher = null;
+        _searchSource = null;
+        _searchRangeStart = null;
+        _searchRangeEnd = null;
+        _shownResultIds.Clear();
         _shownResultCount = 0;
+        _loadingMoreResults = false;
         _view.SetCanLoadMore(false);
         _view.SetResults(Array.Empty<AnimationMatchResult>());
-    }
-
-    private static IReadOnlyList<AnimationMatchResult> TakeResults(
-        IReadOnlyList<AnimationMatchResult> results,
-        int start,
-        int count)
-    {
-        if (count <= 0)
-            return Array.Empty<AnimationMatchResult>();
-        return results.Skip(start).Take(count).ToArray();
     }
 
     private async Task BuildIndexAsync(bool force, bool restartWork = true)

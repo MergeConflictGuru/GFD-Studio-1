@@ -174,6 +174,8 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             Span<Matrix4x4> transforms = stackalloc Matrix4x4[CanonicalSkeleton.JointCount];
             poseSampler.Evaluate(transforms, time);
             var sampled = new BoneTransform[CanonicalSkeleton.JointCount];
+            var bindRoot = context.skeleton.BindPose[(int)CanonicalJoint.Root];
+            var inverseBindRootRotation = Quaternion.Inverse(bindRoot.Rotation);
             for (var i = 0; i < context.canonicalNodes.Length; i++)
             {
                 var node = context.canonicalNodes[i];
@@ -187,7 +189,18 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
 
                 if (rotation.LengthSquared() < 1e-10f)
                     rotation = Quaternion.Identity;
-                sampled[i] = new BoneTransform(translation, Quaternion.Normalize(rotation), scale);
+
+                // The P5D and P5R rigs are authored with different bind-space bases. Their
+                // animation channels describe the same local human motion, but their raw world
+                // transforms cannot be compared directly. Move every sampled canonical joint
+                // into the source rig's bind-root frame before the feature extractor removes
+                // the animated root translation/yaw. This preserves motion while removing only
+                // the format-specific rest-frame rotation and offset.
+                var canonicalPosition = Vector3.Transform(
+                    translation - bindRoot.Position,
+                    inverseBindRootRotation);
+                var canonicalRotation = Quaternion.Normalize(inverseBindRootRotation * rotation);
+                sampled[i] = new BoneTransform(canonicalPosition, canonicalRotation, scale);
             }
 
             _poseCache.Add(clamped, sampled);

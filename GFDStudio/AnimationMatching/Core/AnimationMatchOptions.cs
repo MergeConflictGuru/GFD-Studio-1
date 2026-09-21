@@ -13,10 +13,7 @@ public sealed class AnimationMatchOptions
     /// <summary>Frames between source pivots when a range is selected.</summary>
     public int QueryStride { get; set; } = 1;
 
-    /// <summary>
-    /// Retained for compatibility with older settings and cache callers. Current matching is
-    /// exhaustive in the full descriptor and does not use an approximate neighbor shortlist.
-    /// </summary>
+    /// <summary>Initial projected-space frame window. The matcher doubles it as more results are requested.</summary>
     public int ApproximateNeighborCount { get; set; } = 128;
 
     public int ResultCount { get; set; } = 32;
