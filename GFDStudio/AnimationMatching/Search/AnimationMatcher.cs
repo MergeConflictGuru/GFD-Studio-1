@@ -39,18 +39,12 @@ public sealed class AnimationMatcher
 
         var bestByAddress = new Dictionary<(int clip, int frame), AnimationMatchResult>();
         var rangeLength = Math.Max(1, end - start);
-        var corpusGroups = _database.Corpus.Clips
-            .Select(GetCorpusGroup)
-            .Where(group => !string.IsNullOrWhiteSpace(group))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
 
         // ApproximateNeighborCount is a frame-level search width, while the result grid is
         // animation-level. A long or very similar clip can occupy the whole initial neighbor
-        // window, leaving only one animation after identity deduplication. The corpus is also
-        // commonly made from multiple game namespaces with very different animation lengths.
-        // Expand the window until the requested number of distinct animations is available and
-        // every game namespace has a candidate, or the index is exhausted.
+        // window, leaving only one animation after identity deduplication. Expand the window
+        // until the requested number of distinct animations is available or the index is
+        // exhausted.
         var neighborCount = Math.Min(
             _database.SampleCount,
             Math.Max(1, options.ApproximateNeighborCount));
@@ -67,10 +61,8 @@ public sealed class AnimationMatcher
                 bestByAddress,
                 cancellationToken);
 
-            output = BuildResults(bestByAddress.Values, options, corpusGroups);
-            if ((output.Count >= options.ResultCount &&
-                 HasCorpusGroupCoverage(output, corpusGroups)) ||
-                neighborCount >= _database.SampleCount)
+            output = BuildResults(bestByAddress.Values, options);
+            if (output.Count >= options.ResultCount || neighborCount >= _database.SampleCount)
                 return output;
 
             var expanded = neighborCount <= _database.SampleCount / 2
@@ -127,8 +119,7 @@ public sealed class AnimationMatcher
 
     private static IReadOnlyList<AnimationMatchResult> BuildResults(
         IEnumerable<AnimationMatchResult> candidates,
-        AnimationMatchOptions options,
-        IReadOnlyList<string> corpusGroups)
+        AnimationMatchOptions options)
     {
         // The same animation identity can be present at several transition frames, and stale or
         // externally supplied corpora can contain the same definition more than once. The result
@@ -148,38 +139,10 @@ public sealed class AnimationMatcher
                 .ThenBy(result => result.CandidateFrame)
                 .First())
             .OrderBy(r => r.Distance)
-            .ThenBy(r => r.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        // Keep the normal distance ordering, but reserve the best currently available clip from
-        // each game namespace. This prevents the larger P5D frame population from occupying all
-        // result cards before a valid P5R candidate is considered. Identity and display-name
-        // deduplication above still ensure that exact duplicates are shown only once.
-        var selected = new List<AnimationMatchResult>(Math.Min(options.ResultCount, sorted.Count));
-        foreach (var group in corpusGroups)
-        {
-            if (selected.Count >= options.ResultCount)
-                break;
-
-            var representative = sorted.FirstOrDefault(result =>
-                string.Equals(GetCorpusGroup(result.Candidate), group, StringComparison.OrdinalIgnoreCase));
-            if (representative != null)
-                selected.Add(representative);
-        }
-
-        foreach (var candidate in sorted)
-        {
-            if (selected.Any(existing => ReferenceEquals(existing, candidate)))
-                continue;
-
-            selected.Add(candidate);
-            if (selected.Count >= options.ResultCount)
-                break;
-        }
+            .ThenBy(r => r.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase);
 
         var output = new List<AnimationMatchResult>(options.ResultCount);
-        foreach (var candidate in selected.OrderBy(result => result.Distance)
-                     .ThenBy(result => result.Candidate.DisplayName, StringComparer.OrdinalIgnoreCase))
+        foreach (var candidate in sorted)
         {
             var radius = Math.Max(0, (int)MathF.Round(options.ResultSuppressionSeconds * candidate.Candidate.FramesPerSecond));
             var duplicate = output.Any(existing =>
@@ -190,27 +153,6 @@ public sealed class AnimationMatcher
             if (output.Count >= options.ResultCount) break;
         }
         return output;
-    }
-
-    private static bool HasCorpusGroupCoverage(
-        IReadOnlyList<AnimationMatchResult> results,
-        IReadOnlyList<string> corpusGroups)
-    {
-        if (corpusGroups.Count <= 1)
-            return true;
-
-        var resultGroups = results
-            .Select(result => GetCorpusGroup(result.Candidate))
-            .Where(group => !string.IsNullOrWhiteSpace(group))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return corpusGroups.All(resultGroups.Contains);
-    }
-
-    private static string GetCorpusGroup(IAnimationClip clip)
-    {
-        var displayName = clip?.DisplayName ?? string.Empty;
-        var separator = displayName.IndexOfAny(new[] { '\\', '/' });
-        return separator > 0 ? displayName[..separator] : string.Empty;
     }
 
     private static bool ShouldExcludeSelf(IAnimationClip source, int sourceFrame, IAnimationClip candidate, int candidateFrame, AnimationMatchOptions options)
