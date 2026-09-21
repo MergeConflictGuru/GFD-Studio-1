@@ -2,6 +2,8 @@
 
 #include "pch.h"
 #include "Utf8String.h"
+#include "FbxSdkModelPackExporter.h"
+#include "FbxSdkBoneNameMapper.h"
 
 using namespace System;
 using namespace System::Collections::Generic;
@@ -20,6 +22,12 @@ namespace GFDLibrary::Conversion::FbxSdk
     {
     public:
         static void AppendFile(Model^ model, AnimationPack^ animationPack, String^ path)
+        {
+            AppendFile(model, animationPack, path, gcnew FbxSdkModelPackExporterConfig());
+        }
+
+        static void AppendFile(Model^ model, AnimationPack^ animationPack, String^ path,
+            FbxSdkModelPackExporterConfig^ config)
         {
             if (model == nullptr)
                 throw gcnew ArgumentNullException("model");
@@ -63,7 +71,8 @@ namespace GFDLibrary::Conversion::FbxSdk
                 importer = nullptr;
 
                 scene->GetGlobalSettings().SetTimeMode(FbxTime::eFrames30);
-                AddAnimations(scene, model, animationPack);
+                AddAnimations(scene, model, animationPack,
+                    config != nullptr && config->UseUnrealBoneNames);
 
                 exporter = FbxExporter::Create(manager, "");
                 if (!exporter->SetFileExportVersion(FBX_2014_00_COMPATIBLE))
@@ -94,7 +103,8 @@ namespace GFDLibrary::Conversion::FbxSdk
     private:
         literal double FramesPerSecond = 30.0;
 
-        static void AddAnimations(FbxScene* scene, Model^ model, AnimationPack^ animationPack)
+        static void AddAnimations(FbxScene* scene, Model^ model, AnimationPack^ animationPack,
+            bool useUnrealBoneNames)
         {
             auto modelNodes = gcnew List<Node^>(model->Nodes);
             for (int animationIndex = 0; animationIndex < animationPack->Animations->Count; ++animationIndex)
@@ -121,7 +131,9 @@ namespace GFDLibrary::Conversion::FbxSdk
                     auto node = modelNodes[nodeIndex];
                     if (Object::ReferenceEquals(node, model->RootNode))
                         continue;
-                    auto fbxNode = scene->GetRootNode()->FindChild(Utf8String(node->Name).ToCStr(), true);
+                    auto exportName = FbxSdkBoneNameMapper::GetExportName(
+                        model, node, useUnrealBoneNames);
+                    auto fbxNode = scene->GetRootNode()->FindChild(Utf8String(exportName).ToCStr(), true);
                     if (fbxNode != nullptr)
                         fbxNodes[nodeIndex] = IntPtr(fbxNode);
                 }
