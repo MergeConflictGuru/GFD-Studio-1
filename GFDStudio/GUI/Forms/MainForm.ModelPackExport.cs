@@ -17,6 +17,7 @@ namespace GFDStudio.GUI.Forms
         private const uint ObjSaveFilterIndex = 4;
         private const uint AsciiFbxSaveFilterIndex = 5;
         private const uint IncludeAnimationsControlId = 0x4701;
+        private const uint UnrealBoneNamesControlId = 0x4702;
         private const int HResultCancelled = unchecked( (int)0x800704C7 );
 
         private const uint FileOpenOptionsOverwritePrompt = 0x00000002;
@@ -63,7 +64,8 @@ namespace GFDStudio.GUI.Forms
                         node,
                         path,
                         selection.IncludeAnimations && animationPack != null,
-                        animationPack );
+                        animationPack,
+                        selection.UseUnrealBoneNames );
 
                 case DaeSaveFilterIndex:
                 case ObjSaveFilterIndex:
@@ -118,6 +120,11 @@ namespace GFDStudio.GUI.Forms
                     customize.SetControlState( IncludeAnimationsControlId, ControlStateVisible );
                 }
 
+                customize.AddCheckButton(
+                    UnrealBoneNamesControlId,
+                    "Export Unreal bone names (FBX)",
+                    false );
+
                 var showResult = dialog.Show( Handle );
                 if ( showResult == HResultCancelled )
                     return null;
@@ -126,6 +133,7 @@ namespace GFDStudio.GUI.Forms
 
                 dialog.GetFileTypeIndex( out var filterIndex );
                 customize.GetCheckButtonState( IncludeAnimationsControlId, out var includeAnimations );
+                customize.GetCheckButtonState( UnrealBoneNamesControlId, out var useUnrealBoneNames );
                 dialog.GetResult( out resultItem );
                 resultItem.GetDisplayName( ShellItemDisplayNameFileSystemPath, out resultPathPointer );
                 var path = Marshal.PtrToStringUni( resultPathPointer );
@@ -135,7 +143,8 @@ namespace GFDStudio.GUI.Forms
                 return new ModelPackSaveDialogSelection(
                     path,
                     filterIndex,
-                    includeAnimations && animationAvailable );
+                    includeAnimations && animationAvailable,
+                    useUnrealBoneNames );
             }
             finally
             {
@@ -202,7 +211,8 @@ namespace GFDStudio.GUI.Forms
             ModelPackViewNode node,
             string path,
             bool includeAnimations,
-            AnimationPack animationPack )
+            AnimationPack animationPack,
+            bool useUnrealBoneNames )
         {
             // Character Browser / showroom previews can be composed from separate
             // body, face and hair GMDs while the editor tree still points at the primary
@@ -228,9 +238,11 @@ namespace GFDStudio.GUI.Forms
             try
             {
                 if ( includeAnimations && animationPack != null )
-                    ModelPackExportHelper.ExportFile( modelPack, animationPack, path );
+                    ModelPackExportHelper.ExportFile(
+                        modelPack, animationPack, path, useUnrealBoneNames );
                 else
-                    ModelPackExportHelper.ExportFile( modelPack, path );
+                    ModelPackExportHelper.ExportFile(
+                        modelPack, path, useUnrealBoneNames );
 
                 var suffix = includeAnimations && animationPack != null
                     ? " with animations baked at 30 fps"
@@ -279,16 +291,22 @@ namespace GFDStudio.GUI.Forms
 
         private sealed class ModelPackSaveDialogSelection
         {
-            public ModelPackSaveDialogSelection( string path, uint filterIndex, bool includeAnimations )
+            public ModelPackSaveDialogSelection(
+                string path,
+                uint filterIndex,
+                bool includeAnimations,
+                bool useUnrealBoneNames )
             {
                 Path = path;
                 FilterIndex = filterIndex;
                 IncludeAnimations = includeAnimations;
+                UseUnrealBoneNames = useUnrealBoneNames;
             }
 
             public string Path { get; }
             public uint FilterIndex { get; }
             public bool IncludeAnimations { get; }
+            public bool UseUnrealBoneNames { get; }
         }
 
         [StructLayout( LayoutKind.Sequential, CharSet = CharSet.Unicode )]
