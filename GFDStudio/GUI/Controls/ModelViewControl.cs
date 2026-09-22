@@ -25,6 +25,22 @@ using GFDLibrary.Shaders;
 
 namespace GFDStudio.GUI.Controls
 {
+    internal readonly struct AnimationThumbnailRenderRequest
+    {
+        public AnimationThumbnailRenderRequest( Animation animation, double animationTime, int width, int height )
+        {
+            Animation = animation ?? throw new ArgumentNullException( nameof( animation ) );
+            AnimationTime = animationTime;
+            Width = Math.Max( 32, width );
+            Height = Math.Max( 32, height );
+        }
+
+        public Animation Animation { get; }
+        public double AnimationTime { get; }
+        public int Width { get; }
+        public int Height { get; }
+    }
+
     public partial class ModelViewControl : GLControl
     {
         private static ModelViewControl sInstance;
@@ -35,6 +51,7 @@ namespace GFDStudio.GUI.Controls
         private ShaderRegistry mShaderRegistry;
         private GLPerspectiveCamera mCamera;
         private readonly bool mCanRender = true;
+        private readonly bool mThumbnailMode;
         private Point mLastMouseLocation;
         private Vector3 mRaypickStart;
         private Vector3 mRaypickEnd;
@@ -79,6 +96,11 @@ namespace GFDStudio.GUI.Controls
         private double? mAnimationLoopEnd;
         private float mGuideArrowOpacity;
         private double mGuideArrowLastUpdateTime = -1.0;
+        private int mThumbnailFramebuffer;
+        private int mThumbnailColorTexture;
+        private int mThumbnailDepthBuffer;
+        private int mThumbnailTargetWidth;
+        private int mThumbnailTargetHeight;
 
         private const float GuideArrowFadeTime = 0.24f;
         private const float GuideArrowFocusMargin = 1.12f;
@@ -151,7 +173,11 @@ namespace GFDStudio.GUI.Controls
         public event EventHandler<AnimationPlaybackState> AnimationPlaybackStateChanged;
         public event EventHandler<double> AnimationTimeChanged;
 
-        private ModelViewControl() : base( new GLControlSettings
+        private ModelViewControl() : this( false )
+        {
+        }
+
+        internal ModelViewControl( bool thumbnailMode ) : base( new GLControlSettings
         {
             APIVersion = new Version( 3, 3, 0, 0 ),
             Flags =
@@ -166,6 +192,10 @@ namespace GFDStudio.GUI.Controls
             StencilBits = 0
         } )
         {
+            mThumbnailMode = thumbnailMode;
+            if ( thumbnailMode )
+                ClearColor = System.Drawing.Color.FromArgb( 24, 24, 24 );
+
             InitializeComponent();
 
             // make the control fill up the space of the parent cotnrol
@@ -439,6 +469,8 @@ namespace GFDStudio.GUI.Controls
             if ( !mCanRender || modelPack.Model == null )
                 return;
 
+            MakeCurrent();
+
             var preserveCamera = mCamera != null;
             var cameraTranslation = preserveCamera ? mCamera.Translation : Vector3.Zero;
             var cameraOffset = preserveCamera ? mCamera.Offset : Vector3.Zero;
@@ -546,38 +578,77 @@ namespace GFDStudio.GUI.Controls
         }
 
         /// <summary>
-        /// Renders animation frames through the same loaded target model and OpenGL materials used by
-        /// the main viewport. The current viewport animation is restored before returning.
-        /// Must be called on the UI thread that owns this GL control.
+        /// Renders a batch of live thumbnail poses through this one OpenGL context and one loaded
+        /// target GLModel. The caller owns the returned bitmaps and should replace/dispose them on
+        /// the next refresh. This is intentionally a batch API: result cards never create their own
+        /// GL contexts or duplicate the target model's GPU resources.
         /// </summary>
-        public IReadOnlyList<Bitmap> RenderAnimationThumbnails(Animation animation, IReadOnlyList<double> times, int width, int height)
+        internal IReadOnlyList<Bitmap> RenderAnimationThumbnailBatch(
+            IReadOnlyList<AnimationThumbnailRenderRequest> requests )
         {
-            if ( animation == null )
-                throw new ArgumentNullException( nameof( animation ) );
-            if ( times == null || times.Count == 0 )
-                throw new ArgumentException( "At least one thumbnail time is required.", nameof( times ) );
+            if ( requests == null )
+                throw new ArgumentNullException( nameof( requests ) );
+            if ( requests.Count == 0 )
+                return Array.Empty<Bitmap>();
             if ( !mCanRender || !mIsModelLoaded || mModel == null || mCamera == null )
-                throw new InvalidOperationException( "The model viewport is not ready." );
+                throw new InvalidOperationException( "The thumbnail renderer is not ready." );
 
-            width = Math.Max( 32, width );
-            height = Math.Max( 32, height );
             MakeCurrent();
 
             var oldAnimation = Animation;
             var oldAnimationOverlay = AnimationOverlay;
             var oldAnimationTime = mAnimationTime;
             var oldAspectRatio = mCamera.AspectRatio;
-            var frames = new List<Bitmap>( times.Count );
+            var oldCameraTranslation = mCamera.Translation;
+            var oldCameraOffset = mCamera.Offset;
+            var oldModelTranslation = mCamera.ModelTranslation;
+            var oldModelRotation = mCamera.ModelRotation;
+            var oldViewport = new int[4];
+            var oldFramebuffer = new int[1];
+            GL.GetInteger( GetPName.Viewport, oldViewport );
+            GL.GetInteger( GetPName.FramebufferBinding, oldFramebuffer );
+
+            var maxWidth = requests.Max( request => request.Width );
+            var maxHeight = requests.Max( request => request.Height );
+            var frames = new List<Bitmap>( requests.Count );
             try
             {
-                Animation = animation;
-                AnimationOverlay = null;
-                mModel.LoadAnimation( animation );
+                EnsureThumbnailRenderTarget( maxWidth, maxHeight );
+                GL.BindFramebuffer( FramebufferTarget.Framebuffer, mThumbnailFramebuffer );
+                GL.ClearColor( ClearColor );
+                GL.Enable( EnableCap.DepthTest );
+                GL.DepthMask( true );
+                GL.Disable( EnableCap.Blend );
 
-                foreach ( var time in times )
+                foreach ( var request in requests )
                 {
-                    mAnimationTime = Math.Max( 0d, time );
-                    frames.Add( RenderModelThumbnail( width, height, oldAspectRatio ) );
+                    // Every card starts from the same neutral camera state. FocusOnGuideArrow then
+                    // applies the same arrow-to-subject direction, motion bounds, and fit margin
+                    // that a real click applies in the main viewer.
+                    mCamera.Translation = oldCameraTranslation;
+                    mCamera.Offset = oldCameraOffset;
+                    mCamera.ModelTranslation = oldModelTranslation;
+                    mCamera.ModelRotation = oldModelRotation;
+                    mCamera.AspectRatio = (float)request.Width / request.Height;
+                    GL.Viewport( 0, 0, request.Width, request.Height );
+                    GL.Clear( ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit );
+
+                    Animation = request.Animation;
+                    AnimationOverlay = null;
+                    mModel.LoadAnimation( request.Animation );
+                    mAnimationTime = Math.Max( 0.0, request.AnimationTime );
+                    FocusOnGuideArrow( ResolveGuideArrowAnchor() );
+
+                    mModel.Draw( new DrawContext
+                    {
+                        ShaderRegistry = mShaderRegistry,
+                        Camera = mCamera,
+                        AnimationTime = mAnimationTime,
+                        SelectedMaterial = null,
+                        SelectedMesh = null
+                    } );
+                    GL.Flush();
+                    frames.Add( ReadThumbnailPixels( request.Width, request.Height ) );
                 }
 
                 return frames;
@@ -594,65 +665,122 @@ namespace GFDStudio.GUI.Controls
                 AnimationOverlay = oldAnimationOverlay;
                 mAnimationTime = oldAnimationTime;
                 mCamera.AspectRatio = oldAspectRatio;
+                mCamera.Translation = oldCameraTranslation;
+                mCamera.Offset = oldCameraOffset;
+                mCamera.ModelTranslation = oldModelTranslation;
+                mCamera.ModelRotation = oldModelRotation;
                 if ( oldAnimation != null )
                     mModel.LoadAnimation( oldAnimation );
                 else
                     mModel.UnloadAnimation();
                 if ( oldAnimationOverlay != null )
                     mModel.LoadBlendAnimation( oldAnimationOverlay );
+
+                GL.BindFramebuffer( FramebufferTarget.Framebuffer, oldFramebuffer[0] );
+                GL.Viewport( oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3] );
+                GL.ClearColor( ClearColor );
                 Invalidate();
             }
         }
 
-        private Bitmap RenderModelThumbnail( int width, int height, float oldAspectRatio )
+        private void EnsureThumbnailRenderTarget( int width, int height )
         {
-            var viewport = new int[4];
-            GL.GetInteger( GetPName.Viewport, viewport );
+            if ( mThumbnailFramebuffer != 0 &&
+                 mThumbnailTargetWidth >= width && mThumbnailTargetHeight >= height )
+                return;
+
+            DisposeThumbnailRenderTarget();
+            mThumbnailFramebuffer = GL.GenFramebuffer();
+            mThumbnailColorTexture = GL.GenTexture();
+            mThumbnailDepthBuffer = GL.GenRenderbuffer();
+            mThumbnailTargetWidth = width;
+            mThumbnailTargetHeight = height;
+
+            GL.BindFramebuffer( FramebufferTarget.Framebuffer, mThumbnailFramebuffer );
+            GL.BindTexture( TextureTarget.Texture2D, mThumbnailColorTexture );
+            GL.TexImage2D(
+                TextureTarget.Texture2D,
+                0,
+                PixelInternalFormat.Rgba,
+                width,
+                height,
+                0,
+                PixelFormat.Rgba,
+                PixelType.UnsignedByte,
+                IntPtr.Zero );
+            GL.TexParameter( TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+                             (int)TextureMinFilter.Nearest );
+            GL.TexParameter( TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
+                             (int)TextureMagFilter.Nearest );
+            GL.FramebufferTexture2D(
+                FramebufferTarget.Framebuffer,
+                FramebufferAttachment.ColorAttachment0,
+                TextureTarget.Texture2D,
+                mThumbnailColorTexture,
+                0 );
+
+            GL.BindRenderbuffer( RenderbufferTarget.Renderbuffer, mThumbnailDepthBuffer );
+            GL.RenderbufferStorage(
+                RenderbufferTarget.Renderbuffer,
+                RenderbufferStorage.DepthComponent24,
+                width,
+                height );
+            GL.FramebufferRenderbuffer(
+                FramebufferTarget.Framebuffer,
+                FramebufferAttachment.DepthAttachment,
+                RenderbufferTarget.Renderbuffer,
+                mThumbnailDepthBuffer );
+
+            var status = GL.CheckFramebufferStatus( FramebufferTarget.Framebuffer );
+            GL.BindTexture( TextureTarget.Texture2D, 0 );
+            GL.BindRenderbuffer( RenderbufferTarget.Renderbuffer, 0 );
+            if ( status != FramebufferErrorCode.FramebufferComplete )
+            {
+                DisposeThumbnailRenderTarget();
+                throw new InvalidOperationException( "Could not create the live thumbnail render target." );
+            }
+        }
+
+        private void DisposeThumbnailRenderTarget()
+        {
+            if ( mThumbnailColorTexture != 0 )
+                GL.DeleteTexture( mThumbnailColorTexture );
+            if ( mThumbnailDepthBuffer != 0 )
+                GL.DeleteRenderbuffer( mThumbnailDepthBuffer );
+            if ( mThumbnailFramebuffer != 0 )
+                GL.DeleteFramebuffer( mThumbnailFramebuffer );
+
+            mThumbnailColorTexture = 0;
+            mThumbnailDepthBuffer = 0;
+            mThumbnailFramebuffer = 0;
+            mThumbnailTargetWidth = 0;
+            mThumbnailTargetHeight = 0;
+        }
+
+        private Bitmap ReadThumbnailPixels( int width, int height )
+        {
+            var pixels = new byte[width * height * 4];
+            GL.ReadPixels( 0, 0, width, height, PixelFormat.Bgra, PixelType.UnsignedByte, pixels );
+            var bitmap = new Bitmap( width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb );
+            var data = bitmap.LockBits(
+                new Rectangle( 0, 0, width, height ),
+                System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb );
             try
             {
-                mCamera.AspectRatio = (float)width / height;
-                GL.Viewport( 0, 0, width, height );
-                GL.Enable( EnableCap.DepthTest );
-                GL.DepthMask( true );
-                GL.Disable( EnableCap.Blend );
-                GL.Clear( ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit );
-                mModel.Draw( new DrawContext
+                for ( var y = 0; y < height; y++ )
                 {
-                    ShaderRegistry = mShaderRegistry,
-                    Camera = mCamera,
-                    AnimationTime = mAnimationTime,
-                    SelectedMaterial = null,
-                    SelectedMesh = null
-                } );
-                GL.Flush();
-
-                var pixels = new byte[width * height * 4];
-                GL.ReadPixels( 0, 0, width, height, PixelFormat.Bgra, PixelType.UnsignedByte, pixels );
-                var bitmap = new Bitmap( width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb );
-                var data = bitmap.LockBits(
-                    new Rectangle( 0, 0, width, height ),
-                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
-                    System.Drawing.Imaging.PixelFormat.Format32bppArgb );
-                try
-                {
-                    for ( var y = 0; y < height; y++ )
-                    {
-                        var sourceOffset = y * width * 4;
-                        var destination = IntPtr.Add( data.Scan0, ( height - 1 - y ) * data.Stride );
-                        Marshal.Copy( pixels, sourceOffset, destination, width * 4 );
-                    }
+                    var sourceOffset = y * width * 4;
+                    var destination = IntPtr.Add( data.Scan0, ( height - 1 - y ) * data.Stride );
+                    Marshal.Copy( pixels, sourceOffset, destination, width * 4 );
                 }
-                finally
-                {
-                    bitmap.UnlockBits( data );
-                }
-                return bitmap;
             }
             finally
             {
-                GL.Viewport( viewport[0], viewport[1], viewport[2], viewport[3] );
-                mCamera.AspectRatio = oldAspectRatio;
+                bitmap.UnlockBits( data );
             }
+
+            return bitmap;
         }
 
         public void LoadAnimationOverlay( Animation animation )
@@ -683,6 +811,12 @@ namespace GFDStudio.GUI.Controls
 
                 mUpdateTimer?.Stop();
                 mUpdateTimer?.Dispose();
+
+                if ( mThumbnailFramebuffer != 0 )
+                {
+                    MakeCurrent();
+                    DisposeThumbnailRenderTarget();
+                }
 
                 if ( mIsModelLoaded )
                     UnloadModel();
@@ -748,7 +882,27 @@ namespace GFDStudio.GUI.Controls
             if ( !mCanRender || mCamera == null )
                 return;
 
-            RenderFrame();
+            if ( mThumbnailMode )
+                RenderThumbnailFrame();
+            else
+                RenderFrame();
+        }
+
+        private void RenderThumbnailFrame()
+        {
+            GL.Clear( ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit );
+            if ( mIsModelLoaded )
+            {
+                mModel.Draw( new DrawContext
+                {
+                    ShaderRegistry = mShaderRegistry,
+                    Camera = mCamera,
+                    AnimationTime = mAnimationTime,
+                    SelectedMaterial = null,
+                    SelectedMesh = null
+                } );
+            }
+            SwapBuffers();
         }
 
         private void RenderFrame()
@@ -1330,7 +1484,7 @@ namespace GFDStudio.GUI.Controls
                    ( deltaY * deltaY ) / ( radiusY * radiusY ) <= 1.0f;
         }
 
-        private void FocusOnGuideArrow( Vector3 anchor )
+        internal void FocusOnGuideArrow( Vector3 anchor )
         {
             GetGuideArrowFramingBounds( out var target, out var targetMinimum, out var targetMaximum );
             if ( !IsFinite( anchor ) || !IsFinite( target ) ||

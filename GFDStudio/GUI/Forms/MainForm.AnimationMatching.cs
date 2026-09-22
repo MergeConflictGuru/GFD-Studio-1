@@ -361,7 +361,8 @@ namespace GFDStudio.GUI.Forms
                 return;
             }
 
-            var frameRate = AnimationMatchingFramesPerSecond;
+            var frameRate = Math.Max( 1.0f,
+                mAnimationMatchCurrentSource?.FramesPerSecond ?? AnimationMatchingFramesPerSecond );
             var loopStart = range.start / (double)frameRate;
             var loopEnd = (range.end + 1) / (double)frameRate;
             ModelViewControl.Instance.SetAnimationLoop(loopStart, loopEnd);
@@ -372,16 +373,13 @@ namespace GFDStudio.GUI.Forms
             if (clip == null || clip.FrameCount <= 0)
                 return;
 
-            var sourceFrame = Math.Clamp(transitionFrame, 0, clip.FrameCount - 1);
-            var sourceWindowFrames = Math.Max(1, (int)Math.Ceiling(2.5f * clip.FramesPerSecond));
-            var candidateWindowFrames = Math.Max(1, (int)Math.Ceiling(5f * clip.FramesPerSecond));
-            var startFrame = Math.Max(0, sourceFrame - sourceWindowFrames + 1);
-            var endFrame = Math.Min(clip.FrameCount - 1, sourceFrame + candidateWindowFrames);
+            var (startFrame, endFrame) = AnimationMatchingPreviewTiming.GetLoopFrames(
+                clip.FrameCount, transitionFrame, clip.FramesPerSecond);
 
             mAnimationMatchTimeline.SetSelection((startFrame, endFrame));
         }
 
-        async Task<IReadOnlyList<Image>> IGfdAnimationMatchingHost.RenderCandidateThumbnailAsync(
+        async Task<AnimationThumbnailScene?> IGfdAnimationMatchingHost.RenderCandidateThumbnailAsync(
             IAnimationClip clip,
             int frame,
             int width,
@@ -392,10 +390,13 @@ namespace GFDStudio.GUI.Forms
             if (targetPack?.Model == null)
                 return null;
 
-            const int previewFrameCount = 8;
-            var availableFrames = Math.Max(1, clip.FrameCount - Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1)));
-            var frameCount = Math.Min(previewFrameCount, availableFrames);
-            var firstFrame = Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1));
+            var (firstFrame, lastFrame) = AnimationMatchingPreviewTiming.GetLoopFrames(
+                clip.FrameCount, frame, clip.FramesPerSecond);
+            var frameCount = lastFrame - firstFrame + 1;
+            var seamTimeSeconds = AnimationMatchingPreviewTiming.GetSeamTimeSeconds(
+                firstFrame,
+                Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1)),
+                clip.FramesPerSecond);
             var baked = await Task.Run(() =>
             {
                 var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
@@ -404,11 +405,7 @@ namespace GFDStudio.GUI.Forms
             }, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
-            var times = Enumerable.Range(0, frameCount)
-                .Select(index => index / (double)AnimationMatchingFramesPerSecond)
-                .ToArray();
-            var bitmaps = ModelViewControl.Instance.RenderAnimationThumbnails(baked, times, width, height);
-            return bitmaps.Cast<Image>().ToArray();
+            return new AnimationThumbnailScene(targetPack, baked, seamTimeSeconds);
         }
 
         async Task IGfdAnimationMatchingHost.ExportAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken)

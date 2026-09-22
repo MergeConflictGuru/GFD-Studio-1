@@ -1,8 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
+using GFDLibrary;
 using GFDStudio.AnimationMatching.Core;
+using GFDStudio.AnimationMatching.Integration;
+using GFDStudio.GUI.Controls;
 
 namespace GFDStudio.AnimationMatching.UI;
 
@@ -10,9 +14,13 @@ public delegate void AnimationMatchResultEventHandler(object? sender, AnimationM
 
 public sealed class ThumbnailRequest : EventArgs
 {
-    private readonly Action<IReadOnlyList<Image>> _complete;
+    private readonly Action<AnimationThumbnailScene?> _complete;
 
-    public ThumbnailRequest(AnimationMatchResult result, int width, int height, Action<IReadOnlyList<Image>> complete)
+    public ThumbnailRequest(
+        AnimationMatchResult result,
+        int width,
+        int height,
+        Action<AnimationThumbnailScene?> complete)
     {
         Result = result;
         Width = width;
@@ -23,78 +31,77 @@ public sealed class ThumbnailRequest : EventArgs
     public AnimationMatchResult Result { get; }
     public int Width { get; }
     public int Height { get; }
-    public void Complete(IReadOnlyList<Image> frames) => _complete(frames);
+    public void Complete(AnimationThumbnailScene? scene) => _complete(scene);
 }
 
-/// <summary>Displays the target-model thumbnail frames as a lightweight looping animation.</summary>
+/// <summary>
+/// One shared wall clock keeps all candidate scenes on the same seam. A candidate whose available
+/// lead-in is shorter than the normal preview window simply holds its first pose until the shared
+/// seam time; the same hold is applied to its final pose after the candidate tail ends.
+/// </summary>
+internal sealed class AnimationThumbnailPlayback
+{
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+
+    public void Reset() => _clock.Restart();
+
+    public double GetAnimationTime(AnimationThumbnailScene scene)
+    {
+        var loopDuration = AnimationMatchingPreviewTiming.LoopDurationSeconds;
+        var loopPosition = _clock.Elapsed.TotalSeconds % loopDuration;
+        var seamTime = Math.Clamp(scene.SeamTimeSeconds, 0.0, (double)scene.Animation.Duration);
+        var startDelay = Math.Max(0.0, AnimationMatchingPreviewTiming.BeforeSeamSeconds - seamTime);
+        return Math.Clamp(loopPosition - startDelay, 0.0, (double)scene.Animation.Duration);
+    }
+}
+
+/// <summary>Displays the latest frame produced by the shared live thumbnail renderer.</summary>
 internal sealed class AnimationThumbnailControl : Control
 {
-    private readonly Timer _timer;
-    private IReadOnlyList<Image> _frames;
-    private int _frameIndex;
+    private AnimationThumbnailScene? _scene;
+    private Bitmap? _frame;
 
     public AnimationThumbnailControl()
     {
         DoubleBuffered = true;
         BackColor = Color.FromArgb(24, 24, 24);
-        _timer = new Timer { Interval = 90 };
-        _timer.Tick += (_, _) =>
-        {
-            if (_frames == null || _frames.Count < 2)
-                return;
-            _frameIndex = (_frameIndex + 1) % _frames.Count;
-            Invalidate();
-        };
+        TabStop = false;
     }
 
-    public void SetFrames(IReadOnlyList<Image> frames)
+    public AnimationThumbnailScene? Scene => _scene;
+
+    public void SetScene(AnimationThumbnailScene? scene)
     {
-        DisposeFrames();
-        _frames = frames;
-        _frameIndex = 0;
-        _timer.Enabled = _frames != null && _frames.Count > 1;
+        _scene = scene;
+        Invalidate();
+    }
+
+    public void SetFrame(Bitmap frame)
+    {
+        var oldFrame = _frame;
+        _frame = frame;
+        oldFrame?.Dispose();
         Invalidate();
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(BackColor);
-        if (_frames == null || _frames.Count == 0 || _frames[_frameIndex] == null)
+        if (_frame == null || _frame.Width <= 0 || _frame.Height <= 0)
             return;
 
-        var image = _frames[_frameIndex];
-        var scale = Math.Min((float)ClientSize.Width / image.Width, (float)ClientSize.Height / image.Height);
-        if (scale <= 0)
-            return;
-
-        var width = image.Width * scale;
-        var height = image.Height * scale;
-        var destination = new RectangleF(
-            (ClientSize.Width - width) * 0.5f,
-            (ClientSize.Height - height) * 0.5f,
-            width,
-            height);
-        e.Graphics.DrawImage(image, destination);
+        e.Graphics.DrawImageUnscaled(_frame, 0, 0);
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
-            _timer.Stop();
-            _timer.Dispose();
-            DisposeFrames();
+            _frame?.Dispose();
+            _frame = null;
         }
-        base.Dispose(disposing);
-    }
 
-    private void DisposeFrames()
-    {
-        if (_frames == null)
-            return;
-        foreach (var frame in _frames)
-            frame?.Dispose();
-        _frames = null;
+        base.Dispose(disposing);
     }
 }
 
@@ -104,6 +111,12 @@ internal sealed class AnimationThumbnailControl : Control
 /// </summary>
 public sealed class AnimationMatchingModeControl : UserControl
 {
+    private sealed class ThumbnailRenderEntry
+    {
+        public AnimationThumbnailControl Control { get; init; }
+        public AnimationThumbnailScene Scene { get; init; }
+    }
+
     private readonly TextBox _root = new()
     {
         ReadOnly = true,
@@ -178,11 +191,32 @@ public sealed class AnimationMatchingModeControl : UserControl
     private bool _canLoadMore;
     private bool _loadMoreArmed = true;
     private bool _loadMoreCheckPending;
+    private readonly AnimationThumbnailPlayback _thumbnailPlayback = new();
+    private readonly List<ThumbnailRenderEntry> _thumbnailRenderEntries = new();
+    private readonly ModelViewControl _thumbnailRenderer;
+    private readonly Timer _thumbnailRefreshTimer;
+    private ModelPack _thumbnailRendererModelPack;
 
     public AnimationMatchingModeControl()
     {
         Dock = DockStyle.Fill;
         BackColor = Color.FromArgb(30, 30, 30);
+
+        // All cards are ordinary WinForms controls. One hidden ModelViewControl owns the only
+        // thumbnail GL context/model and renders the current pose of every card into one reusable
+        // off-screen target per tick.
+        _thumbnailRenderer = new ModelViewControl( true )
+        {
+            Dock = DockStyle.None,
+            Location = new Point( -1000, -1000 ),
+            Size = new Size( 154, 88 ),
+            Visible = false,
+            TabStop = false
+        };
+        Controls.Add( _thumbnailRenderer );
+        _thumbnailRefreshTimer = new Timer { Interval = 33 };
+        _thumbnailRefreshTimer.Tick += ( sender, args ) => RefreshThumbnailFrames();
+        _thumbnailRefreshTimer.Start();
 
         var layout = new TableLayoutPanel
         {
@@ -318,6 +352,8 @@ public sealed class AnimationMatchingModeControl : UserControl
     {
         _selectedResult = null;
         _loadMoreArmed = true;
+        _thumbnailPlayback.Reset();
+        _thumbnailRenderEntries.Clear();
         _results.SuspendLayout();
         try
         {
@@ -347,6 +383,40 @@ public sealed class AnimationMatchingModeControl : UserControl
         finally
         {
             _results.ResumeLayout();
+        }
+    }
+
+    private void RefreshThumbnailFrames()
+    {
+        if ( IsDisposed || _thumbnailRenderEntries.Count == 0 )
+            return;
+
+        var firstScene = _thumbnailRenderEntries[0].Scene;
+        try
+        {
+            if ( !ReferenceEquals( _thumbnailRendererModelPack, firstScene.ModelPack ) )
+            {
+                _thumbnailRenderer.LoadModel( firstScene.ModelPack );
+                _thumbnailRendererModelPack = firstScene.ModelPack;
+            }
+
+            var requests = new List<AnimationThumbnailRenderRequest>( _thumbnailRenderEntries.Count );
+            foreach ( var entry in _thumbnailRenderEntries )
+            {
+                requests.Add( new AnimationThumbnailRenderRequest(
+                    entry.Scene.Animation,
+                    _thumbnailPlayback.GetAnimationTime( entry.Scene ),
+                    entry.Control.Width,
+                    entry.Control.Height ) );
+            }
+
+            var frames = _thumbnailRenderer.RenderAnimationThumbnailBatch( requests );
+            for ( var index = 0; index < _thumbnailRenderEntries.Count; index++ )
+                _thumbnailRenderEntries[index].Control.SetFrame( frames[index] );
+        }
+        catch ( Exception exception )
+        {
+            Trace.TraceWarning( $"Could not refresh live animation thumbnails: {exception.Message}" );
         }
     }
 
@@ -470,19 +540,20 @@ public sealed class AnimationMatchingModeControl : UserControl
         title.DoubleClick += Open;
         detail.DoubleClick += Open;
 
-        ThumbnailRequested?.Invoke(this, new ThumbnailRequest(result, image.Width, image.Height, frames =>
+        ThumbnailRequested?.Invoke(this, new ThumbnailRequest(result, image.Width, image.Height, scene =>
         {
             if (IsDisposed || image.IsDisposed)
-            {
-                if (frames != null)
-                    foreach (var frame in frames)
-                        frame?.Dispose();
                 return;
-            }
 
             void Apply()
             {
-                image.SetFrames(frames);
+                image.SetScene(scene);
+                if ( scene != null )
+                    _thumbnailRenderEntries.Add( new ThumbnailRenderEntry
+                    {
+                        Control = image,
+                        Scene = scene
+                    } );
             }
 
             if (InvokeRequired)
@@ -491,6 +562,18 @@ public sealed class AnimationMatchingModeControl : UserControl
                 Apply();
         }));
         return card;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _thumbnailRefreshTimer?.Stop();
+            _thumbnailRefreshTimer?.Dispose();
+            _thumbnailRenderEntries.Clear();
+        }
+
+        base.Dispose(disposing);
     }
 
     private static string AddTitleBreakPoints(string title)

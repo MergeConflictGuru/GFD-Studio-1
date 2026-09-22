@@ -433,13 +433,13 @@ public sealed class AnimationMatchingModeController : IDisposable
         {
             await _thumbnailGate.WaitAsync();
             entered = true;
-            var frames = await _host.RenderCandidateThumbnailAsync(
+            var scene = await _host.RenderCandidateThumbnailAsync(
                 request.Result.Candidate,
                 request.Result.CandidateFrame,
                 request.Width,
                 request.Height,
                 CancellationToken.None);
-            request.Complete(frames);
+            request.Complete(scene);
         }
         catch { request.Complete(null); }
         finally

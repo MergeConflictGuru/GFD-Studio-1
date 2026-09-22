@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
 using GFDStudio.AnimationMatching.Core;
@@ -20,8 +19,8 @@ public interface IGfdAnimationMatchingHost
     /// <summary>Loads a clip as the new main animation without stitching it to the previous source.</summary>
     Task OpenAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken);
 
-    /// <summary>Produces animated small same-model frames for a candidate result. May return null.</summary>
-    Task<IReadOnlyList<Image>> RenderCandidateThumbnailAsync(IAnimationClip clip, int frame, int width, int height, CancellationToken cancellationToken);
+    /// <summary>Prepares target-model data for a live candidate thumbnail. May return null.</summary>
+    Task<AnimationThumbnailScene?> RenderCandidateThumbnailAsync(IAnimationClip clip, int frame, int width, int height, CancellationToken cancellationToken);
 
     /// <summary>Exports a stitched/resampled clip using the normal GFD Studio animation export path.</summary>
     Task ExportAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken);
