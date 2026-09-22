@@ -96,6 +96,9 @@ namespace GFDStudio.GUI.Forms
                 .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
                 .OrderBy(entry => GetCorrectedAnimationMatchClipId(entry), StringComparer.Ordinal)
                 .ToArray();
+            var animationGroups = BuildAnimationMatchingAnimationGroups(entries);
+            var compositionCache = new Dictionary<string, AnimationMatchingComposition>(
+                StringComparer.OrdinalIgnoreCase);
             var clips = new List<IAnimationClip>(entries.Length);
             var validSourceModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var invalidSourceModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -148,7 +151,8 @@ namespace GFDStudio.GUI.Forms
                 var capturedKind = entry.Kind;
                 var capturedIndex = entry.Index;
                 var composition = entry.Kind == CharacterAnimationListKind.Animation
-                    ? ResolveAnimationMatchingComposition(entry, sourceModelPath, entries, modelEntries)
+                    ? GetAnimationMatchingComposition(
+                        entry, sourceModelPath, animationGroups, compositionCache, modelEntries)
                     : null;
                 Func<Animation> animationLoader = composition == null
                     ? () => LoadAnimationMatchingSourceAnimation(
@@ -172,6 +176,57 @@ namespace GFDStudio.GUI.Forms
             }
 
             return clips;
+        }
+
+        private static Dictionary<string, IReadOnlyList<CharacterAnimationEntry>>
+            BuildAnimationMatchingAnimationGroups(IReadOnlyList<CharacterAnimationEntry> entries)
+        {
+            var groups = new Dictionary<string, List<CharacterAnimationEntry>>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in entries)
+            {
+                if (entry.Kind != CharacterAnimationListKind.Animation)
+                    continue;
+
+                var basePath = GetCharacterBrowserAnimationBasePath(entry.PackPath);
+                var key = NormalizeAnimationMatchPath(basePath);
+                if (string.IsNullOrWhiteSpace(key))
+                    continue;
+
+                if (!groups.TryGetValue(key, out var group))
+                {
+                    group = new List<CharacterAnimationEntry>();
+                    groups.Add(key, group);
+                }
+                group.Add(entry);
+            }
+
+            return groups.ToDictionary(
+                pair => pair.Key,
+                pair => (IReadOnlyList<CharacterAnimationEntry>)pair.Value.ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static AnimationMatchingComposition GetAnimationMatchingComposition(
+            CharacterAnimationEntry entry,
+            string sourceModelPath,
+            IReadOnlyDictionary<string, IReadOnlyList<CharacterAnimationEntry>> animationGroups,
+            IDictionary<string, AnimationMatchingComposition> compositionCache,
+            IReadOnlyList<CharacterModelEntry> modelEntries)
+        {
+            var basePath = GetCharacterBrowserAnimationBasePath(entry.PackPath);
+            var cacheKey = string.Join("|",
+                NormalizeAnimationMatchPath(basePath),
+                NormalizeAnimationMatchPath(sourceModelPath));
+            if (compositionCache.TryGetValue(cacheKey, out var cached))
+                return cached;
+
+            animationGroups.TryGetValue(
+                NormalizeAnimationMatchPath(basePath), out var related);
+            var composition = ResolveAnimationMatchingComposition(
+                entry, sourceModelPath, related ?? Array.Empty<CharacterAnimationEntry>(), modelEntries);
+            compositionCache[cacheKey] = composition;
+            return composition;
         }
 
         private static bool IsCharacterBrowserAnimationComponent(string path)
