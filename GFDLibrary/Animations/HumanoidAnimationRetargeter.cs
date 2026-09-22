@@ -131,6 +131,7 @@ namespace GFDLibrary.Animations
                     targetPose[target] = local * parentWorld;
                 }
             }
+            AddRoyalLimbDriverTracks(output, map);
             // Material/morph/visibility tracks refer to source meshes; they are
             // not portable to the separately packaged Dance body, face and hair.
             animation.Controllers = targets.Where(output.ContainsKey).Select(n => output[n]).ToList();
@@ -146,6 +147,58 @@ namespace GFDLibrary.Animations
 
             return reverseMapping.TryGetValue(source.Parent, out var mappedSourceParent) &&
                    ReferenceEquals(mappedSourceParent, target.Parent);
+        }
+
+        private static void AddRoyalLimbDriverTracks(
+            IDictionary<Node, AnimationController> output,
+            AnimationRetargetMap map)
+        {
+            if (!map.IsDanceToRoyalHierarchy)
+                return;
+
+            var targets = map.TargetModel.Nodes
+                .GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(),
+                    StringComparer.OrdinalIgnoreCase);
+            foreach (var side in new[] { "L", "R" })
+            {
+                AddDriverTrack($"Bip01 {side} ThighTwist", $"Bip01 {side} Thigh");
+                AddDriverTrack($"Bip01 {side} ForeTwist", $"Bip01 {side} Forearm");
+            }
+
+            void AddDriverTrack(string helperName, string driverName)
+            {
+                if (!targets.TryGetValue(helperName, out var helper) ||
+                    !targets.TryGetValue(driverName, out var driver) ||
+                    !output.TryGetValue(driver, out var driverController))
+                    return;
+
+                var helperController = new AnimationController(driverController.Version) {
+                    TargetKind = TargetKind.Node,
+                    TargetName = helper.Name,
+                    TargetId = map.TryGetTargetId(helper, out var helperId) ? helperId : -1
+                };
+                var helperLayer = new AnimationLayer(driverController.Version) {
+                    KeyType = KeyType.NodePRS
+                };
+                var helperBindRotation = Rotation(helper.LocalTransform);
+                var driverBindRotation = Rotation(driver.LocalTransform);
+                Matrix4x4.Invert(driverBindRotation, out var inverseDriverBindRotation);
+                foreach (var key in driverController.Layers[0].Keys.OfType<PRSKey>())
+                {
+                    var helperRotation = helperBindRotation * inverseDriverBindRotation *
+                        Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(key.Rotation));
+                    helperLayer.Keys.Add(new PRSKey(KeyType.NodePRS) {
+                        Time = key.Time,
+                        Position = helper.Translation,
+                        Rotation = Quaternion.Normalize(
+                            Quaternion.CreateFromRotationMatrix(helperRotation)),
+                        Scale = helper.Scale
+                    });
+                }
+                helperController.Layers.Add(helperLayer);
+                output[helper] = helperController;
+            }
         }
 
         private static Quaternion EvaluateLocalRotation(Node node, Animation animation, float time)
