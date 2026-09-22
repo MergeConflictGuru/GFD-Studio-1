@@ -41,6 +41,18 @@ namespace GFDStudio.GUI.Controls
         public int Height { get; }
     }
 
+    internal sealed class AnimationThumbnailRenderBatch
+    {
+        public AnimationThumbnailRenderBatch( Bitmap atlas, IReadOnlyList<Rectangle> sourceRectangles )
+        {
+            Atlas = atlas ?? throw new ArgumentNullException( nameof( atlas ) );
+            SourceRectangles = sourceRectangles ?? throw new ArgumentNullException( nameof( sourceRectangles ) );
+        }
+
+        public Bitmap Atlas { get; }
+        public IReadOnlyList<Rectangle> SourceRectangles { get; }
+    }
+
     public partial class ModelViewControl : GLControl
     {
         private static ModelViewControl sInstance;
@@ -101,6 +113,27 @@ namespace GFDStudio.GUI.Controls
         private int mThumbnailDepthBuffer;
         private int mThumbnailTargetWidth;
         private int mThumbnailTargetHeight;
+        private readonly Dictionary<Animation, ThumbnailCameraState> mThumbnailCameraStates = new();
+
+        private readonly struct ThumbnailCameraState
+        {
+            public ThumbnailCameraState( int width, int height, GLPerspectiveCamera camera )
+            {
+                Width = width;
+                Height = height;
+                Translation = camera.Translation;
+                Offset = camera.Offset;
+                ModelTranslation = camera.ModelTranslation;
+                ModelRotation = camera.ModelRotation;
+            }
+
+            public int Width { get; }
+            public int Height { get; }
+            public Vector3 Translation { get; }
+            public Vector3 Offset { get; }
+            public Vector3 ModelTranslation { get; }
+            public Vector3 ModelRotation { get; }
+        }
 
         private const float GuideArrowFadeTime = 0.24f;
         private const float GuideArrowFocusMargin = 1.12f;
@@ -483,6 +516,8 @@ namespace GFDStudio.GUI.Controls
                 UnloadModel();
             }
 
+            mThumbnailCameraStates.Clear();
+
             // Load model into optimized format
             mModel = new GLModel( modelPack, ( material, textureName ) =>
             {
@@ -583,13 +618,13 @@ namespace GFDStudio.GUI.Controls
         /// the next refresh. This is intentionally a batch API: result cards never create their own
         /// GL contexts or duplicate the target model's GPU resources.
         /// </summary>
-        internal IReadOnlyList<Bitmap> RenderAnimationThumbnailBatch(
+        internal AnimationThumbnailRenderBatch RenderAnimationThumbnailBatch(
             IReadOnlyList<AnimationThumbnailRenderRequest> requests )
         {
             if ( requests == null )
                 throw new ArgumentNullException( nameof( requests ) );
             if ( requests.Count == 0 )
-                return Array.Empty<Bitmap>();
+                throw new ArgumentException( "At least one thumbnail is required.", nameof( requests ) );
             if ( !mCanRender || !mIsModelLoaded || mModel == null || mCamera == null )
                 throw new InvalidOperationException( "The thumbnail renderer is not ready." );
 
@@ -608,36 +643,79 @@ namespace GFDStudio.GUI.Controls
             GL.GetInteger( GetPName.Viewport, oldViewport );
             GL.GetInteger( GetPName.FramebufferBinding, oldFramebuffer );
 
-            var maxWidth = requests.Max( request => request.Width );
-            var maxHeight = requests.Max( request => request.Height );
-            var frames = new List<Bitmap>( requests.Count );
+            var cellWidth = requests.Max( request => request.Width );
+            var cellHeight = requests.Max( request => request.Height );
+            var columns = Math.Min( 8, requests.Count );
+            var rows = ( requests.Count + columns - 1 ) / columns;
+            var atlasWidth = cellWidth * columns;
+            var atlasHeight = cellHeight * rows;
+            var sourceRectangles = new Rectangle[requests.Count];
+            for ( var index = 0; index < requests.Count; index++ )
+            {
+                var column = index % columns;
+                var row = index / columns;
+                sourceRectangles[index] = new Rectangle(
+                    column * cellWidth,
+                    row * cellHeight,
+                    requests[index].Width,
+                    requests[index].Height );
+            }
+
+            Bitmap atlas = null;
             try
             {
-                EnsureThumbnailRenderTarget( maxWidth, maxHeight );
+                EnsureThumbnailRenderTarget( atlasWidth, atlasHeight );
                 GL.BindFramebuffer( FramebufferTarget.Framebuffer, mThumbnailFramebuffer );
                 GL.ClearColor( ClearColor );
                 GL.Enable( EnableCap.DepthTest );
                 GL.DepthMask( true );
                 GL.Disable( EnableCap.Blend );
+                GL.Enable( EnableCap.ScissorTest );
 
-                foreach ( var request in requests )
+                for ( var index = 0; index < requests.Count; index++ )
                 {
+                    var request = requests[index];
+                    var sourceRectangle = sourceRectangles[index];
+                    var row = index / columns;
+                    var cellX = sourceRectangle.X;
+                    var cellY = atlasHeight - ( row + 1 ) * cellHeight;
+
                     // Every card starts from the same neutral camera state. FocusOnGuideArrow then
                     // applies the same arrow-to-subject direction, motion bounds, and fit margin
-                    // that a real click applies in the main viewer.
+                    // that a real click applies in the main viewer. The result is cached because
+                    // recalculating 90 future poses for every card on every tick is CPU-expensive.
                     mCamera.Translation = oldCameraTranslation;
                     mCamera.Offset = oldCameraOffset;
                     mCamera.ModelTranslation = oldModelTranslation;
                     mCamera.ModelRotation = oldModelRotation;
                     mCamera.AspectRatio = (float)request.Width / request.Height;
-                    GL.Viewport( 0, 0, request.Width, request.Height );
+                    GL.Scissor( cellX, cellY, cellWidth, cellHeight );
+                    GL.Viewport(
+                        sourceRectangle.X,
+                        atlasHeight - sourceRectangle.Y - sourceRectangle.Height,
+                        sourceRectangle.Width,
+                        sourceRectangle.Height );
                     GL.Clear( ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit );
 
                     Animation = request.Animation;
                     AnimationOverlay = null;
                     mModel.LoadAnimation( request.Animation );
                     mAnimationTime = Math.Max( 0.0, request.AnimationTime );
-                    FocusOnGuideArrow( ResolveGuideArrowAnchor() );
+
+                    if ( !mThumbnailCameraStates.TryGetValue( request.Animation, out var cameraState ) ||
+                         cameraState.Width != request.Width || cameraState.Height != request.Height )
+                    {
+                        FocusOnGuideArrow( ResolveGuideArrowAnchor() );
+                        cameraState = new ThumbnailCameraState( request.Width, request.Height, mCamera );
+                        mThumbnailCameraStates[request.Animation] = cameraState;
+                    }
+                    else
+                    {
+                        mCamera.Translation = cameraState.Translation;
+                        mCamera.Offset = cameraState.Offset;
+                        mCamera.ModelTranslation = cameraState.ModelTranslation;
+                        mCamera.ModelRotation = cameraState.ModelRotation;
+                    }
 
                     mModel.Draw( new DrawContext
                     {
@@ -647,16 +725,16 @@ namespace GFDStudio.GUI.Controls
                         SelectedMaterial = null,
                         SelectedMesh = null
                     } );
-                    GL.Flush();
-                    frames.Add( ReadThumbnailPixels( request.Width, request.Height ) );
                 }
 
-                return frames;
+                GL.Disable( EnableCap.ScissorTest );
+                GL.Flush();
+                atlas = ReadThumbnailPixels( atlasWidth, atlasHeight );
+                return new AnimationThumbnailRenderBatch( atlas, sourceRectangles );
             }
             catch
             {
-                foreach ( var frame in frames )
-                    frame.Dispose();
+                atlas?.Dispose();
                 throw;
             }
             finally
@@ -678,6 +756,7 @@ namespace GFDStudio.GUI.Controls
 
                 GL.BindFramebuffer( FramebufferTarget.Framebuffer, oldFramebuffer[0] );
                 GL.Viewport( oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3] );
+                GL.Disable( EnableCap.ScissorTest );
                 GL.ClearColor( ClearColor );
                 Invalidate();
             }

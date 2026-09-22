@@ -59,7 +59,8 @@ internal sealed class AnimationThumbnailPlayback
 internal sealed class AnimationThumbnailControl : Control
 {
     private AnimationThumbnailScene? _scene;
-    private Bitmap? _frame;
+    private Bitmap? _atlas;
+    private Rectangle _atlasSource;
 
     public AnimationThumbnailControl()
     {
@@ -76,31 +77,35 @@ internal sealed class AnimationThumbnailControl : Control
         Invalidate();
     }
 
-    public void SetFrame(Bitmap frame)
+    public void SetAtlasFrame(Bitmap atlas, Rectangle source)
     {
-        var oldFrame = _frame;
-        _frame = frame;
-        oldFrame?.Dispose();
+        _atlas = atlas;
+        _atlasSource = source;
+        Invalidate();
+    }
+
+    public void ClearAtlasFrame()
+    {
+        _atlas = null;
+        _atlasSource = Rectangle.Empty;
         Invalidate();
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(BackColor);
-        if (_frame == null || _frame.Width <= 0 || _frame.Height <= 0)
+        if (_atlas == null || _atlasSource.Width <= 0 || _atlasSource.Height <= 0)
             return;
 
-        e.Graphics.DrawImageUnscaled(_frame, 0, 0);
+        e.Graphics.DrawImage(
+            _atlas,
+            ClientRectangle,
+            _atlasSource,
+            GraphicsUnit.Pixel );
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
-        {
-            _frame?.Dispose();
-            _frame = null;
-        }
-
         base.Dispose(disposing);
     }
 }
@@ -196,6 +201,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     private readonly ModelViewControl _thumbnailRenderer;
     private readonly Timer _thumbnailRefreshTimer;
     private ModelPack _thumbnailRendererModelPack;
+    private Bitmap _thumbnailAtlasFrame;
 
     public AnimationMatchingModeControl()
     {
@@ -353,6 +359,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         _selectedResult = null;
         _loadMoreArmed = true;
         _thumbnailPlayback.Reset();
+        ClearThumbnailAtlas();
         _thumbnailRenderEntries.Clear();
         _results.SuspendLayout();
         try
@@ -388,10 +395,21 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     private void RefreshThumbnailFrames()
     {
-        if ( IsDisposed || _thumbnailRenderEntries.Count == 0 )
+        if ( IsDisposed || !Visible || !_results.Visible || _thumbnailRenderEntries.Count == 0 )
             return;
 
-        var firstScene = _thumbnailRenderEntries[0].Scene;
+        var visibleEntries = new List<ThumbnailRenderEntry>();
+        foreach ( var entry in _thumbnailRenderEntries )
+        {
+            if ( IsThumbnailVisible( entry.Control ) )
+                visibleEntries.Add( entry );
+        }
+
+        if ( visibleEntries.Count == 0 )
+            return;
+
+        var firstScene = visibleEntries[0].Scene;
+        AnimationThumbnailRenderBatch batch = null;
         try
         {
             if ( !ReferenceEquals( _thumbnailRendererModelPack, firstScene.ModelPack ) )
@@ -400,8 +418,8 @@ public sealed class AnimationMatchingModeControl : UserControl
                 _thumbnailRendererModelPack = firstScene.ModelPack;
             }
 
-            var requests = new List<AnimationThumbnailRenderRequest>( _thumbnailRenderEntries.Count );
-            foreach ( var entry in _thumbnailRenderEntries )
+            var requests = new List<AnimationThumbnailRenderRequest>( visibleEntries.Count );
+            foreach ( var entry in visibleEntries )
             {
                 requests.Add( new AnimationThumbnailRenderRequest(
                     entry.Scene.Animation,
@@ -410,14 +428,42 @@ public sealed class AnimationMatchingModeControl : UserControl
                     entry.Control.Height ) );
             }
 
-            var frames = _thumbnailRenderer.RenderAnimationThumbnailBatch( requests );
-            for ( var index = 0; index < _thumbnailRenderEntries.Count; index++ )
-                _thumbnailRenderEntries[index].Control.SetFrame( frames[index] );
+            batch = _thumbnailRenderer.RenderAnimationThumbnailBatch( requests );
+            ClearThumbnailAtlas();
+            _thumbnailAtlasFrame = batch.Atlas;
+            var sourceRectangles = batch.SourceRectangles;
+            batch = null;
+            for ( var index = 0; index < visibleEntries.Count; index++ )
+            {
+                visibleEntries[index].Control.SetAtlasFrame(
+                    _thumbnailAtlasFrame,
+                    sourceRectangles[index] );
+            }
         }
         catch ( Exception exception )
         {
+            batch?.Atlas.Dispose();
             Trace.TraceWarning( $"Could not refresh live animation thumbnails: {exception.Message}" );
         }
+    }
+
+    private bool IsThumbnailVisible( AnimationThumbnailControl control )
+    {
+        if ( !control.IsHandleCreated || !_results.IsHandleCreated )
+            return false;
+
+        var viewport = _results.RectangleToScreen( _results.ClientRectangle );
+        var thumbnail = control.RectangleToScreen( control.ClientRectangle );
+        return viewport.IntersectsWith( thumbnail );
+    }
+
+    private void ClearThumbnailAtlas()
+    {
+        foreach ( var entry in _thumbnailRenderEntries )
+            entry.Control.ClearAtlasFrame();
+
+        _thumbnailAtlasFrame?.Dispose();
+        _thumbnailAtlasFrame = null;
     }
 
     public void SetCanLoadMore(bool canLoadMore)
@@ -554,6 +600,8 @@ public sealed class AnimationMatchingModeControl : UserControl
                         Control = image,
                         Scene = scene
                     } );
+                else
+                    image.ClearAtlasFrame();
             }
 
             if (InvokeRequired)
@@ -570,6 +618,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         {
             _thumbnailRefreshTimer?.Stop();
             _thumbnailRefreshTimer?.Dispose();
+            ClearThumbnailAtlas();
             _thumbnailRenderEntries.Clear();
         }
 
