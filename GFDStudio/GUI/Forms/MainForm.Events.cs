@@ -747,7 +747,10 @@ namespace GFDStudio.GUI.Forms
 
         private void HandleModelAnimationLoaded( object sender, Animation e )
         {
-            mAnimationTrackBar.Minimum = -1;
+            // The animation timeline is expressed in milliseconds. Keeping the
+            // minimum at zero is important: a click on the first pixel must
+            // sample t=0, not a negative time that leaves the model at bind pose.
+            mAnimationTrackBar.Minimum = 0;
             mAnimationTrackBar.Maximum = ( int ) ( e.Duration * 1000 );
         }
 
@@ -774,8 +777,11 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             mLastAnimationTime = e;
-            var value = e * 1000;
-            var trackBarValue = ( int ) value;
+            var value = Math.Max( 0d, e * 1000d );
+            var trackBarValue = Math.Clamp(
+                ( int )Math.Round( value ),
+                mAnimationTrackBar.Minimum,
+                mAnimationTrackBar.Maximum );
             if ( mAnimationTrackBar.Value != trackBarValue )
             {
                 mIgnoreNextTrackBarChange = true;
@@ -815,7 +821,7 @@ namespace GFDStudio.GUI.Forms
         {
             if ( !mIgnoreNextTrackBarChange )
             {
-                ModelViewControl.Instance.AnimationTime = mAnimationTrackBar.Value / 1000d;
+                ModelViewControl.Instance.AnimationTime = Math.Max( 0, mAnimationTrackBar.Value ) / 1000d;
                 ModelViewControl.Instance.Invalidate();
             }
             else
@@ -833,7 +839,11 @@ namespace GFDStudio.GUI.Forms
             var width = Math.Max( 1, trackBar.ClientSize.Width - 1 );
             var position = Math.Clamp( e.X, 0, width ) / ( double )width;
             var range = trackBar.Maximum - trackBar.Minimum;
-            var targetTime = Math.Max( 0d, ( trackBar.Minimum + position * range ) / 1000d );
+            var targetValue = Math.Clamp(
+                trackBar.Minimum + ( int )Math.Round( position * range ),
+                trackBar.Minimum,
+                trackBar.Maximum );
+            var targetTime = Math.Max( 0d, targetValue / 1000d );
             if ( ModelViewControl.Instance.AnimationLoopStart is double loopStart &&
                  ModelViewControl.Instance.AnimationLoopEnd is double loopEnd )
             {
@@ -843,9 +853,7 @@ namespace GFDStudio.GUI.Forms
 
             // A click on the channel should jump directly to that point in the animation.
             mIgnoreNextTrackBarChange = false;
-            trackBar.Value = Math.Clamp( trackBar.Minimum + ( int )Math.Round( targetTime * 1000d ),
-                                         trackBar.Minimum,
-                                         trackBar.Maximum );
+            trackBar.Value = targetValue;
         }
 
         private void HandleAnimationTreeViewAfterSelect( object sender, TreeViewEventArgs e )

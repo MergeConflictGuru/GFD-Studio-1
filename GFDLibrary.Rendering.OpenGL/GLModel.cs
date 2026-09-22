@@ -441,6 +441,11 @@ namespace GFDLibrary.Rendering.OpenGL
                     curKey = key;
             }
 
+            // Sampling just before the first key must still show the first
+            // authored pose. Otherwise a timeline seek to frame zero can leave
+            // the model in its bind pose until the clock advances past the key.
+            curKey ??= layer.Keys.FirstOrDefault();
+
             // Find next key
             if ( curKey != null )
             {
