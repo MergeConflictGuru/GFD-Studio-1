@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using GFDLibrary;
 using GFDLibrary.Animations;
 using GFDLibrary.Models;
@@ -45,6 +47,16 @@ namespace GFDStudio.GUI.Forms
                 mInner.SampleGlobalPose(frameIndex, destination);
         }
 
+        private sealed class AnimationMatchingComposition
+        {
+            public string BasePackPath { get; init; }
+            public string BodyModelPath { get; init; }
+            public string FaceSelectionPath { get; init; }
+            public string HairSelectionPath { get; init; }
+            public string FaceModelPath { get; init; }
+            public string HairModelPath { get; init; }
+        }
+
         IAnimationClip IAnimationMatchingCorpusHost.CurrentAnimationForMatching
         {
             get
@@ -79,6 +91,7 @@ namespace GFDStudio.GUI.Forms
         {
             var root = mCharacterBrowserRoot;
             var lookups = BuildAnimationMatchingSourceModelLookups(root);
+            var modelEntries = mCharacterModels.ToArray();
             var entries = mCharacterAnimations
                 .Where(entry => entry.Kind != CharacterAnimationListKind.BlendAnimation)
                 .OrderBy(entry => GetCorrectedAnimationMatchClipId(entry), StringComparer.Ordinal)
@@ -90,6 +103,13 @@ namespace GFDStudio.GUI.Forms
 
             foreach (var entry in entries)
             {
+                // Dance component GAPs are not independent motions. Index only the base
+                // animation after composing the body/face/hair additions onto it; indexing a
+                // component by itself produces the static/T-pose candidates seen in results.
+                if (entry.Kind == CharacterAnimationListKind.Animation &&
+                    IsCharacterBrowserAnimationComponent(entry.PackPath))
+                    continue;
+
                 var sourceModelPath = ResolveAnimationMatchingSourceModelPath(
                     entry, root, lookups.exactModels, lookups.characterModels);
                 if (string.IsNullOrWhiteSpace(sourceModelPath) || !File.Exists(sourceModelPath))
@@ -127,12 +147,22 @@ namespace GFDStudio.GUI.Forms
                 var capturedPackPath = entry.PackPath;
                 var capturedKind = entry.Kind;
                 var capturedIndex = entry.Index;
+                var composition = entry.Kind == CharacterAnimationListKind.Animation
+                    ? ResolveAnimationMatchingComposition(entry, sourceModelPath, entries, modelEntries)
+                    : null;
+                Func<Animation> animationLoader = composition == null
+                    ? () => LoadAnimationMatchingSourceAnimation(
+                        capturedPackPath, capturedKind, capturedIndex)
+                    : () => LoadComposedAnimationMatchingSourceAnimation(
+                        composition, capturedIndex);
+                Func<Model> modelLoader = composition == null
+                    ? () => LoadAnimationMatchingSourceModel(capturedSourceModelPath)
+                    : () => LoadAnimationMatchingSourceModel(composition);
                 clips.Add(new GfdAnimationClip(
                     GetCorrectedAnimationMatchClipId(entry),
                     entry.DisplayName,
-                    () => LoadAnimationMatchingSourceModel(capturedSourceModelPath),
-                    () => LoadAnimationMatchingSourceAnimation(
-                        capturedPackPath, capturedKind, capturedIndex),
+                    modelLoader,
+                    animationLoader,
                     AnimationMatchingFramesPerSecond));
             }
 
@@ -142,6 +172,170 @@ namespace GFDStudio.GUI.Forms
             }
 
             return clips;
+        }
+
+        private static bool IsCharacterBrowserAnimationComponent(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            var stem = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+            if (!Regex.IsMatch(
+                    stem,
+                    @"_(?:f|h\d+|\d+)$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                return false;
+
+            var basePath = GetCharacterBrowserAnimationBasePath(path);
+            return !string.IsNullOrWhiteSpace(basePath) &&
+                   !AreSamePath(basePath, path) &&
+                   File.Exists(basePath);
+        }
+
+        private static AnimationMatchingComposition ResolveAnimationMatchingComposition(
+            CharacterAnimationEntry entry,
+            string sourceModelPath,
+            IReadOnlyList<CharacterAnimationEntry> entries,
+            IReadOnlyList<CharacterModelEntry> modelEntries)
+        {
+            var basePath = GetCharacterBrowserAnimationBasePath(entry.PackPath);
+            if (string.IsNullOrWhiteSpace(basePath) || !File.Exists(basePath))
+                return null;
+
+            var related = entries
+                .Where(candidate => candidate.Kind == CharacterAnimationListKind.Animation)
+                .Where(candidate => AreSamePath(
+                    GetCharacterBrowserAnimationBasePath(candidate.PackPath), basePath))
+                .ToArray();
+
+            var directory = Path.GetDirectoryName(basePath) ?? string.Empty;
+            var baseStem = Path.GetFileNameWithoutExtension(basePath) ?? string.Empty;
+            var facePath = related
+                .Select(candidate => candidate.PackPath)
+                .Where(path => string.Equals(
+                    Path.GetFileNameWithoutExtension(path),
+                    baseStem + "_f",
+                    StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault(path => File.Exists(path));
+            facePath ??= Path.Combine(directory, baseStem + "_f.GAP");
+            if (!File.Exists(facePath))
+                facePath = null;
+
+            var hairComponentPath = related
+                .Select(candidate => candidate.PackPath)
+                .Where(path => Regex.IsMatch(
+                    Path.GetFileNameWithoutExtension(path) ?? string.Empty,
+                    @"_h\d+$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(path => File.Exists(path));
+            var hairStem = GetCharacterBrowserAnimationHairStem(hairComponentPath);
+            var hairSelectionPath = string.IsNullOrWhiteSpace(hairStem)
+                ? null
+                : Path.Combine(directory, hairStem + ".GMD");
+
+            var characterId = ExtractCharacterId(sourceModelPath);
+            var faceModelPath = string.IsNullOrWhiteSpace(facePath) ||
+                                string.IsNullOrWhiteSpace(characterId)
+                ? null
+                : FindCharacterBrowserAnimationSplitPart(
+                    modelEntries, sourceModelPath, CharacterModelPart.Face, characterId, null)?.Path;
+            var hairModelPath = string.IsNullOrWhiteSpace(hairSelectionPath) ||
+                                string.IsNullOrWhiteSpace(characterId)
+                ? null
+                : FindCharacterBrowserAnimationSplitPart(
+                    modelEntries, sourceModelPath, CharacterModelPart.Hair, characterId, hairStem)?.Path;
+
+            var bodyComponentPath = GetCharacterBrowserBodyAnimationPath(basePath, sourceModelPath);
+            var hasBodyComponent = !string.IsNullOrWhiteSpace(bodyComponentPath) &&
+                                   File.Exists(bodyComponentPath);
+            if (!hasBodyComponent && facePath == null && hairSelectionPath == null)
+                return null;
+
+            return new AnimationMatchingComposition
+            {
+                BasePackPath = basePath,
+                BodyModelPath = sourceModelPath,
+                FaceSelectionPath = facePath,
+                HairSelectionPath = hairSelectionPath,
+                FaceModelPath = faceModelPath,
+                HairModelPath = hairModelPath
+            };
+        }
+
+        private static Model LoadAnimationMatchingSourceModel(
+            AnimationMatchingComposition composition)
+        {
+            var cacheKey = string.Join("|",
+                NormalizeAnimationMatchPath(composition.BodyModelPath),
+                NormalizeAnimationMatchPath(composition.FaceModelPath),
+                NormalizeAnimationMatchPath(composition.HairModelPath));
+            if (sAnimationMatchingSourceModels.TryGetValue(cacheKey, out var weakReference) &&
+                weakReference.TryGetTarget(out var cached))
+                return cached;
+
+            var parts = new List<CharacterModelEntry>
+            {
+                new CharacterModelEntry
+                {
+                    Path = composition.BodyModelPath,
+                    Part = CharacterModelPart.Body,
+                    DisplayName = composition.BodyModelPath
+                }
+            };
+            if (!string.IsNullOrWhiteSpace(composition.FaceModelPath))
+            {
+                parts.Add(new CharacterModelEntry
+                {
+                    Path = composition.FaceModelPath,
+                    Part = CharacterModelPart.Face,
+                    DisplayName = composition.FaceModelPath
+                });
+            }
+            if (!string.IsNullOrWhiteSpace(composition.HairModelPath))
+            {
+                parts.Add(new CharacterModelEntry
+                {
+                    Path = composition.HairModelPath,
+                    Part = CharacterModelPart.Hair,
+                    DisplayName = composition.HairModelPath
+                });
+            }
+
+            var model = ComposeCharacterModelPack(parts)?.Model ?? throw new InvalidDataException(
+                "Animation source model has no model data: " + composition.BodyModelPath);
+            sAnimationMatchingSourceModels[cacheKey] = new WeakReference<Model>(model);
+            return model;
+        }
+
+        private static Animation LoadComposedAnimationMatchingSourceAnimation(
+            AnimationMatchingComposition composition,
+            int index)
+        {
+            var baseAnimation = LoadAnimationMatchingSourceAnimation(
+                composition.BasePackPath,
+                CharacterAnimationListKind.Animation,
+                index);
+            if (baseAnimation == null)
+                return null;
+
+            var baseEntry = new CharacterAnimationEntry
+            {
+                PackPath = composition.BasePackPath,
+                Kind = CharacterAnimationListKind.Animation,
+                Index = index,
+                DisplayName = composition.BasePackPath
+            };
+
+            return ComposeCharacterBrowserAnimation(
+                baseEntry,
+                baseAnimation,
+                composition.BodyModelPath,
+                composition.FaceSelectionPath,
+                composition.HairSelectionPath,
+                out _,
+                out _,
+                CancellationToken.None);
         }
 
         private (Dictionary<string, string> exactModels, Dictionary<string, string> characterModels)
@@ -244,7 +438,7 @@ namespace GFDStudio.GUI.Forms
         private string GetCorrectedAnimationMatchingContextKey()
         {
             return string.Join("|",
-                "animatch-global-v4",
+                "animatch-global-v5-split-composition",
                 NormalizeAnimationMatchPath(mCharacterBrowserRoot),
                 GetAnimationMatchingCorpusListSignature());
         }
