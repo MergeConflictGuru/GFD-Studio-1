@@ -592,7 +592,8 @@ namespace GFDStudio.GUI.Controls
                     LoadAnimationOverlay( animationOverlay );
             }
 
-            Invalidate();
+            if ( !mThumbnailMode )
+                Invalidate();
         }
 
         public void LoadAnimation( Animation animation, bool reset = true )
@@ -758,7 +759,8 @@ namespace GFDStudio.GUI.Controls
                 GL.Viewport( oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3] );
                 GL.Disable( EnableCap.ScissorTest );
                 GL.ClearColor( ClearColor );
-                Invalidate();
+                if ( !mThumbnailMode )
+                    Invalidate();
             }
         }
 
@@ -960,6 +962,14 @@ namespace GFDStudio.GUI.Controls
         {
             if ( !mCanRender || mCamera == null )
                 return;
+
+            // The character-browser thumbnails use a second ModelViewControl on the
+            // same UI thread. Rendering that control changes the thread's current GL
+            // context, so never assume that this control is still current when WinForms
+            // asks it to paint. Without this, the main surface can be cleared/swapped
+            // through the hidden thumbnail context and appear as a solid gray viewport.
+            MakeCurrent();
+            UpdateViewport();
 
             if ( mThumbnailMode )
                 RenderThumbnailFrame();
