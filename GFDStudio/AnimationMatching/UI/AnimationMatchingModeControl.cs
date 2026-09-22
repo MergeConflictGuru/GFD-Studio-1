@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using GFDLibrary;
 using GFDStudio.AnimationMatching.Core;
@@ -54,8 +55,13 @@ internal sealed class AnimationThumbnailPlayback
     public double GetAnimationTime(AnimationThumbnailScene scene, double loopPosition)
     {
         var seamTime = Math.Clamp(scene.SeamTimeSeconds, 0.0, (double)scene.Animation.Duration);
-        var startDelay = Math.Max(0.0, AnimationMatchingPreviewTiming.BeforeSeamSeconds - seamTime);
-        return Math.Clamp(loopPosition - startDelay, 0.0, (double)scene.Animation.Duration);
+        // Map the shared preview clock around each clip's actual seam. At the shared
+        // seam instant, every card therefore samples its own seam time. Clips with
+        // too little lead-in hold their first pose; clips with too little tail hold
+        // their last pose.
+        var animationTime = seamTime +
+                             ( loopPosition - AnimationMatchingPreviewTiming.BeforeSeamSeconds );
+        return Math.Clamp(animationTime, 0.0, (double)scene.Animation.Duration);
     }
 }
 
@@ -124,7 +130,6 @@ public sealed class AnimationMatchingModeControl : UserControl
     {
         public AnimationThumbnailControl Control { get; init; }
         public AnimationThumbnailScene Scene { get; init; }
-        public Rectangle AtlasSource { get; set; }
     }
 
     private readonly TextBox _root = new()
@@ -207,8 +212,8 @@ public sealed class AnimationMatchingModeControl : UserControl
     private readonly Timer _thumbnailRefreshTimer;
     private ModelPack _thumbnailRendererModelPack;
     private Bitmap _thumbnailAtlasFrame;
-    private int _thumbnailRenderCursor;
-    private double _thumbnailCyclePosition;
+    private Task<AnimationThumbnailRenderBatch> _thumbnailRenderTask;
+    private int _thumbnailRenderGeneration;
 
     public AnimationMatchingModeControl()
     {
@@ -400,12 +405,13 @@ public sealed class AnimationMatchingModeControl : UserControl
         }
     }
 
-    private void RefreshThumbnailFrames()
+    private async void RefreshThumbnailFrames()
     {
         if ( IsDisposed || !Visible || !_results.Visible || _thumbnailRenderEntries.Count == 0 )
             return;
 
-        EnsureThumbnailAtlas();
+        if ( _thumbnailRenderTask is { IsCompleted: false } )
+            return;
 
         var visibleEntries = new List<ThumbnailRenderEntry>();
         foreach ( var entry in _thumbnailRenderEntries )
@@ -417,48 +423,57 @@ public sealed class AnimationMatchingModeControl : UserControl
         if ( visibleEntries.Count == 0 )
             return;
 
-        if ( _thumbnailRenderCursor >= visibleEntries.Count )
+        // Render every visible candidate from the same wall-clock position in one shared
+        // OpenGL batch. RenderAnimationThumbnailBatch performs one model draw per cell but
+        // reads the complete atlas back only once, so cards appear in sync instead of forming
+        // a one-card-per-tick rolling scan.
+        var firstScene = visibleEntries[0].Scene;
+        var renderGeneration = _thumbnailRenderGeneration;
+        var loopPosition = _thumbnailPlayback.GetLoopPositionSeconds();
+        var requests = new List<AnimationThumbnailRenderRequest>( visibleEntries.Count );
+        foreach ( var entry in visibleEntries )
         {
-            _thumbnailRenderCursor = 0;
-            _thumbnailCyclePosition = _thumbnailPlayback.GetLoopPositionSeconds();
+            requests.Add( new AnimationThumbnailRenderRequest(
+                entry.Scene.Animation,
+                _thumbnailPlayback.GetAnimationTime( entry.Scene, loopPosition ),
+                entry.Control.Width,
+                entry.Control.Height ) );
         }
 
-        if ( _thumbnailRenderCursor == 0 )
-            _thumbnailCyclePosition = _thumbnailPlayback.GetLoopPositionSeconds();
+        var modelPack = firstScene.ModelPack;
+        var renderTask = Task.Run( () =>
+        {
+            // Keep one persistent renderer/model for the whole grid, but move its
+            // OpenGL work off the WinForms thread so the main viewer remains live.
+            if ( !ReferenceEquals( _thumbnailRendererModelPack, modelPack ) )
+            {
+                _thumbnailRenderer.LoadModel( modelPack );
+                _thumbnailRendererModelPack = modelPack;
+            }
 
-        // Keep each UI-thread render small. The persistent atlas lets the main model viewport
-        // repaint between thumbnail batches instead of waiting for every visible card at once.
-        var visibleEntry = visibleEntries[_thumbnailRenderCursor++];
-        var firstScene = visibleEntry.Scene;
-        AnimationThumbnailRenderBatch batch = null;
+            return _thumbnailRenderer.RenderAnimationThumbnailBatch( requests );
+        } );
+        _thumbnailRenderTask = renderTask;
+
         try
         {
-            if ( !ReferenceEquals( _thumbnailRendererModelPack, firstScene.ModelPack ) )
+            var batch = await renderTask;
+            if ( renderGeneration != _thumbnailRenderGeneration || IsDisposed )
             {
-                _thumbnailRenderer.LoadModel( firstScene.ModelPack );
-                _thumbnailRendererModelPack = firstScene.ModelPack;
+                batch.Atlas.Dispose();
+                return;
             }
 
-            var requests = new[]
+            var atlas = batch.Atlas;
+            var sourceRectangles = batch.SourceRectangles;
+            ClearThumbnailAtlas();
+            _thumbnailAtlasFrame = atlas;
+            for ( var index = 0; index < visibleEntries.Count; index++ )
             {
-                new AnimationThumbnailRenderRequest(
-                    visibleEntry.Scene.Animation,
-                    _thumbnailPlayback.GetAnimationTime( visibleEntry.Scene, _thumbnailCyclePosition ),
-                    visibleEntry.Control.Width,
-                    visibleEntry.Control.Height )
-            };
-
-            batch = _thumbnailRenderer.RenderAnimationThumbnailBatch( requests );
-            using ( var graphics = Graphics.FromImage( _thumbnailAtlasFrame ) )
-            {
-                graphics.DrawImage(
-                    batch.Atlas,
-                    visibleEntry.AtlasSource,
-                    batch.SourceRectangles[0],
-                    GraphicsUnit.Pixel );
+                visibleEntries[index].Control.SetAtlasFrame(
+                    _thumbnailAtlasFrame,
+                    sourceRectangles[index] );
             }
-
-            visibleEntry.Control.Invalidate();
         }
         catch ( Exception exception )
         {
@@ -466,54 +481,8 @@ public sealed class AnimationMatchingModeControl : UserControl
         }
         finally
         {
-            batch?.Atlas.Dispose();
-        }
-    }
-
-    private void EnsureThumbnailAtlas()
-    {
-        if ( _thumbnailRenderEntries.Count == 0 )
-            return;
-
-        var cellWidth = 32;
-        var cellHeight = 32;
-        foreach ( var entry in _thumbnailRenderEntries )
-        {
-            cellWidth = Math.Max( cellWidth, entry.Control.Width );
-            cellHeight = Math.Max( cellHeight, entry.Control.Height );
-        }
-        var columns = Math.Min( 8, _thumbnailRenderEntries.Count );
-        var rows = ( _thumbnailRenderEntries.Count + columns - 1 ) / columns;
-        var atlasSize = new Size( cellWidth * columns, cellHeight * rows );
-        var requiresNewAtlas = _thumbnailAtlasFrame == null || _thumbnailAtlasFrame.Size != atlasSize;
-
-        if ( requiresNewAtlas )
-        {
-            var oldAtlas = _thumbnailAtlasFrame;
-            _thumbnailAtlasFrame = new Bitmap(
-                atlasSize.Width,
-                atlasSize.Height,
-                System.Drawing.Imaging.PixelFormat.Format32bppArgb );
-            using ( var graphics = Graphics.FromImage( _thumbnailAtlasFrame ) )
-                graphics.Clear( Color.FromArgb( 24, 24, 24 ) );
-
-            oldAtlas?.Dispose();
-            _thumbnailRenderCursor = 0;
-        }
-
-        for ( var index = 0; index < _thumbnailRenderEntries.Count; index++ )
-        {
-            var entry = _thumbnailRenderEntries[index];
-            var atlasSource = new Rectangle(
-                ( index % columns ) * cellWidth,
-                ( index / columns ) * cellHeight,
-                entry.Control.Width,
-                entry.Control.Height );
-            if ( requiresNewAtlas || entry.AtlasSource != atlasSource )
-            {
-                entry.AtlasSource = atlasSource;
-                entry.Control.SetAtlasFrame( _thumbnailAtlasFrame, atlasSource );
-            }
+            if ( ReferenceEquals( _thumbnailRenderTask, renderTask ) )
+                _thumbnailRenderTask = null;
         }
     }
 
@@ -529,13 +498,12 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     private void ClearThumbnailAtlas()
     {
+        _thumbnailRenderGeneration++;
         foreach ( var entry in _thumbnailRenderEntries )
             entry.Control.ClearAtlasFrame();
 
         _thumbnailAtlasFrame?.Dispose();
         _thumbnailAtlasFrame = null;
-        _thumbnailRenderCursor = 0;
-        _thumbnailCyclePosition = 0.0;
     }
 
     public void SetCanLoadMore(bool canLoadMore)
