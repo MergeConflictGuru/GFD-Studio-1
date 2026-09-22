@@ -288,6 +288,22 @@ namespace GFDLibrary.Tests
         }
 
         [TestMethod]
+        public void DanceToRoyalRetargetUsesWorldBindCorrectionWhenLocalModeIsRequested()
+        {
+            var (royal, dance) = CreateDifferentSkeletons();
+            var worldAnimation = CreateCrossGameMotionAnimation(dance.Version);
+            var localAnimation = CreateCrossGameMotionAnimation(dance.Version);
+
+            worldAnimation.Retarget(dance, royal, false, false);
+            localAnimation.Retarget(dance, royal, false, true);
+
+            var expected = AnimationPoseEvaluator.Evaluate(royal, worldAnimation, 1);
+            var actual = AnimationPoseEvaluator.Evaluate(royal, localAnimation, 1);
+            foreach (var node in royal.Nodes)
+                AssertTransformEqual(expected[node], actual[node]);
+        }
+
+        [TestMethod]
         public void StandaloneFaceBakesHeadRelativeToBodyWhenHierarchiesDiffer()
         {
             var root = new Node("RootNode");
@@ -421,6 +437,28 @@ namespace GFDLibrary.Tests
             hips.AddChildNode(new Node("Spine", new Vector3(0, 2, 0), Quaternion.Identity, Vector3.One));
             hips.AddChildNode(new Node("LeftArm", new Vector3(6, 3, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitY, -.8f), Vector3.One));
             return (source, target);
+        }
+
+        private static Animation CreateCrossGameMotionAnimation(ResourceVersion version)
+        {
+            var animation = new Animation(version) { Duration = 1 };
+            foreach (var (name, axis, angle) in new[] {
+                ("root", Vector3.UnitY, .35f),
+                ("Hips", Vector3.UnitZ, -.55f),
+                ("Spine", Vector3.UnitX, .25f),
+                ("LeftArm", Vector3.UnitY, .8f)
+            })
+            {
+                var controller = CreateController(name);
+                controller.Layers[0].Keys[0].Time = 0;
+                controller.Layers[0].Keys.Add(new PRSKey(KeyType.NodeRHalf) {
+                    Time = 1,
+                    Rotation = Quaternion.CreateFromAxisAngle(axis, angle)
+                });
+                animation.Controllers.Add(controller);
+            }
+
+            return animation;
         }
 
         private static void AssertTransformEqual(Matrix4x4 expected, Matrix4x4 actual)

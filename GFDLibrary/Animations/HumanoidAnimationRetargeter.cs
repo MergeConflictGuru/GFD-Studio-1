@@ -26,6 +26,12 @@ namespace GFDLibrary.Animations
             // Dance limbs: the semantic bones correspond, but their local axes do
             // not (notably the calf/foot and forearm/hand chains).
             var reverseMapping = mapping.ToDictionary(pair => pair.Value, pair => pair.Key);
+            // Dance stores its motion below `root`, while Royal stores it below
+            // `Bip01` after an additional coordinate-conversion chain. Applying
+            // the local shortcut in this direction treats those two local bases
+            // as interchangeable and mirrors/twists the retargeted pose. Keep
+            // the bind-corrected world-space calculation for Dance -> Royal.
+            var allowLocalBindSpace = useLocalBindSpace && !map.IsDanceToRoyalHierarchy;
 
             var motionRoot = AnimationSkeletonRoles.ResolveMotionRoot(targets.Where(mapping.ContainsKey));
             var heightRatio = 1f;
@@ -66,7 +72,7 @@ namespace GFDLibrary.Animations
                     if (mapping.TryGetValue(target, out var source))
                     {
                         Quaternion localRotation;
-                        if (useLocalBindSpace && CanTransferLocalRotation(source, target, reverseMapping))
+                        if (allowLocalBindSpace && CanTransferLocalRotation(source, target, reverseMapping))
                         {
                             // A contiguous semantic chain should be retargeted as
                             // a local animation delta. Reconstructing every bone

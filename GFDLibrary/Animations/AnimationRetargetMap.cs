@@ -21,6 +21,7 @@ namespace GFDLibrary.Animations
         internal Model SourceModel { get; }
         internal Model TargetModel { get; }
         internal bool UsesDifferentHumanoidHierarchy { get; }
+        internal bool IsDanceToRoyalHierarchy { get; }
 
         private AnimationRetargetMap( Model originalModel, Model targetModel )
         {
@@ -32,6 +33,9 @@ namespace GFDLibrary.Animations
             UsesDifferentHumanoidHierarchy =
                 (mOriginalNodes.ContainsKey("Bip01 Pelvis") && mTargetNodes.ContainsKey("Hips")) ||
                 (mOriginalNodes.ContainsKey("Hips") && mTargetNodes.ContainsKey("Bip01 Pelvis"));
+            IsDanceToRoyalHierarchy =
+                mOriginalNodes.ContainsKey("Hips") &&
+                mTargetNodes.ContainsKey("Bip01 Pelvis");
             mTargetNodeIds = targetModel.Nodes
                 .Select( ( node, index ) => ( node, index ) )
                 .GroupBy( x => x.node )
