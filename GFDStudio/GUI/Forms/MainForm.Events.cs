@@ -790,6 +790,11 @@ namespace GFDStudio.GUI.Forms
 
         private void HandleAnimationPlaybackButtonClick( object sender, EventArgs e )
         {
+            ToggleAnimationPlayback();
+        }
+
+        private void ToggleAnimationPlayback()
+        {
             if ( !ModelViewControl.Instance.IsAnimationLoaded )
                 return;
 

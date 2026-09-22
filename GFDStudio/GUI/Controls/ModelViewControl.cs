@@ -2088,11 +2088,6 @@ namespace GFDStudio.GUI.Controls
 
         protected override void OnKeyDown( KeyEventArgs e )
         {
-            if ( e.KeyCode == Keys.Space )
-            {
-                mCamera.ModelTranslation = Vector3.Zero;
-                mCamera.ModelRotation = Vector3.Zero;
-            }
             Invalidate();
         }
 
