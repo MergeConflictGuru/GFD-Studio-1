@@ -56,14 +56,7 @@ namespace GFDStudio.GUI.Controls
         }
         protected override void OnKeyDown( KeyEventArgs e )
         {
-            if ( e.KeyCode == Keys.Space )
-            {
-                TextureOffset.X = 0;
-                TextureOffset.Y = 0;
-                TextureScale = 1;
-                Invalidate();
-            }
-            else if ( e.KeyCode == Keys.F )
+            if ( e.KeyCode == Keys.F )
             {
                 Nearest = !Nearest;
                 Invalidate();

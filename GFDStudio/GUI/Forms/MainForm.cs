@@ -58,6 +58,7 @@ namespace GFDStudio.GUI.Forms
             // start work that depends on the selected retargeting mode.
             settings = settings.LoadJson();
             InitializeComponent();
+            KeyPreview = true;
             InitializeState();
             InitializeEvents();
             InitializeAnimationMatching();
@@ -71,6 +72,49 @@ namespace GFDStudio.GUI.Forms
             //ModelViewControl.Instance.LoadAnimation( Resource.Load<AnimationPack>( 
             //    @"D:\Modding\Persona 5 EU\Main game\ExtractedClean\data\model\character\0001\field\bf0001_002.GAP" ).Animations[2]);
 #endif
+        }
+
+        protected override bool ProcessCmdKey( ref Message msg, Keys keyData )
+        {
+            if ( ( keyData & Keys.KeyCode ) == Keys.Space && !IsTextBoxFocused() )
+            {
+                ToggleAnimationPlayback();
+                return true;
+            }
+
+            return base.ProcessCmdKey( ref msg, keyData );
+        }
+
+        protected override void OnKeyDown( KeyEventArgs e )
+        {
+            if ( e.KeyCode == Keys.Space && !IsTextBoxFocused() )
+            {
+                ToggleAnimationPlayback();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
+
+            base.OnKeyDown( e );
+        }
+
+        private bool IsTextBoxFocused()
+        {
+            return FindFocusedControl( this ) is TextBoxBase;
+        }
+
+        private static Control FindFocusedControl( Control control )
+        {
+            if ( control.Focused )
+                return control;
+
+            foreach ( Control child in control.Controls )
+            {
+                if ( child.ContainsFocus )
+                    return FindFocusedControl( child );
+            }
+
+            return control;
         }
 
         private void InitializeState()
