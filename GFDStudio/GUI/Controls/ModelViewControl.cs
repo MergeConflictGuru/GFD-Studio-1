@@ -706,7 +706,7 @@ namespace GFDStudio.GUI.Controls
                     if ( !mThumbnailCameraStates.TryGetValue( request.Animation, out var cameraState ) ||
                          cameraState.Width != request.Width || cameraState.Height != request.Height )
                     {
-                        FocusOnGuideArrow( ResolveGuideArrowAnchor() );
+                        FocusOnGuideArrow( ResolveGuideArrowAnchor(), tight: true );
                         cameraState = new ThumbnailCameraState( request.Width, request.Height, mCamera );
                         mThumbnailCameraStates[request.Animation] = cameraState;
                     }
@@ -1573,60 +1573,19 @@ namespace GFDStudio.GUI.Controls
                    ( deltaY * deltaY ) / ( radiusY * radiusY ) <= 1.0f;
         }
 
-        internal void FocusOnGuideArrow( Vector3 anchor )
+        internal void FocusOnGuideArrow( Vector3 anchor, bool tight = false )
         {
-            GetGuideArrowFramingBounds( out var target, out var targetMinimum, out var targetMaximum );
-            if ( !IsFinite( anchor ) || !IsFinite( target ) ||
-                 !IsFinite( targetMinimum ) || !IsFinite( targetMaximum ) )
-                return;
-
-            var forward = target - anchor;
-            if ( forward.LengthSquared < 0.0001f )
-            {
-                // A degenerate target/anchor pair can occur for an empty or
-                // origin-centred asset. Preserve the current viewing side in that
-                // case instead of inventing a random orbit direction.
-                var inverseView = Matrix4.Invert( mCamera.View );
-                var cameraForward = Vector4.TransformRow(
-                    new Vector4( 0.0f, 0.0f, -1.0f, 0.0f ), inverseView );
-                forward = new Vector3( cameraForward.X, cameraForward.Y, cameraForward.Z );
-                if ( !IsFinite( forward ) || forward.LengthSquared < 0.0001f )
-                    forward = -Vector3.UnitZ;
-            }
-            forward.Normalize();
-
-            // ModelRotation is applied as Y then X by GLPerspectiveCamera. These
-            // angles map the clicked arrow-to-subject direction to camera -Z while
-            // keeping world Y as the up reference. With roll fixed at zero, the
-            // resulting view remains upright even when the guide points above or
-            // below the model.
-            var horizontalLength = MathF.Sqrt( forward.X * forward.X + forward.Z * forward.Z );
-            var pitch = MathF.Atan2( -forward.Y, horizontalLength );
-            var yaw = horizontalLength > 0.0001f
-                ? MathF.Atan2( forward.X, -forward.Z )
-                : 0.0f;
-            var rotation = Matrix4.CreateRotationY( yaw ) * Matrix4.CreateRotationX( pitch );
-            var distance = CalculateGuideArrowFitDistance( target, targetMinimum, targetMaximum, rotation );
-
-            // Keep the camera's normal orbit origin intact so Space still restores
-            // the viewer's original framing. In the camera's transform stack the
-            // offset is applied before rotation and ModelTranslation is applied
-            // after it, so solve the target position directly in view space.
-            var viewTarget = new Vector3( 0.0f, 0.0f, -distance );
-            var baseTranslation = mCamera.Translation;
-            var targetViewBeforeTranslation = Vector4.TransformRow(
-                new Vector4( target + mCamera.Offset, 1.0f ), rotation );
-
-            mCamera.ModelRotation = new Vector3( pitch, yaw, 0.0f );
-            mCamera.ModelTranslation = new Vector3(
-                viewTarget.X - targetViewBeforeTranslation.X + baseTranslation.X,
-                viewTarget.Y - targetViewBeforeTranslation.Y + baseTranslation.Y,
-                viewTarget.Z - targetViewBeforeTranslation.Z + baseTranslation.Z );
-            Invalidate();
+            // The hit anchor identifies the arrow that was clicked, but framing itself is
+            // shared with double-click and thumbnail rendering. Preserve the current camera
+            // side/orientation and move the motion center into that existing view.
+            _ = anchor;
+            FocusModelMotionFromCurrentCamera( tight );
         }
 
         private float CalculateGuideArrowFitDistance( Vector3 targetCenter, Vector3 targetMinimum,
-                                                      Vector3 targetMaximum, Matrix4 rotation )
+                                                      Vector3 targetMaximum, Matrix4 rotation,
+                                                      float focusMargin = GuideArrowFocusMargin,
+                                                      float extraDistance = 0.15f )
         {
             var verticalFov = MathHelper.DegreesToRadians( mCamera.FieldOfView ) * 0.5f;
             var tangentVertical = MathF.Max( 0.0001f, MathF.Tan( verticalFov ) );
@@ -1655,7 +1614,7 @@ namespace GFDStudio.GUI.Controls
             }
 
             return MathF.Max( mCamera.ZNear + 0.5f,
-                requiredDistance * GuideArrowFocusMargin + 0.15f );
+                requiredDistance * focusMargin + extraDistance );
         }
 
         private void DrawGrid( Matrix4 view, Matrix4 projection )
@@ -2036,10 +1995,41 @@ namespace GFDStudio.GUI.Controls
             if ( !mIsModelLoaded )
                 return;
 
-            // This deliberately calls the same focus path as the visible guide arrow. The model
-            // can be double-clicked even while the arrow is hidden because the character is already
-            // inside the viewport.
-            FocusOnGuideArrow( ResolveGuideArrowAnchor() );
+            FocusModelMotionFromCurrentCamera();
+        }
+
+        private void FocusModelMotionFromCurrentCamera( bool tight = false )
+        {
+            GetGuideArrowFramingBounds( out var target, out var targetMinimum, out var targetMaximum );
+            if ( !IsFinite( target ) || !IsFinite( targetMinimum ) || !IsFinite( targetMaximum ) )
+                return;
+
+            // Double-clicking a character is a framing operation, not an orbit operation.
+            // Keep the current viewing side and rotation, then move the model so the average
+            // position over the next three seconds is centered in the existing camera view.
+            var rotation = GetModelOrbitRotation();
+            var transformedTarget = Vector4.TransformRow(
+                new Vector4( target + mCamera.Offset, 1.0f ), rotation );
+            var currentTargetView = new Vector3(
+                transformedTarget.X + mCamera.ModelTranslation.X - mCamera.Translation.X,
+                transformedTarget.Y + mCamera.ModelTranslation.Y - mCamera.Translation.Y,
+                transformedTarget.Z + mCamera.ModelTranslation.Z - mCamera.Translation.Z );
+
+            // Preserve the existing distance. Only move farther away when the sampled future
+            // bounds genuinely require it; never zoom in as a side effect of double-clicking.
+            var currentDistance = MathF.Max( mCamera.ZNear + 0.5f, -currentTargetView.Z );
+            var fitDistance = CalculateGuideArrowFitDistance(
+                target, targetMinimum, targetMaximum, rotation,
+                tight ? 1.0f : GuideArrowFocusMargin,
+                tight ? 0.0f : 0.15f );
+            var distance = tight ? fitDistance : MathF.Max( currentDistance, fitDistance );
+            var desiredTargetView = new Vector3( 0.0f, 0.0f, -distance );
+
+            mCamera.ModelTranslation = new Vector3(
+                desiredTargetView.X - transformedTarget.X + mCamera.Translation.X,
+                desiredTargetView.Y - transformedTarget.Y + mCamera.Translation.Y,
+                desiredTargetView.Z - transformedTarget.Z + mCamera.Translation.Z );
+            Invalidate();
         }
 
         public bool RayIntersectsBox( Vector3 rayOrigin, Vector3 rayDir, Vector3 boxMin, Vector3 boxMax, out float distance )
