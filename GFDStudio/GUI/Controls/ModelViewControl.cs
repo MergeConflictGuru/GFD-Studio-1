@@ -1614,34 +1614,143 @@ namespace GFDStudio.GUI.Controls
             var rayNDC = new Vector4( x, y, -1.0f, 1.0f );
             var invProjectionMatrix = Matrix4.Invert( mCamera.Projection );
             var invViewMatrix = Matrix4.Invert( mCamera.View );
-            var rayCamera = invProjectionMatrix * rayNDC;
+            // The renderer uses row-vector transforms on the C# side. The
+            // matrices are uploaded without transposition, which makes the
+            // shader's column-vector multiplication equivalent to
+            // world * view * projection here. Unproject in that same order;
+            // multiplying the matrix on the left mirrors the ray and causes
+            // character hits to miss even though projected guide-arrow hits
+            // still work.
+            var rayCamera = Vector4.TransformRow( rayNDC, invProjectionMatrix );
             rayCamera.Z = -1.0f;
             rayCamera.W = 0.0f;
 
-            var rayWorld4 = invViewMatrix * rayCamera;
+            var rayWorld4 = Vector4.TransformRow( rayCamera, invViewMatrix );
             rayDirection = new Vector3( rayWorld4.X, rayWorld4.Y, rayWorld4.Z );
             if ( !IsFinite( rayDirection ) || rayDirection.LengthSquared < 0.0001f )
                 return false;
             rayDirection.Normalize();
-            rayOrigin = new Vector3( invViewMatrix.M41, invViewMatrix.M42, invViewMatrix.M43 );
+            var rayOrigin4 = Vector4.TransformRow( Vector4.UnitW, invViewMatrix );
+            rayOrigin = new Vector3( rayOrigin4.X, rayOrigin4.Y, rayOrigin4.Z );
             return IsFinite( rayOrigin );
         }
 
         private bool TryGetModelOrbitPivot( int mouseX, int mouseY, out Vector3 pivot )
         {
             pivot = Vector3.Zero;
-            if ( !mIsModelLoaded || mModel == null || !TryCreateMouseRay( mouseX, mouseY, out var rayOrigin, out var rayDirection ) ||
-                 !mModel.TryGetWorldBounds( out var bounds ) )
+            return mIsModelLoaded &&
+                   TryCreateMouseRay( mouseX, mouseY, out var rayOrigin, out var rayDirection ) &&
+                   TryIntersectCurrentModel( rayOrigin, rayDirection, out pivot );
+        }
+
+        private bool TryIntersectCurrentModel( Vector3 rayOrigin, Vector3 rayDirection,
+                                               out Vector3 hitPoint )
+        {
+            hitPoint = Vector3.Zero;
+            if ( !mIsModelLoaded || mModel == null || !IsFinite( rayOrigin ) ||
+                 !IsFinite( rayDirection ) || rayDirection.LengthSquared < 0.0001f )
                 return false;
 
-            var boxMin = bounds.Min.ToOpenTK();
-            var boxMax = bounds.Max.ToOpenTK();
-            if ( !IsFinite( boxMin ) || !IsFinite( boxMax ) ||
-                 !RayIntersectsBox( rayOrigin, rayDirection, boxMin, boxMax, out _ ) )
+            var closestDistance = float.PositiveInfinity;
+            var foundHit = false;
+            var rayOriginNumerics = new System.Numerics.Vector3( rayOrigin.X, rayOrigin.Y, rayOrigin.Z );
+            var rayDirectionNumerics = new System.Numerics.Vector3( rayDirection.X, rayDirection.Y, rayDirection.Z );
+
+            foreach ( var glNode in mModel.Nodes )
+            {
+                if ( !glNode.IsVisible || !System.Numerics.Matrix4x4.Invert( glNode.WorldTransform, out var inverseWorld ) )
+                    continue;
+
+                // Intersect in the node's local space so the exact vertex
+                // positions can be used directly. VertexPositions is the data
+                // uploaded by GLMesh, so animated meshes are tested in the
+                // pose currently displayed rather than in their bind pose.
+                var localOriginNumerics = System.Numerics.Vector3.Transform( rayOriginNumerics, inverseWorld );
+                var localDirectionNumerics = System.Numerics.Vector3.TransformNormal( rayDirectionNumerics, inverseWorld );
+                if ( !IsFinite( localOriginNumerics ) || !IsFinite( localDirectionNumerics ) ||
+                     localDirectionNumerics.LengthSquared() < 0.0000001f )
+                    continue;
+                localDirectionNumerics = System.Numerics.Vector3.Normalize( localDirectionNumerics );
+
+                var localOrigin = localOriginNumerics.ToOpenTK();
+                var localDirection = localDirectionNumerics.ToOpenTK();
+                foreach ( var glMesh in glNode.Meshes )
+                {
+                    var mesh = glMesh.Mesh;
+                    var positions = glMesh.VertexPositions;
+                    var triangles = mesh?.Triangles;
+                    if ( !glMesh.IsVisible || positions == null || triangles == null || triangles.Length == 0 )
+                        continue;
+
+                    // This is only a broad-phase rejection. The final answer
+                    // below always comes from a triangle intersection.
+                    if ( glMesh.VertexBounds is not { } vertexBounds ||
+                         !IsFinite( vertexBounds.Min ) || !IsFinite( vertexBounds.Max ) ||
+                         !RayIntersectsBox( localOrigin, localDirection,
+                                            vertexBounds.Min.ToOpenTK(), vertexBounds.Max.ToOpenTK(), out _ ) )
+                        continue;
+
+                    foreach ( var triangle in triangles )
+                    {
+                        if ( triangle.A >= (uint)positions.Length || triangle.B >= (uint)positions.Length ||
+                             triangle.C >= (uint)positions.Length )
+                            continue;
+
+                        if ( !TryIntersectTriangle( localOriginNumerics, localDirectionNumerics,
+                                                    positions[(int)triangle.A], positions[(int)triangle.B],
+                                                    positions[(int)triangle.C], out var localDistance ) )
+                            continue;
+
+                        var localHit = localOriginNumerics + localDirectionNumerics * localDistance;
+                        var worldHitNumerics = System.Numerics.Vector3.Transform( localHit, glNode.WorldTransform );
+                        if ( !IsFinite( worldHitNumerics ) )
+                            continue;
+
+                        var worldHit = worldHitNumerics.ToOpenTK();
+                        var worldDistance = Vector3.Dot( worldHit - rayOrigin, rayDirection );
+                        if ( !float.IsFinite( worldDistance ) || worldDistance < 0.0f ||
+                             worldDistance >= closestDistance )
+                            continue;
+
+                        closestDistance = worldDistance;
+                        hitPoint = worldHit;
+                        foundHit = true;
+                    }
+                }
+            }
+
+            return foundHit && IsFinite( hitPoint );
+        }
+
+        private static bool TryIntersectTriangle( System.Numerics.Vector3 rayOrigin,
+                                                   System.Numerics.Vector3 rayDirection,
+                                                   System.Numerics.Vector3 vertex0,
+                                                   System.Numerics.Vector3 vertex1,
+                                                   System.Numerics.Vector3 vertex2,
+                                                   out float distance )
+        {
+            distance = 0.0f;
+            const float epsilon = 0.000001f;
+            var edge1 = vertex1 - vertex0;
+            var edge2 = vertex2 - vertex0;
+            var pVector = System.Numerics.Vector3.Cross( rayDirection, edge2 );
+            var determinant = System.Numerics.Vector3.Dot( edge1, pVector );
+            if ( MathF.Abs( determinant ) < epsilon )
                 return false;
 
-            pivot = ( boxMin + boxMax ) * 0.5f;
-            return IsFinite( pivot );
+            var inverseDeterminant = 1.0f / determinant;
+            var tVector = rayOrigin - vertex0;
+            var u = System.Numerics.Vector3.Dot( tVector, pVector ) * inverseDeterminant;
+            if ( u < 0.0f || u > 1.0f )
+                return false;
+
+            var qVector = System.Numerics.Vector3.Cross( tVector, edge1 );
+            var v = System.Numerics.Vector3.Dot( rayDirection, qVector ) * inverseDeterminant;
+            if ( v < 0.0f || u + v > 1.0f )
+                return false;
+
+            distance = System.Numerics.Vector3.Dot( edge2, qVector ) * inverseDeterminant;
+            return float.IsFinite( distance ) && distance >= 0.0f;
         }
 
         private Matrix4 GetModelOrbitRotation()
@@ -1722,88 +1831,12 @@ namespace GFDStudio.GUI.Controls
 
         private bool Raypick(int mouseX, int mouseY)
         {
-            // Step 1: Convert mouse position to NDC
-            var x = ( 2.0f * mouseX ) / ClientRectangle.Width - 1.0f;
-            var y = 1.0f - ( 2.0f * mouseY ) / ClientRectangle.Height;
-            var rayNDC = new Vector4( x, y, -1.0f, 1.0f ); // near plane
+            if ( !TryCreateMouseRay( mouseX, mouseY, out var rayOrigin, out var rayDirection ) )
+                return false;
 
-            // Step 2: Convert NDC to world coordinates
-            var invProjectionMatrix = Matrix4.Invert( mCamera.Projection );
-            var invViewMatrix = Matrix4.Invert( mCamera.View );
-
-            var rayCamera = invProjectionMatrix * rayNDC;
-            rayCamera.Z = -1.0f;
-            rayCamera.W = 0.0f;
-
-            var rayWorld4 = invViewMatrix * rayCamera;
-            var rayWorld = new Vector3( rayWorld4.X, rayWorld4.Y, rayWorld4.Z );
-            rayWorld.Normalize();
-
-            var rayOrigin = new Vector3( invViewMatrix.M41, invViewMatrix.M42, invViewMatrix.M43 );
             mRaypickStart = rayOrigin;
-            mRaypickEnd = rayOrigin + rayWorld * 10000f;
-
-            var anySelected = false;
-
-            Debug.WriteLine( rayOrigin );
-
-            // TODO sorting
-
-            float closestDistance = float.MaxValue;
-            GLNode closestNode = null;
-            GLMesh closestMesh = null;
-
-            foreach ( var glNode in mModel.Nodes )
-            {
-                foreach ( var glMesh in glNode.Meshes )
-                {
-                    if ( glMesh.IsVisible && (glMesh.Mesh?.BoundingSphere.HasValue ?? false) )
-                    {
-                        //var sphere = glMesh.Mesh.BoundingSphere.Value;
-                        //// Transform the sphere center to world space
-                        //var sphereCenterWorld = System.Numerics.Vector3.Transform( sphere.Center, glNode.WorldTransform ).ToOpenTK();
-
-                        //// Check for intersection
-                        //if ( RayIntersectsSphere( rayOrigin, rayWorld, sphereCenterWorld, sphere.Radius, out float distance ) )
-                        //{
-                        //    // Check if this sphere is the closest
-                        //    if ( distance < closestDistance )
-                        //    {
-                        //        closestDistance = distance;
-                        //        closestMesh = glMesh;
-                        //        closestNode = glNode;
-                        //    }
-                        //}
-                        var boundingBox = glMesh.Mesh.BoundingBox.Value;
-
-                        // Transform the bounding box to world space
-                        var boxMinWorld = System.Numerics.Vector3.Transform( boundingBox.Min, glNode.WorldTransform ).ToOpenTK();
-                        var boxMaxWorld = System.Numerics.Vector3.Transform( boundingBox.Max, glNode.WorldTransform ).ToOpenTK();
-
-                        // Check for intersection with the bounding box
-                        if ( RayIntersectsBox( rayOrigin, rayWorld, boxMinWorld, boxMaxWorld, out float distance ) )
-                        {
-                            // Check if this bounding box is the closest intersection
-                            if ( distance < closestDistance )
-                            {
-                                closestDistance = distance;
-                                closestMesh = glMesh;
-                                closestNode = glNode;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Select the closest mesh if found
-            //if ( closestMesh != null )
-            //{
-            //    SetSelection( closestMesh.Mesh );
-            //    Debug.WriteLine( $"Selected {closestNode.Node.Name} mesh" );
-            //    return true;
-            //}
-
-            return false;
+            mRaypickEnd = rayOrigin + rayDirection * 10000f;
+            return TryIntersectCurrentModel( rayOrigin, rayDirection, out _ );
         }
 
         protected override void OnMouseUp( System.Windows.Forms.MouseEventArgs e )
