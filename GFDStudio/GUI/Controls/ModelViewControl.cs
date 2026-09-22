@@ -1575,9 +1575,9 @@ namespace GFDStudio.GUI.Controls
 
         internal void FocusOnGuideArrow( Vector3 anchor, bool tight = false )
         {
-            // The hit anchor identifies the arrow that was clicked, but framing itself is
-            // shared with double-click and thumbnail rendering. Preserve the current camera
-            // side/orientation and move the motion center into that existing view.
+            // The hit anchor identifies which arrow was clicked, but framing itself is
+            // shared with double-click and thumbnail rendering. Keep the current camera
+            // position, then look from it at the sampled motion center.
             _ = anchor;
             FocusModelMotionFromCurrentCamera( tight );
         }
@@ -2004,31 +2004,57 @@ namespace GFDStudio.GUI.Controls
             if ( !IsFinite( target ) || !IsFinite( targetMinimum ) || !IsFinite( targetMaximum ) )
                 return;
 
-            // Double-clicking a character is a framing operation, not an orbit operation.
-            // Keep the current viewing side and rotation, then move the model so the average
-            // position over the next three seconds is centered in the existing camera view.
-            var rotation = GetModelOrbitRotation();
-            var transformedTarget = Vector4.TransformRow(
-                new Vector4( target + mCamera.Offset, 1.0f ), rotation );
-            var currentTargetView = new Vector3(
-                transformedTarget.X + mCamera.ModelTranslation.X - mCamera.Translation.X,
-                transformedTarget.Y + mCamera.ModelTranslation.Y - mCamera.Translation.Y,
-                transformedTarget.Z + mCamera.ModelTranslation.Z - mCamera.Translation.Z );
+            // The camera position is the invariant. In this renderer the model transform is
+            // applied around a fixed camera Translation, so recover the camera position in
+            // model space before choosing a new look direction.
+            var currentRotation = GetModelOrbitRotation();
+            var inverseCurrentRotation = Matrix4.Invert( currentRotation );
+            var cameraPositionWithOffset = Vector4.TransformRow(
+                new Vector4(
+                    mCamera.Translation.X - mCamera.ModelTranslation.X,
+                    mCamera.Translation.Y - mCamera.ModelTranslation.Y,
+                    mCamera.Translation.Z - mCamera.ModelTranslation.Z,
+                    1.0f ),
+                inverseCurrentRotation );
+            var currentCameraPosition = new Vector3(
+                cameraPositionWithOffset.X - mCamera.Offset.X,
+                cameraPositionWithOffset.Y - mCamera.Offset.Y,
+                cameraPositionWithOffset.Z - mCamera.Offset.Z );
 
-            // Preserve the existing distance. Only move farther away when the sampled future
-            // bounds genuinely require it; never zoom in as a side effect of double-clicking.
-            var currentDistance = MathF.Max( mCamera.ZNear + 0.5f, -currentTargetView.Z );
+            var forward = target - currentCameraPosition;
+            var currentDistance = forward.Length;
+            if ( !IsFinite( forward ) || currentDistance < 0.0001f )
+                return;
+            forward /= currentDistance;
+
+            // Build the new view direction from the current camera position to the future
+            // motion center. This deliberately changes yaw/pitch; preserving rotation here
+            // would look at the old point rather than looking at the newly calculated center.
+            var horizontalLength = MathF.Sqrt( forward.X * forward.X + forward.Z * forward.Z );
+            var pitch = MathF.Atan2( -forward.Y, horizontalLength );
+            var yaw = horizontalLength > 0.0001f
+                ? MathF.Atan2( forward.X, -forward.Z )
+                : 0.0f;
+            var rotation = Matrix4.CreateRotationY( yaw ) * Matrix4.CreateRotationX( pitch );
+
             var fitDistance = CalculateGuideArrowFitDistance(
                 target, targetMinimum, targetMaximum, rotation,
                 tight ? 1.0f : GuideArrowFocusMargin,
                 tight ? 0.0f : 0.15f );
             var distance = tight ? fitDistance : MathF.Max( currentDistance, fitDistance );
-            var desiredTargetView = new Vector3( 0.0f, 0.0f, -distance );
+            var focusedCameraPosition = distance > currentDistance
+                ? target - forward * distance
+                : currentCameraPosition;
 
+            // Keep the selected camera position while changing its look direction. Solving
+            // ModelTranslation from that position avoids the old grid-anchor origin jump.
+            var transformedCameraPosition = Vector4.TransformRow(
+                new Vector4( focusedCameraPosition + mCamera.Offset, 1.0f ), rotation );
+            mCamera.ModelRotation = new Vector3( pitch, yaw, 0.0f );
             mCamera.ModelTranslation = new Vector3(
-                desiredTargetView.X - transformedTarget.X + mCamera.Translation.X,
-                desiredTargetView.Y - transformedTarget.Y + mCamera.Translation.Y,
-                desiredTargetView.Z - transformedTarget.Z + mCamera.Translation.Z );
+                mCamera.Translation.X - transformedCameraPosition.X,
+                mCamera.Translation.Y - transformedCameraPosition.Y,
+                mCamera.Translation.Z - transformedCameraPosition.Z );
             Invalidate();
         }
 
