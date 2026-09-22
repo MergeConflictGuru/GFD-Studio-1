@@ -2709,9 +2709,12 @@ namespace GFDStudio.GUI.Forms
                     context.SelectedHairPath, out hasSplitComponents, out autoLoadedPackPaths, token);
             }
 
-            sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
-                entry.PackPath, context.SelectedFacePath, context.SelectedHairPath,
-                sourceModelEntry, sourceModelPack, context.ModelEntries);
+            if (hasSplitComponents)
+            {
+                sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
+                    entry.PackPath, context.SelectedFacePath, context.SelectedHairPath,
+                    sourceModelEntry, sourceModelPack, context.ModelEntries);
+            }
 
             string retargetNote;
             switch (entry.Kind)
@@ -2836,7 +2839,7 @@ namespace GFDStudio.GUI.Forms
         {
             hasSplitComponents = false;
             autoLoadedPackPaths = Array.Empty<string>();
-            if (selectedAnimation == null || !IsSplitDanceAnimationPath(entry.PackPath))
+            if (selectedAnimation == null)
                 return selectedAnimation;
 
             var basePath = GetCharacterBrowserAnimationBasePath(entry.PackPath);
@@ -2935,7 +2938,7 @@ namespace GFDStudio.GUI.Forms
             ModelPack bodyPack,
             IReadOnlyList<CharacterModelEntry> modelEntries)
         {
-            if (!IsSplitDanceBodyPath(bodyEntry.Path))
+            if (bodyEntry?.Path == null)
                 return bodyPack;
 
             var characterId = ExtractCharacterId(bodyEntry.Path);
@@ -2998,9 +3001,21 @@ namespace GFDStudio.GUI.Forms
 
             var baseStem = Regex.Replace(
                 stem,
-                @"_(?:\d+|f|h\d+)$",
+                @"_(?:f|h\d+)$",
                 string.Empty,
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (string.Equals(baseStem, stem, StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(baseStem, @"^pc\d+_.+_.+\d+$",
+                              RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                // The first token after pc204 is the action id (for example 007 or
+                // ko_p). A later numeric token is a split body/outfit suffix.
+                baseStem = Regex.Replace(
+                    baseStem,
+                    @"_\d+$",
+                    string.Empty,
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            }
             return Path.Combine(directory, baseStem + ".GAP");
         }
 
@@ -3075,22 +3090,6 @@ namespace GFDStudio.GUI.Forms
                 : null;
         }
 
-        private static bool IsSplitDanceBodyPath(string path)
-        {
-            return Regex.IsMatch(
-                Path.GetFileNameWithoutExtension(path) ?? string.Empty,
-                @"^pc\d+_\d+$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        }
-
-        private static bool IsSplitDanceAnimationPath(string path)
-        {
-            return Regex.IsMatch(
-                Path.GetFileNameWithoutExtension(path) ?? string.Empty,
-                @"^pc\d+_\d+(?:_p)?(?:_(?:\d+|f|h\d+))?$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        }
-
         private static bool AreSamePath(string firstPath, string secondPath)
         {
             if (string.IsNullOrWhiteSpace(firstPath) || string.IsNullOrWhiteSpace(secondPath))
@@ -3113,22 +3112,24 @@ namespace GFDStudio.GUI.Forms
             string currentModelPath)
         {
             var animationKey = ExtractCharacterModelKey(gapPath);
-            if (string.IsNullOrWhiteSpace(animationKey))
+            var characterId = ExtractCharacterId(gapPath);
+            if (string.IsNullOrWhiteSpace(animationKey) && string.IsNullOrWhiteSpace(characterId))
                 return null;
 
-            var characterId = ExtractCharacterId(gapPath);
             var selectedBody = modelEntries.FirstOrDefault(model =>
                 model.Part == CharacterModelPart.Body &&
                 AreSamePath(model.Path, currentModelPath));
-            if (selectedBody != null &&
-                string.Equals(ExtractCharacterModelKey(selectedBody.Path), animationKey,
-                              StringComparison.OrdinalIgnoreCase))
+            if (selectedBody != null && !string.IsNullOrWhiteSpace(animationKey))
             {
-                // Generated Dance GAPs are commonly staged in a separate output
-                // directory (for example modssrc\\dayobuo), while the selected
-                // pc204_26.GMD remains under the game's p5 directory. Let the
-                // selected exact body variant identify the source in that case.
-                return selectedBody;
+                var selectedBodyKey = ExtractCharacterModelKey(selectedBody.Path);
+                if (string.Equals(selectedBodyKey, animationKey,
+                                  StringComparison.OrdinalIgnoreCase))
+                {
+                    // Generated Dance GAPs are commonly staged in a separate output
+                    // directory (for example modssrc\\dayobuo), while the selected
+                    // exact body variant remains under the game's model directory.
+                    return selectedBody;
+                }
             }
 
             var characterDirectory = GetCharacterDirectory(gapPath);
@@ -3141,13 +3142,15 @@ namespace GFDStudio.GUI.Forms
             // Prefer an exact variant when one exists. Event animations often use a variant
             // number that has no corresponding model, though, so fall back to any model for
             // the same character in this directory.
-            var exactMatch = characterModels
-                .Where(model => string.Equals(ExtractCharacterModelKey(model.Path), animationKey,
-                                              StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(model => Path.GetFileNameWithoutExtension(model.Path)
-                    .StartsWith("c" + animationKey, StringComparison.OrdinalIgnoreCase))
-                .ThenBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
+            var exactMatch = string.IsNullOrWhiteSpace(animationKey)
+                ? null
+                : characterModels
+                    .Where(model => string.Equals(ExtractCharacterModelKey(model.Path), animationKey,
+                                                  StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(model => Path.GetFileNameWithoutExtension(model.Path)
+                        .StartsWith("c" + animationKey, StringComparison.OrdinalIgnoreCase))
+                    .ThenBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
 
             if (exactMatch != null)
                 return exactMatch;
@@ -3178,8 +3181,9 @@ namespace GFDStudio.GUI.Forms
         private static string ExtractCharacterModelKey(string path)
         {
             var stem = Path.GetFileNameWithoutExtension(path);
-            // P5/R uses keys such as c0001_001, while P3D/P5D uses pc203_018
-            // for animations and pc203_26 for body models.
+            // Keep exact matching limited to the original numeric action/model
+            // convention. Mod packs may use arbitrary action tokens; those are
+            // intentionally handled only by the character-id fallback below.
             return Regex.Match(
                 stem ?? string.Empty,
                 @"(?<!\d)\d{3,4}_\d{2,3}(?=_|$)",

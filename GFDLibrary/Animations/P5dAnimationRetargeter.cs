@@ -325,11 +325,12 @@ namespace GFDLibrary.Animations
                                  sourceFileName.Substring(sourceMatch.Index + sourceMatch.Length);
             var isSplitDanceAnimation = Regex.IsMatch(
                 sourceFileName,
-                @"^pc\d{3}_\d+_p(?:_(?:\d+|f|h\d+))?$",
+                // Keep b0/b1 in the destination base stem while allowing the
+                // final numeric/face/hair component suffix to vary by target.
+                @"^pc\d{3}_[A-Za-z0-9]+(?:_p)?(?:_b\d+)?(?:_(?:\d+|f|h\d+))?$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             var destinationBaseStem = isSplitDanceAnimation
-                ? Regex.Replace(targetFileStem, @"_(?:\d+|f|h\d+)$", string.Empty,
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                ? StripSplitDanceComponentSuffix(targetFileStem)
                 : targetFileStem;
             var destinationStems = isSplitDanceAnimation
                 ? GetDestinationReferenceStems(destinationBaseStem, targetModelPaths)
@@ -493,6 +494,29 @@ namespace GFDLibrary.Animations
             {
                 return referenceRoot + "|" + fileNames;
             }
+        }
+
+        private static string StripSplitDanceComponentSuffix(string stem)
+        {
+            var baseStem = Regex.Replace(
+                stem ?? string.Empty,
+                @"_(?:f|h\d+)$",
+                string.Empty,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (string.Equals(baseStem, stem, StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(baseStem, @"^pc\d+_.+_.+\d+$",
+                              RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                // The first token after pc204 is part of the animation id. A
+                // later numeric token is a split body/outfit suffix.
+                baseStem = Regex.Replace(
+                    baseStem,
+                    @"_\d+$",
+                    string.Empty,
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            }
+
+            return baseStem;
         }
 
         private static Animation TryLoadNativeBase(
