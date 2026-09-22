@@ -21,7 +21,7 @@ namespace GFDLibrary.Rendering.OpenGL
         /// meshes these are rebuilt from the current animation pose before the
         /// mesh is drawn, so consumers can calculate an animated world bound.
         /// </summary>
-        public Vector3[] VertexPositions { get; }
+        public Vector3[] VertexPositions { get; private set; }
 
         /// <summary>
         /// Bounds for the vertex positions currently uploaded for this mesh.
@@ -29,7 +29,7 @@ namespace GFDLibrary.Rendering.OpenGL
         /// is rebuilt, while static meshes reuse the source mesh bounds.
         /// The value is consumed by animated viewport helpers after Draw.
         /// </summary>
-        public BoundingBox? VertexBounds { get; }
+        public BoundingBox? VertexBounds { get; private set; }
 
         public GLBaseMaterial Material { get; }
 
@@ -190,6 +190,43 @@ namespace GFDLibrary.Rendering.OpenGL
             shaderProgram.Check();
             VertexArray.Draw();
             Material.Unbind( shaderProgram );
+        }
+
+        public void UpdateAnimatedVertices( List<Bone> bones, List<GLNode> nodes, Matrix4x4 modelMatrix )
+        {
+            if ( Mesh == null || Mesh.VertexWeights == null )
+                return;
+
+            var vertices = new Vector3[Mesh.VertexCount];
+            var normals = Mesh.Normals != null ? new Vector3[Mesh.VertexCount] : null;
+            Matrix4x4.Invert( modelMatrix, out var modelMatrixInv );
+
+            for ( var i = 0; i < Mesh.VertexCount; i++ )
+            {
+                var position = Mesh.Vertices[i];
+                var normal = Mesh.Normals?[i] ?? Vector3.Zero;
+                var newPosition = Vector3.Zero;
+                var newNormal = Vector3.Zero;
+                for ( var j = 0; j < Mesh.VertexWeights[i].Weights.Length; j++ )
+                {
+                    var weight = Mesh.VertexWeights[i].Weights[j];
+                    if ( weight == 0 )
+                        continue;
+
+                    var boneIndex = Mesh.VertexWeights[i].Indices[j];
+                    TransformVertex( bones, nodes, position, normal, ref newPosition, ref newNormal, weight, boneIndex );
+                }
+
+                vertices[i] = Vector3.Transform( newPosition, modelMatrixInv );
+                if ( normals != null )
+                    normals[i] = Vector3.Normalize( Vector3.TransformNormal( newNormal, modelMatrixInv ) );
+            }
+
+            VertexPositions = vertices;
+            VertexBounds = BoundingBox.Calculate( vertices );
+            VertexArray.UpdatePositions( vertices );
+            if ( normals != null )
+                VertexArray.UpdateNormals( normals );
         }
 
         #region IDisposable Support

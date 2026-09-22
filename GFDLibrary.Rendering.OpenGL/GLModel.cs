@@ -109,17 +109,8 @@ namespace GFDLibrary.Rendering.OpenGL
 
             foreach ( var glNode in Nodes )
             {
-                // Rebuild meshes
-                for ( var i = 0; i < glNode.Meshes.Count; i++ )
-                {
-                    var oldGlMesh = glNode.Meshes[i];
-                    if (oldGlMesh.Mesh != null)
-                    {
-                        glNode.Meshes[i] = new GLMesh( oldGlMesh.Mesh, glNode.WorldTransform, ModelPack.Model.Bones, Nodes, Materials );
-                    }
-
-                    oldGlMesh.Dispose();
-                }
+                foreach ( var glMesh in glNode.Meshes )
+                    glMesh.UpdateAnimatedVertices( ModelPack.Model.Bones, Nodes, glNode.WorldTransform );
             }
         }
 
@@ -176,21 +167,16 @@ namespace GFDLibrary.Rendering.OpenGL
             return hasBounds;
         }
 
-        private void RebuildAnimatedMeshes()
+        private void UpdateAnimatedMeshes()
         {
             foreach ( var glNode in Nodes )
             {
                 if ( !glNode.IsVisible )
                     continue;
 
-                for ( var i = 0; i < glNode.Meshes.Count; i++ )
+                foreach ( var glMesh in glNode.Meshes )
                 {
-                    var oldGlMesh = glNode.Meshes[i];
-                    if ( oldGlMesh.Mesh == null )
-                        continue;
-
-                    glNode.Meshes[i] = new GLMesh( oldGlMesh.Mesh, glNode.WorldTransform, ModelPack.Model.Bones, Nodes, Materials );
-                    oldGlMesh.Dispose();
+                    glMesh.UpdateAnimatedVertices( ModelPack.Model.Bones, Nodes, glNode.WorldTransform );
                 }
             }
         }
@@ -221,7 +207,7 @@ namespace GFDLibrary.Rendering.OpenGL
             if ( Animation != null )
             {
                 UpdateAnimationPose( context.AnimationTime );
-                RebuildAnimatedMeshes();
+                UpdateAnimatedMeshes();
             }
             context.ShaderRegistry.mDefaultShader.Use();
             context.ShaderRegistry.mDefaultShader.SetUniform( "uView", context.Camera.View );
