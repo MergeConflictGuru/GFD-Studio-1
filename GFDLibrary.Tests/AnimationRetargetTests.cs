@@ -304,6 +304,52 @@ namespace GFDLibrary.Tests
         }
 
         [TestMethod]
+        public void DanceToRoyalRetargetCopiesRoyalLimbTwistDrivers()
+        {
+            var (source, target) = CreateDanceToRoyalLimbSkeletons();
+            var animation = new Animation(source.Version) { Duration = 1 };
+            foreach (var (name, axis, angle) in new[] {
+                ("LeftUpLeg", Vector3.UnitZ, .4f),
+                ("LeftLeg", Vector3.UnitX, -.7f),
+                ("LeftArm", Vector3.UnitY, .6f),
+                ("LeftForeArm", Vector3.UnitX, -.5f)
+            })
+            {
+                var controller = CreateController(name);
+                controller.Layers[0].Keys[0].Time = 0;
+                controller.Layers[0].Keys.Add(new PRSKey(KeyType.NodeRHalf) {
+                    Time = 1,
+                    Rotation = Quaternion.CreateFromAxisAngle(axis, angle)
+                });
+                animation.Controllers.Add(controller);
+            }
+
+            animation.Retarget(source, target, false);
+
+            foreach (var name in new[] {
+                "Bip01 L ThighTwist", "Bip01 L ForeTwist"
+            })
+                Assert.IsTrue(animation.Controllers.Any(controller => controller.TargetName == name));
+
+            var pose = AnimationPoseEvaluator.Evaluate(target, animation, 1);
+            foreach (var (helperName, driverName) in new[] {
+                ("Bip01 L ThighTwist", "Bip01 L Thigh"),
+                ("Bip01 L ForeTwist", "Bip01 L Forearm")
+            })
+            {
+                var helper = target.Nodes.First(node => node.Name == helperName);
+                var driver = target.Nodes.First(node => node.Name == driverName);
+                var helperRotation = LocalRotation(helper, pose);
+                var driverRotation = LocalRotation(driver, pose);
+                var expected = Quaternion.Normalize(
+                    Quaternion.Multiply(
+                        Quaternion.Multiply(helper.Rotation, Quaternion.Inverse(driver.Rotation)),
+                        driverRotation));
+                AssertQuaternionEqual(expected, helperRotation);
+            }
+        }
+
+        [TestMethod]
         public void StandaloneFaceBakesHeadRelativeToBodyWhenHierarchiesDiffer()
         {
             var root = new Node("RootNode");
@@ -437,6 +483,76 @@ namespace GFDLibrary.Tests
             hips.AddChildNode(new Node("Spine", new Vector3(0, 2, 0), Quaternion.Identity, Vector3.One));
             hips.AddChildNode(new Node("LeftArm", new Vector3(6, 3, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitY, -.8f), Vector3.One));
             return (source, target);
+        }
+
+        private static (Model source, Model target) CreateDanceToRoyalLimbSkeletons()
+        {
+            var sourceRoot = new Node("RootNode");
+            var sourceAxis = new Node("root");
+            var sourceHips = new Node("Hips");
+            var sourceSpine = new Node("Spine");
+            var sourceShoulder = new Node("LeftShoulder");
+            var sourceArm = new Node("LeftArm");
+            var sourceForearm = new Node("LeftForeArm");
+            var sourceHand = new Node("LeftHand");
+            var sourceThigh = new Node("LeftUpLeg");
+            var sourceCalf = new Node("LeftLeg");
+            sourceRoot.AddChildNode(sourceAxis);
+            sourceAxis.AddChildNode(sourceHips);
+            sourceHips.AddChildNode(sourceSpine);
+            sourceSpine.AddChildNode(sourceShoulder);
+            sourceShoulder.AddChildNode(sourceArm);
+            sourceArm.AddChildNode(sourceForearm);
+            sourceForearm.AddChildNode(sourceHand);
+            sourceHips.AddChildNode(sourceThigh);
+            sourceThigh.AddChildNode(sourceCalf);
+            var source = new Model(ResourceVersion.Persona5Dancing) { RootNode = sourceRoot };
+
+            var targetRoot = new Node("RootNode");
+            var targetAxis = new Node("root");
+            var targetRot = new Node("rot");
+            var targetBiped = new Node("Bip01");
+            var targetPelvis = new Node("Bip01 Pelvis");
+            var targetSpine = new Node("Bip01 Spine");
+            var targetClavicle = new Node("Bip01 L Clavicle");
+            var targetUpperArm = new Node("Bip01 L UpperArm");
+            var targetForearm = new Node("Bip01 L Forearm");
+            var targetHand = new Node("Bip01 L Hand");
+            var targetThigh = new Node("Bip01 L Thigh");
+            var targetThighTwist = new Node("Bip01 L ThighTwist");
+            var targetThighTwist1 = new Node("Bip01 L ThighTwist1");
+            var targetCalf = new Node("Bip01 L Calf");
+            var targetForeTwist = new Node("Bip01 L ForeTwist");
+            var targetForeTwist1 = new Node("Bip01 L ForeTwist1");
+            targetRoot.AddChildNode(targetAxis);
+            targetAxis.AddChildNode(targetRot);
+            targetRot.AddChildNode(targetBiped);
+            targetBiped.AddChildNode(targetPelvis);
+            targetPelvis.AddChildNode(targetSpine);
+            targetSpine.AddChildNode(targetClavicle);
+            targetClavicle.AddChildNode(targetUpperArm);
+            targetUpperArm.AddChildNode(targetForearm);
+            targetForearm.AddChildNode(targetHand);
+            targetSpine.AddChildNode(targetThighTwist);
+            targetThighTwist.AddChildNode(targetThighTwist1);
+            targetSpine.AddChildNode(targetThigh);
+            targetThigh.AddChildNode(targetCalf);
+            targetUpperArm.AddChildNode(targetForeTwist);
+            targetForeTwist.AddChildNode(targetForeTwist1);
+            var target = new Model(ResourceVersion.Persona5Royal) { RootNode = targetRoot };
+            return (source, target);
+        }
+
+        private static Quaternion LocalRotation(Node node, IReadOnlyDictionary<Node, Matrix4x4> pose)
+        {
+            var local = pose[node];
+            if (node.Parent != null)
+            {
+                Matrix4x4.Invert(pose[node.Parent], out var inverseParent);
+                local *= inverseParent;
+            }
+            Matrix4x4.Decompose(local, out _, out var rotation, out _);
+            return Quaternion.Normalize(rotation);
         }
 
         private static Animation CreateCrossGameMotionAnimation(ResourceVersion version)
