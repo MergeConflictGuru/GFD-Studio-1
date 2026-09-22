@@ -108,6 +108,28 @@ namespace GFDStudio.GUI.Forms
             public int Rescanned { get; set; }
         }
 
+        private sealed class CharacterBrowserAnimationPreparationContext
+        {
+            public CharacterAnimationEntry Entry { get; init; }
+            public ModelPack TargetModelPack { get; init; }
+            public string TargetModelPath { get; init; }
+            public string SelectedBodyPath { get; init; }
+            public string SelectedFacePath { get; init; }
+            public string SelectedHairPath { get; init; }
+            public string BrowserRoot { get; init; }
+            public bool UseLocalBindSpace { get; init; }
+            public bool CanUseWithoutRetarget { get; init; }
+            public CharacterModelEntry SourceModelEntry { get; init; }
+            public IReadOnlyList<CharacterModelEntry> ModelEntries { get; init; }
+        }
+
+        private sealed class CharacterBrowserPreparedAnimation
+        {
+            public Animation Animation { get; init; }
+            public string RetargetNote { get; init; }
+            public IReadOnlyCollection<string> AutoLoadedPackPaths { get; init; }
+        }
+
         private const int CharacterAnimationScanCacheMagic = 0x43415343; // "CASC"
         private const int CharacterAnimationScanCacheVersion = 3;
         private const int CharacterAnimationScanCacheMaxFiles = 250000;
@@ -171,6 +193,9 @@ namespace GFDStudio.GUI.Forms
         private bool mCharacterBrowserRefreshingModelParts;
         private bool mCharacterBrowserSelectionRestoredForScan;
         private string[] mCharacterBrowserSavedSelection;
+        private CancellationTokenSource mCharacterBrowserAnimationLoadCancellation;
+        private readonly SemaphoreSlim mCharacterBrowserAnimationLoadGate = new SemaphoreSlim(1, 1);
+        private int mCharacterBrowserAnimationLoadGeneration;
 
         private string CharacterBrowserSettingsPath =>
             Path.Combine(
@@ -542,6 +567,7 @@ namespace GFDStudio.GUI.Forms
 
         private async void StartCharacterBrowserScan(string root)
         {
+            BeginCharacterBrowserAnimationLoad();
             mCharacterBrowserScanComplete = false;
             mCharacterBrowserScanCancellation?.Cancel();
             mCharacterBrowserScanCancellation?.Dispose();
@@ -2175,6 +2201,7 @@ namespace GFDStudio.GUI.Forms
 
         private void LoadSelectedCharacterModelParts()
         {
+            BeginCharacterBrowserAnimationLoad();
             var selectedParts = GetSelectedCharacterModelParts();
             SaveCharacterBrowserSelectionSettings();
 
@@ -2207,14 +2234,7 @@ namespace GFDStudio.GUI.Forms
 
             var animationEntry = mCharacterAnimationListBox.SelectedItem as CharacterAnimationEntry;
             if (animationEntry != null)
-            {
-                var animation = PrepareCharacterBrowserAnimation(animationEntry, out _);
-                if (animation != null)
-                {
-                    ModelViewControl.Instance.LoadAnimation(animation, true);
-                    ApplySelectedCharacterBrowserBlend();
-                }
-            }
+                _ = LoadSelectedCharacterBrowserAnimationAsync(animationEntry, applyBlend: true);
 
             var selectedNames = string.Join(" + ", selectedParts.Select(part => part.Part.ToString().ToLowerInvariant()));
             SetCharacterBrowserStatus($"Character: {selectedNames}");
@@ -2279,11 +2299,12 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             SaveCharacterBrowserSelectionSettings();
-            ApplySelectedCharacterBrowserBlend();
+            _ = ApplySelectedCharacterBrowserBlendAsync();
         }
 
-        private void ApplySelectedCharacterBrowserBlend()
+        private async Task ApplySelectedCharacterBrowserBlendAsync()
         {
+            var (generation, token) = BeginCharacterBrowserAnimationLoad();
             if (mCharacterBlendAnimationListBox.SelectedItem is not CharacterAnimationEntry entry)
             {
                 ModelViewControl.Instance.UnloadAnimationOverlay();
@@ -2297,25 +2318,33 @@ namespace GFDStudio.GUI.Forms
                 return;
             }
 
+            SetCharacterBrowserStatus("Loading blend animation…");
             try
             {
                 ModelViewControl.Instance.UnloadAnimationOverlay();
-                var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
-                if (animation == null)
+                var context = CaptureCharacterBrowserAnimationPreparationContext(entry);
+                var prepared = await PrepareCharacterBrowserAnimationAsync(context, token);
+                if (!IsCurrentCharacterBrowserAnimationLoad(generation, token))
+                    return;
+
+                if (prepared?.Animation == null)
                 {
                     SetCharacterBrowserStatus("Blend overlay no longer exists in pack: " + entry.DisplayName);
                     return;
                 }
 
-                ModelViewControl.Instance.LoadAnimationOverlay(animation);
+                SetCharacterBrowserAnimationAutoLoaded(entry, prepared.AutoLoadedPackPaths);
+                ModelViewControl.Instance.LoadAnimationOverlay(prepared.Animation);
                 SetCharacterBrowserStatus(
-                    string.IsNullOrWhiteSpace(retargetNote)
+                    string.IsNullOrWhiteSpace(prepared.RetargetNote)
                         ? "Blend overlay: " + entry.DisplayName
-                        : $"Blend overlay: {entry.DisplayName} ({retargetNote})");
+                        : $"Blend overlay: {entry.DisplayName} ({prepared.RetargetNote})");
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                SetCharacterBrowserStatus("Blend overlay load failed: " + ex.Message);
+                if (IsCurrentCharacterBrowserAnimationLoad(generation, token))
+                    SetCharacterBrowserStatus("Blend overlay load failed: " + ex.Message);
             }
         }
 
@@ -2326,30 +2355,12 @@ namespace GFDStudio.GUI.Forms
 
             SaveCharacterBrowserSelectionSettings();
             if (mCharacterAnimationListBox.SelectedItem is not CharacterAnimationEntry entry)
+            {
+                BeginCharacterBrowserAnimationLoad();
                 return;
-
-            try
-            {
-                var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
-                if (animation == null)
-                {
-                    SetCharacterBrowserStatus("Animation no longer exists in pack: " + entry.DisplayName);
-                    return;
-                }
-
-                // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
-                ModelViewControl.Instance.LoadAnimation(animation, true);
-                ApplySelectedCharacterBrowserBlend();
-                SetCharacterBrowserStatus(
-                    string.IsNullOrWhiteSpace(retargetNote)
-                        ? "Animation: " + entry.DisplayName
-                        : $"Animation: {entry.DisplayName} ({retargetNote})");
-                SaveCharacterBrowserSelectionSettings();
             }
-            catch (Exception ex)
-            {
-                SetCharacterBrowserStatus("Animation load failed: " + ex.Message);
-            }
+
+            _ = LoadSelectedCharacterBrowserAnimationAsync(entry, applyBlend: true);
         }
 
         private void RefreshCurrentCharacterBrowserAnimation()
@@ -2359,22 +2370,112 @@ namespace GFDStudio.GUI.Forms
                 mCharacterBrowserCurrentModelPack?.Model == null)
                 return;
 
+            _ = LoadSelectedCharacterBrowserAnimationAsync(entry, applyBlend: true);
+        }
+
+        private (int generation, CancellationToken token) BeginCharacterBrowserAnimationLoad()
+        {
+            mCharacterBrowserAnimationLoadCancellation?.Cancel();
+            mCharacterBrowserAnimationLoadCancellation = new CancellationTokenSource();
+            return (++mCharacterBrowserAnimationLoadGeneration,
+                mCharacterBrowserAnimationLoadCancellation.Token);
+        }
+
+        private bool IsCurrentCharacterBrowserAnimationLoad(
+            int generation,
+            CancellationToken token)
+        {
+            return generation == mCharacterBrowserAnimationLoadGeneration &&
+                   !token.IsCancellationRequested;
+        }
+
+        private CharacterBrowserAnimationPreparationContext
+            CaptureCharacterBrowserAnimationPreparationContext(CharacterAnimationEntry entry)
+        {
+            var modelEntries = mCharacterModels.ToArray();
+            var targetModelPack = mCharacterBrowserCurrentModelPack ??
+                                  ModelEditorTreeView?.TopNode?.Data as ModelPack;
+            var targetModelPath = mCharacterBrowserCurrentModelPath;
+            var selectedBodyPath = GetSelectedCharacterBrowserBodyPath();
+            var selectedFacePath = GetSelectedCharacterBrowserFacePath();
+            var selectedHairPath = GetSelectedCharacterBrowserHairPath();
+            var sourceModelEntry = FindCharacterModelForAnimation(
+                entry.PackPath, modelEntries, targetModelPath);
+
+            return new CharacterBrowserAnimationPreparationContext
+            {
+                Entry = entry,
+                TargetModelPack = targetModelPack,
+                TargetModelPath = targetModelPath,
+                SelectedBodyPath = selectedBodyPath,
+                SelectedFacePath = selectedFacePath,
+                SelectedHairPath = selectedHairPath,
+                BrowserRoot = mCharacterBrowserRoot,
+                UseLocalBindSpace = settings.UseLocalBindSpaceRetargeting,
+                CanUseWithoutRetarget = sourceModelEntry != null &&
+                    targetModelPack?.Model != null &&
+                    CanUseCharacterBrowserAnimationWithoutRetarget(
+                        entry.PackPath, sourceModelEntry, selectedFacePath, selectedHairPath,
+                        modelEntries, targetModelPath),
+                SourceModelEntry = sourceModelEntry,
+                ModelEntries = modelEntries
+            };
+        }
+
+        private async Task<CharacterBrowserPreparedAnimation> PrepareCharacterBrowserAnimationAsync(
+            CharacterBrowserAnimationPreparationContext context,
+            CancellationToken token)
+        {
+            await mCharacterBrowserAnimationLoadGate.WaitAsync(token);
             try
             {
-                var animation = PrepareCharacterBrowserAnimation(entry, out var retargetNote);
-                if (animation == null)
+                return await Task.Run(
+                    () => PrepareCharacterBrowserAnimationCore(context, token), token);
+            }
+            finally
+            {
+                mCharacterBrowserAnimationLoadGate.Release();
+            }
+        }
+
+        private async Task LoadSelectedCharacterBrowserAnimationAsync(
+            CharacterAnimationEntry entry,
+            bool applyBlend)
+        {
+            var (generation, token) = BeginCharacterBrowserAnimationLoad();
+            SetCharacterBrowserStatus("Loading animation…");
+            try
+            {
+                var context = CaptureCharacterBrowserAnimationPreparationContext(entry);
+                var prepared = await PrepareCharacterBrowserAnimationAsync(context, token);
+                if (!IsCurrentCharacterBrowserAnimationLoad(generation, token))
                     return;
 
-                ModelViewControl.Instance.LoadAnimation(animation, true);
-                ApplySelectedCharacterBrowserBlend();
+                if (prepared?.Animation == null)
+                {
+                    SetCharacterBrowserStatus("Animation no longer exists in pack: " + entry.DisplayName);
+                    return;
+                }
+
+                SetCharacterBrowserAnimationAutoLoaded(entry, prepared.AutoLoadedPackPaths);
+                // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
+                ModelViewControl.Instance.LoadAnimation(prepared.Animation, true);
                 SetCharacterBrowserStatus(
-                    string.IsNullOrWhiteSpace(retargetNote)
+                    string.IsNullOrWhiteSpace(prepared.RetargetNote)
                         ? "Animation: " + entry.DisplayName
-                        : $"Animation: {entry.DisplayName} ({retargetNote})");
+                        : $"Animation: {entry.DisplayName} ({prepared.RetargetNote})");
+
+                if (applyBlend)
+                    await ApplySelectedCharacterBrowserBlendAsync();
+
+                if (IsCurrentCharacterBrowserAnimationLoad(generation, token))
+                    SaveCharacterBrowserSelectionSettings();
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                SetCharacterBrowserStatus("Animation refresh failed: " + ex.Message);
+                if (IsCurrentCharacterBrowserAnimationLoad(generation, token))
+                    SetCharacterBrowserStatus("Animation load failed: " + ex.Message);
             }
         }
 
@@ -2551,60 +2652,72 @@ namespace GFDStudio.GUI.Forms
             return pack;
         }
 
-        private Animation PrepareCharacterBrowserAnimation(CharacterAnimationEntry entry, out string retargetNote)
+        private static CharacterBrowserPreparedAnimation PrepareCharacterBrowserAnimationCore(
+            CharacterBrowserAnimationPreparationContext context,
+            CancellationToken token)
         {
-            retargetNote = null;
-            if (entry?.Kind == CharacterAnimationListKind.Animation)
-                SetCharacterBrowserAnimationAutoLoaded(entry, null);
+            var entry = context.Entry;
+            token.ThrowIfCancellationRequested();
 
             // Always load a fresh pack because retargeting mutates the animation object in memory.
             // This keeps the cached/showroom source data untouched when switching target models.
             var pack = Resource.Load<AnimationPack>(entry.PackPath);
+            token.ThrowIfCancellationRequested();
             var animation = GetCharacterBrowserAnimation(pack, entry);
             if (animation == null)
-                return null;
+                return new CharacterBrowserPreparedAnimation();
 
-            var targetModelPack = mCharacterBrowserCurrentModelPack ??
-                                  ModelEditorTreeView?.TopNode?.Data as ModelPack;
+            var targetModelPack = context.TargetModelPack;
             if (targetModelPack?.Model == null)
-                return animation;
+            {
+                return new CharacterBrowserPreparedAnimation
+                {
+                    Animation = animation,
+                    AutoLoadedPackPaths = Array.Empty<string>()
+                };
+            }
 
-            var sourceModelEntry = FindCharacterModelForAnimation(entry.PackPath);
+            var sourceModelEntry = context.SourceModelEntry;
             if (sourceModelEntry == null)
             {
-                retargetNote = "source model not found; preview uses original animation";
-                return animation;
+                return new CharacterBrowserPreparedAnimation
+                {
+                    Animation = animation,
+                    RetargetNote = "source model not found; preview uses original animation",
+                    AutoLoadedPackPaths = Array.Empty<string>()
+                };
             }
 
             var sourceModelPack = Resource.Load<ModelPack>(sourceModelEntry.Path);
+            token.ThrowIfCancellationRequested();
             if (sourceModelPack.Model == null)
             {
-                retargetNote = "source model has no model data; preview uses original animation";
-                return animation;
+                return new CharacterBrowserPreparedAnimation
+                {
+                    Animation = animation,
+                    RetargetNote = "source model has no model data; preview uses original animation",
+                    AutoLoadedPackPaths = Array.Empty<string>()
+                };
             }
 
-            var selectedHairPath = GetSelectedCharacterBrowserHairPath();
-            var selectedFacePath = GetSelectedCharacterBrowserFacePath();
-            var selectedBodyPath = GetSelectedCharacterBrowserBodyPath();
             var hasSplitComponents = false;
+            IReadOnlyCollection<string> autoLoadedPackPaths = Array.Empty<string>();
             if (entry.Kind == CharacterAnimationListKind.Animation)
             {
-                IReadOnlyCollection<string> autoLoadedPackPaths;
                 animation = ComposeCharacterBrowserAnimation(
-                    entry, animation, selectedBodyPath, selectedFacePath, selectedHairPath,
-                    out hasSplitComponents, out autoLoadedPackPaths);
-                SetCharacterBrowserAnimationAutoLoaded(
-                    entry, hasSplitComponents ? autoLoadedPackPaths : null);
+                    entry, animation, context.SelectedBodyPath, context.SelectedFacePath,
+                    context.SelectedHairPath, out hasSplitComponents, out autoLoadedPackPaths, token);
             }
 
             sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
-                entry.PackPath, selectedFacePath, selectedHairPath, sourceModelEntry, sourceModelPack);
+                entry.PackPath, context.SelectedFacePath, context.SelectedHairPath,
+                sourceModelEntry, sourceModelPack, context.ModelEntries);
 
+            string retargetNote;
             switch (entry.Kind)
             {
                 case CharacterAnimationListKind.Animation:
-                    if (CanUseCharacterBrowserAnimationWithoutRetarget(
-                            entry.PackPath, sourceModelEntry, selectedFacePath, selectedHairPath))
+                    if (context.CanUseWithoutRetarget)
                     {
                         retargetNote = hasSplitComponents
                             ? "already target-rig; loaded with selected split-component tracks"
@@ -2612,17 +2725,22 @@ namespace GFDStudio.GUI.Forms
                     }
                     else
                     {
-                        var targetModelPaths = GetSelectedCharacterModelParts()
-                            .Select(part => part.Path)
+                        var targetModelPaths = new[]
+                            {
+                                context.SelectedBodyPath,
+                                context.SelectedFacePath,
+                                context.SelectedHairPath
+                            }
+                            .Where(path => !string.IsNullOrWhiteSpace(path))
                             .ToArray();
                         var p5dRetarget = P5dAnimationRetargeter.Retarget(
                             animation, sourceModelPack.Model, targetModelPack.Model,
                             entry.PackPath, entry.Index,
-                            mCharacterBrowserCurrentModelPath,
+                            context.TargetModelPath,
                             targetModelPaths,
-                            mCharacterBrowserRoot,
-                            settings.UseLocalBindSpaceRetargeting);
-                        var mode = settings.UseLocalBindSpaceRetargeting
+                            context.BrowserRoot,
+                            context.UseLocalBindSpace);
+                        var mode = context.UseLocalBindSpace
                             ? "local bind-space"
                             : "legacy world-space";
                         var kneeNote = p5dRetarget.KneeCorrectionApplied
@@ -2639,6 +2757,7 @@ namespace GFDStudio.GUI.Forms
 
                 case CharacterAnimationListKind.BlendAnimation:
                     // Blend animations are already relative; only their node IDs need updating.
+                    token.ThrowIfCancellationRequested();
                     animation.FixTargetIds(targetModelPack.Model);
                     retargetNote = "target IDs fixed in preview";
                     break;
@@ -2648,19 +2767,43 @@ namespace GFDStudio.GUI.Forms
                     break;
             }
 
-            return animation;
+            token.ThrowIfCancellationRequested();
+            return new CharacterBrowserPreparedAnimation
+            {
+                Animation = animation,
+                RetargetNote = retargetNote,
+                AutoLoadedPackPaths = hasSplitComponents ? autoLoadedPackPaths : Array.Empty<string>()
+            };
         }
 
-        private bool CanUseCharacterBrowserAnimationWithoutRetarget(
+        // Keep non-interactive export code on the existing synchronous API. Interactive browser
+        // selection uses PrepareCharacterBrowserAnimationAsync so GAP/GMD parsing and retargeting
+        // do not occupy the WinForms thread.
+        private Animation PrepareCharacterBrowserAnimation(
+            CharacterAnimationEntry entry,
+            out string retargetNote)
+        {
+            var context = CaptureCharacterBrowserAnimationPreparationContext(entry);
+            var prepared = PrepareCharacterBrowserAnimationCore(context, CancellationToken.None);
+            retargetNote = prepared.RetargetNote;
+            if (entry?.Kind == CharacterAnimationListKind.Animation)
+                SetCharacterBrowserAnimationAutoLoaded(entry, prepared.AutoLoadedPackPaths);
+            return prepared.Animation;
+        }
+
+        private static bool CanUseCharacterBrowserAnimationWithoutRetarget(
             string gapPath,
             CharacterModelEntry sourceBodyEntry,
             string selectedFacePath,
-            string selectedHairPath)
+            string selectedHairPath,
+            IReadOnlyList<CharacterModelEntry> modelEntries,
+            string currentModelPath)
         {
-            if (!AreSamePath(sourceBodyEntry?.Path, mCharacterBrowserCurrentModelPath))
+            if (!AreSamePath(sourceBodyEntry?.Path, currentModelPath))
                 return false;
 
             var selectedFace = FindCharacterBrowserAnimationSplitPart(
+                modelEntries,
                 sourceBodyEntry.Path,
                 CharacterModelPart.Face,
                 ExtractCharacterId(sourceBodyEntry.Path),
@@ -2673,6 +2816,7 @@ namespace GFDStudio.GUI.Forms
             var selectedHair = string.IsNullOrWhiteSpace(animationHairStem)
                 ? null
                 : FindCharacterBrowserAnimationSplitPart(
+                    modelEntries,
                     sourceBodyEntry.Path,
                     CharacterModelPart.Hair,
                     ExtractCharacterId(sourceBodyEntry.Path),
@@ -2687,7 +2831,8 @@ namespace GFDStudio.GUI.Forms
             string selectedFacePath,
             string selectedHairPath,
             out bool hasSplitComponents,
-            out IReadOnlyCollection<string> autoLoadedPackPaths)
+            out IReadOnlyCollection<string> autoLoadedPackPaths,
+            CancellationToken token)
         {
             hasSplitComponents = false;
             autoLoadedPackPaths = Array.Empty<string>();
@@ -2704,8 +2849,13 @@ namespace GFDStudio.GUI.Forms
             {
                 try
                 {
+                    token.ThrowIfCancellationRequested();
                     var basePack = Resource.Load<AnimationPack>(basePath);
                     bodyAnimation = GetCharacterBrowserNormalAnimation(basePack, entry.Index);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception exception)
                 {
@@ -2744,6 +2894,7 @@ namespace GFDStudio.GUI.Forms
             var components = new List<Animation>();
             foreach (var splitPath in splitPaths.Distinct(StringComparer.OrdinalIgnoreCase))
             {
+                token.ThrowIfCancellationRequested();
                 if (!File.Exists(splitPath) || AreSamePath(splitPath, basePath))
                     continue;
 
@@ -2757,6 +2908,10 @@ namespace GFDStudio.GUI.Forms
                         loadedPaths.Add(splitPath);
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
                 catch (Exception exception)
                 {
                     Logger.Debug($"CharacterBrowser: failed to load split component GAP {splitPath}: {exception}");
@@ -2764,10 +2919,7 @@ namespace GFDStudio.GUI.Forms
             }
 
             if (components.Count == 0)
-            {
-                autoLoadedPackPaths = Array.Empty<string>();
                 return bodyAnimation;
-            }
 
             hasSplitComponents = true;
             autoLoadedPackPaths = loadedPaths.ToArray();
@@ -2775,12 +2927,13 @@ namespace GFDStudio.GUI.Forms
                 bodyAnimation, components.ToArray());
         }
 
-        private ModelPack ComposeCharacterBrowserAnimationSourceModel(
+        private static ModelPack ComposeCharacterBrowserAnimationSourceModel(
             string gapPath,
             string selectedFacePath,
             string selectedHairPath,
             CharacterModelEntry bodyEntry,
-            ModelPack bodyPack)
+            ModelPack bodyPack,
+            IReadOnlyList<CharacterModelEntry> modelEntries)
         {
             if (!IsSplitDanceBodyPath(bodyEntry.Path))
                 return bodyPack;
@@ -2795,7 +2948,7 @@ namespace GFDStudio.GUI.Forms
             if (!string.IsNullOrWhiteSpace(hairStem))
             {
                 var hairEntry = FindCharacterBrowserAnimationSplitPart(
-                    bodyEntry.Path, CharacterModelPart.Hair, characterId, hairStem);
+                    modelEntries, bodyEntry.Path, CharacterModelPart.Hair, characterId, hairStem);
                 if (hairEntry != null)
                     parts.Add(hairEntry);
             }
@@ -2803,14 +2956,13 @@ namespace GFDStudio.GUI.Forms
             if (!string.IsNullOrWhiteSpace(selectedFacePath))
             {
                 var faceEntry = FindCharacterBrowserAnimationSplitPart(
-                    bodyEntry.Path, CharacterModelPart.Face, characterId, null);
+                    modelEntries, bodyEntry.Path, CharacterModelPart.Face, characterId, null);
                 if (faceEntry != null)
                     parts.Add(faceEntry);
             }
 
             return parts.Count == 1 ? bodyPack : ComposeCharacterModelPack(parts);
         }
-
         private string GetSelectedCharacterBrowserHairPath()
         {
             return (mCharacterHairListBox?.SelectedItem as CharacterModelEntry)?.Path;
@@ -2890,10 +3042,11 @@ namespace GFDStudio.GUI.Forms
                 baseStem + "_" + bodyMatch.Groups["variant"].Value + ".GAP");
         }
 
-        private CharacterModelEntry FindCharacterBrowserAnimationSplitPart(
+        private static CharacterModelEntry FindCharacterBrowserAnimationSplitPart(
+            IReadOnlyList<CharacterModelEntry> modelEntries,
             string bodyPath, CharacterModelPart part, string characterId, string fileStem)
         {
-            var matchingModels = mCharacterModels
+            var matchingModels = modelEntries
                 .Where(model => model.Part == part)
                 .Where(model => string.Equals(ExtractCharacterId(model.Path), characterId,
                                               StringComparison.OrdinalIgnoreCase));
@@ -2954,16 +3107,19 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
-        private CharacterModelEntry FindCharacterModelForAnimation(string gapPath)
+        private CharacterModelEntry FindCharacterModelForAnimation(
+            string gapPath,
+            IReadOnlyList<CharacterModelEntry> modelEntries,
+            string currentModelPath)
         {
             var animationKey = ExtractCharacterModelKey(gapPath);
             if (string.IsNullOrWhiteSpace(animationKey))
                 return null;
 
             var characterId = ExtractCharacterId(gapPath);
-            var selectedBody = mCharacterModels.FirstOrDefault(model =>
+            var selectedBody = modelEntries.FirstOrDefault(model =>
                 model.Part == CharacterModelPart.Body &&
-                AreSamePath(model.Path, mCharacterBrowserCurrentModelPath));
+                AreSamePath(model.Path, currentModelPath));
             if (selectedBody != null &&
                 string.Equals(ExtractCharacterModelKey(selectedBody.Path), animationKey,
                               StringComparison.OrdinalIgnoreCase))
@@ -2976,7 +3132,7 @@ namespace GFDStudio.GUI.Forms
             }
 
             var characterDirectory = GetCharacterDirectory(gapPath);
-            var characterModels = mCharacterModels
+            var characterModels = modelEntries
                 .Where(model => model.Part == CharacterModelPart.Body)
                 .Where(model => string.Equals(GetCharacterDirectory(model.Path), characterDirectory,
                                               StringComparison.OrdinalIgnoreCase))
