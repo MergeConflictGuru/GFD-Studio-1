@@ -33,7 +33,6 @@ public sealed class StitchedAnimation : IAnimationClip
     private readonly BoneTransform[] _axisAnchors;
     private readonly Quaternion[] _axisRotations;
     private readonly Vector3[] _axisTranslations;
-    private const int ContinuityGuardFrames = 3;
 
     public StitchedAnimation(
         IAnimationClip source,
@@ -214,28 +213,6 @@ public sealed class StitchedAnimation : IAnimationClip
                     var t = SmoothStep(blendOffset / (float)_blendFrames);
                     for (var i = 0; i < Skeleton.BoneCount; i++)
                         destination[i] = BoneTransform.Lerp(sourcePose[i], candidatePose[i], t);
-                }
-                finally { pool.Return(sourceBuffer, clearArray: false); }
-            }
-            else if (AlignPositionAndYaw && _blendFrames == 0 && blendOffset <= ContinuityGuardFrames)
-            {
-                // A hard cut can still visibly pop when the matcher finds a close, but not
-                // identical, pose. Keep the matched root exactly continuous and ease the animated
-                // motion subtree into the candidate over a few frames. Static ancestors remain
-                // in the candidate's axis space, preserving the rig's file-level hierarchy.
-                var sourceBuffer = pool.Rent(Skeleton.BoneCount);
-                try
-                {
-                    var sourcePose = sourceBuffer.AsSpan(0, Skeleton.BoneCount);
-                    _source.SampleGlobalPose(_sourceFrame, sourcePose);
-                    var t = SmoothStep(blendOffset / (float)ContinuityGuardFrames);
-                    candidatePose.CopyTo(destination);
-                    for (var i = 0; i < Skeleton.BoneCount; i++)
-                    {
-                        if (!_motionSubtree[i] || i == Skeleton.RootBoneIndex)
-                            continue;
-                        destination[i] = BoneTransform.Lerp(sourcePose[i], candidatePose[i], t);
-                    }
                 }
                 finally { pool.Return(sourceBuffer, clearArray: false); }
             }
