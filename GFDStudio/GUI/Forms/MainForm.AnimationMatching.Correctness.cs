@@ -67,12 +67,15 @@ namespace GFDStudio.GUI.Forms
         }
 
         IReadOnlyList<IAnimationClip> IAnimationMatchingCorpusHost.SearchableAnimationsForMatching =>
-            BuildCorrectedAnimationMatchingCorpus();
+            BuildCorrectedAnimationMatchingCorpus(validateSourceModels: false);
+
+        IReadOnlyList<IAnimationClip> IAnimationMatchingCorpusHost.SearchableAnimationsForIndexBuild =>
+            BuildCorrectedAnimationMatchingCorpus(validateSourceModels: true);
 
         string IAnimationMatchingCorpusHost.AnimationMatchingContextSignature =>
             GetCorrectedAnimationMatchingContextKey();
 
-        private IReadOnlyList<IAnimationClip> BuildCorrectedAnimationMatchingCorpus()
+        private IReadOnlyList<IAnimationClip> BuildCorrectedAnimationMatchingCorpus(bool validateSourceModels = true)
         {
             var root = mCharacterBrowserRoot;
             var lookups = BuildAnimationMatchingSourceModelLookups(root);
@@ -96,7 +99,9 @@ namespace GFDStudio.GUI.Forms
                     continue;
                 }
 
-                if (!validSourceModels.Contains(sourceModelPath) && !invalidSourceModels.Contains(sourceModelPath))
+                if (validateSourceModels &&
+                    !validSourceModels.Contains(sourceModelPath) &&
+                    !invalidSourceModels.Contains(sourceModelPath))
                 {
                     try
                     {
@@ -112,7 +117,7 @@ namespace GFDStudio.GUI.Forms
                     }
                 }
 
-                if (invalidSourceModels.Contains(sourceModelPath))
+                if (validateSourceModels && invalidSourceModels.Contains(sourceModelPath))
                 {
                     skippedWithoutSourceModel++;
                     continue;

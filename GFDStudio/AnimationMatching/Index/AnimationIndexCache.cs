@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -187,9 +188,17 @@ public static class AnimationIndexCache
                         progress?.Report("Cached animation index layout is invalid; click Reindex to rebuild.");
                         return null;
                     }
-                    if (!ValidateMetadata(reader, header, corpus, options, corpusSignature, progress)) return null;
+                    if (!TryPrepareCachedCorpus(
+                            reader,
+                            header,
+                            corpus,
+                            options,
+                            corpusSignature,
+                            progress,
+                            out var cachedCorpus))
+                        return null;
 
-                    var prepared = PrepareFeatureLayout(corpus, options, header.DescriptorDimensions);
+                    var prepared = PrepareFeatureLayout(cachedCorpus, options, header.DescriptorDimensions);
                     if (prepared.projection.OutputDimensions != header.ProjectionDimensions) return null;
 
                     // Only tiny normalization vectors are copied. The GB-scale sections remain on SSD
@@ -215,7 +224,7 @@ public static class AnimationIndexCache
                     {
                         var tree = new VpTree(mapped, header.ProjectionDimensions, header.TreeRoot);
                         return AnimationSearchDatabase.FromMappedCache(
-                            corpus,
+                            cachedCorpus,
                             options,
                             prepared.extractor,
                             prepared.clipFeatureBones,
@@ -283,9 +292,20 @@ public static class AnimationIndexCache
         var dimensions = reader.ReadInt32();
         var sampleCount = reader.ReadInt32();
         var clipCount = reader.ReadInt32();
-        if (clipCount != corpus.Clips.Count || sampleCount < 0 || dimensions < 1) return null;
+        if (clipCount < 0 || sampleCount < 0 || dimensions < 1) return null;
+
+        var clipsById = new Dictionary<string, IAnimationClip>(StringComparer.Ordinal);
+        foreach (var clip in corpus.Clips)
+            clipsById.TryAdd(clip.Id, clip);
+
+        var cachedClips = new IAnimationClip[clipCount];
         for (var i = 0; i < clipCount; i++)
-            if (!string.Equals(reader.ReadString(), corpus.Clips[i].Id, StringComparison.Ordinal)) return null;
+        {
+            var clipId = reader.ReadString();
+            if (!clipsById.TryGetValue(clipId, out var clip)) return null;
+            cachedClips[i] = clip;
+        }
+        var cachedCorpus = new AnimationCorpus(cachedClips);
 
         progress?.Report("Loading legacy cached pose descriptors…");
         var addresses = new FrameAddress[sampleCount];
@@ -295,7 +315,7 @@ public static class AnimationIndexCache
         var invStd = ReadLegacyFloatArray(reader, dimensions);
         var descriptors = ReadLegacyFloatArray(reader, checked(sampleCount * dimensions));
 
-        var prepared = PrepareFeatureLayout(corpus, options, dimensions);
+        var prepared = PrepareFeatureLayout(cachedCorpus, options, dimensions);
         float[] projected;
         VpTree tree;
 
@@ -321,7 +341,7 @@ public static class AnimationIndexCache
         }
 
         return AnimationSearchDatabase.FromCache(
-            corpus,
+            cachedCorpus,
             options,
             prepared.extractor,
             prepared.clipFeatureBones,
@@ -341,19 +361,24 @@ public static class AnimationIndexCache
         options.Validate();
         var extractor = new PoseFeatureExtractor(options);
         var clipFeatureBones = new int[corpus.Clips.Count][];
-        var commonBoneCount = int.MaxValue;
-        for (var i = 0; i < corpus.Clips.Count; i++)
-        {
-            clipFeatureBones[i] = extractor.SelectFeatureBones(corpus.Clips[i].Skeleton);
-            commonBoneCount = Math.Min(commonBoneCount, clipFeatureBones[i].Length);
-        }
-        if (commonBoneCount < 1)
-            throw new InvalidDataException("No feature bones were found while opening the AniMatch cache.");
+
+        // The cache fingerprint identifies the canonical skeleton and the descriptor dimensions
+        // encode the common feature-bone count. Reconstruct this tiny layout directly instead of
+        // asking every lazy GfdAnimationClip for Skeleton (which would parse every source model).
+        var perHistoryDimensions = checked(options.HistorySeconds.Length * 12);
+        var featureDimensions = dimensions - 4;
+        if (featureDimensions <= 0 || featureDimensions % perHistoryDimensions != 0)
+            throw new InvalidDataException("Animation matching cache descriptor dimensions are invalid.");
+
+        var commonBoneCount = featureDimensions / perHistoryDimensions;
+        if (commonBoneCount < 1 || extractor.GetDescriptorLength(commonBoneCount) != dimensions)
+            throw new InvalidDataException("Animation matching cache feature layout does not match the current options.");
+
+        var featureBoneTemplate = new int[commonBoneCount];
+        for (var i = 0; i < featureBoneTemplate.Length; i++)
+            featureBoneTemplate[i] = i;
         for (var i = 0; i < clipFeatureBones.Length; i++)
-            if (clipFeatureBones[i].Length != commonBoneCount)
-                clipFeatureBones[i] = clipFeatureBones[i][..commonBoneCount];
-        if (dimensions != extractor.GetDescriptorLength(commonBoneCount))
-            throw new InvalidDataException("AniMatch descriptor dimensions do not match the current skeleton/features.");
+            clipFeatureBones[i] = (int[])featureBoneTemplate.Clone();
 
         var dimensionWeights = extractor.GetPostNormalizationWeights(commonBoneCount);
         var projection = new RandomProjection(dimensions, options.ProjectionDimensions, options.ProjectionSeed);
@@ -447,19 +472,16 @@ public static class AnimationIndexCache
                header.TreeFarOffset + treeBytes <= header.FileLength;
     }
 
-    private static bool ValidateMetadata(
+    private static bool TryPrepareCachedCorpus(
         BinaryReader reader,
         FlatHeader header,
-        AnimationCorpus corpus,
+        AnimationCorpus catalog,
         AnimationMatchOptions options,
         string corpusSignature,
-        IProgress<string>? progress)
+        IProgress<string>? progress,
+        out AnimationCorpus cachedCorpus)
     {
-        if (header.ClipCount != corpus.Clips.Count)
-        {
-            progress?.Report($"Cached animation index clip count differs ({header.ClipCount:N0} vs {corpus.Clips.Count:N0}); click Reindex to rebuild.");
-            return false;
-        }
+        cachedCorpus = null!;
         reader.BaseStream.Position = header.MetadataOffset;
         var metadataEnd = checked(header.MetadataOffset + header.MetadataLength);
 
@@ -481,16 +503,33 @@ public static class AnimationIndexCache
             return false;
         }
 
-        for (var i = 0; i < header.ClipCount; i++)
+        if (header.ClipCount < 0)
         {
-            if (!string.Equals(reader.ReadString(), corpus.Clips[i].Id, StringComparison.Ordinal))
-            {
-                progress?.Report($"Cached animation index clip order differs at {i:N0}; click Reindex to rebuild.");
-                return false;
-            }
+            progress?.Report("Cached animation index has an invalid clip count; click Reindex to rebuild.");
+            return false;
         }
 
-        return reader.BaseStream.Position <= metadataEnd;
+        var clipsById = new Dictionary<string, IAnimationClip>(StringComparer.Ordinal);
+        foreach (var clip in catalog.Clips)
+            clipsById.TryAdd(clip.Id, clip);
+
+        var cachedClips = new IAnimationClip[header.ClipCount];
+        for (var i = 0; i < header.ClipCount; i++)
+        {
+            var clipId = reader.ReadString();
+            if (!clipsById.TryGetValue(clipId, out var clip))
+            {
+                progress?.Report($"Cached animation index clip {i:N0} is not present in the current catalog; click Reindex to rebuild.");
+                return false;
+            }
+            cachedClips[i] = clip;
+        }
+
+        if (reader.BaseStream.Position > metadataEnd)
+            return false;
+
+        cachedCorpus = new AnimationCorpus(cachedClips);
+        return true;
     }
 
     private static bool IsLegacyScanGenerationCompatible(string cachedSignature, string currentSignature)
