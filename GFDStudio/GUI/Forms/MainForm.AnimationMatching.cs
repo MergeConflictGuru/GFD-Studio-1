@@ -150,6 +150,12 @@ namespace GFDStudio.GUI.Forms
                 return;
             }
 
+            if (!mCharacterBrowserScanComplete)
+            {
+                SetCharacterBrowserStatus("Character Browser is still scanning animations; wait until it is ready before matching");
+                return;
+            }
+
             if (mCharacterAnimations.Count == 0)
             {
                 SetCharacterBrowserStatus("No searchable animations have been indexed by the Character Browser yet");
@@ -205,6 +211,9 @@ namespace GFDStudio.GUI.Forms
 
         private void StartAnimationMatchingCachePreload()
         {
+            if (!mCharacterBrowserScanComplete)
+                return;
+
             var cacheHost = (IAnimationMatchingCacheHost)this;
             if (!File.Exists(cacheHost.AnimationMatchingCachePath))
                 return;

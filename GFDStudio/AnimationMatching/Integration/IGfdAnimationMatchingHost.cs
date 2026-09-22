@@ -43,6 +43,7 @@ public interface IAnimationMatchingCacheHost
 /// </summary>
 public interface IAnimationMatchingCorpusHost
 {
+    bool AnimationMatchingCorpusReady { get; }
     IAnimationClip? CurrentAnimationForMatching { get; }
     IReadOnlyList<IAnimationClip> SearchableAnimationsForMatching { get; }
     string AnimationMatchingContextSignature { get; }

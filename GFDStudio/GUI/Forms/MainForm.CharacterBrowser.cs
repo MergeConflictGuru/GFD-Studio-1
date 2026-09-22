@@ -165,6 +165,7 @@ namespace GFDStudio.GUI.Forms
         private ModelPack mCharacterBrowserCurrentModelPack;
         private HashSet<string> mCharacterBrowserCurrentModelNodeNames;
         private int mCharacterBrowserScanGeneration;
+        private bool mCharacterBrowserScanComplete;
         private bool mCharacterBrowserRestoringSelection;
         private bool mCharacterBrowserApplyingSavedSelection;
         private bool mCharacterBrowserRefreshingModelParts;
@@ -541,6 +542,7 @@ namespace GFDStudio.GUI.Forms
 
         private async void StartCharacterBrowserScan(string root)
         {
+            mCharacterBrowserScanComplete = false;
             mCharacterBrowserScanCancellation?.Cancel();
             mCharacterBrowserScanCancellation?.Dispose();
             mCharacterBrowserScanCancellation = new CancellationTokenSource();
@@ -745,6 +747,10 @@ namespace GFDStudio.GUI.Forms
                                     $"({finalCachedCount:N0} cached, {finalRescannedCount:N0} rescanned)" +
                                     (finalFailedCount == 0 ? string.Empty : $" ({finalFailedCount:N0} GAP files failed to parse)"));
 
+                            // Do not let AniMatch consume the batches while they are still arriving.
+                            // The finalized lists are the stable corpus snapshot used by the cache.
+                            mCharacterBrowserScanComplete = true;
+
                             // The showroom corpus is now complete. Warm only an already-existing
                             // AniMatch cache so opening the search surface does not pay that I/O cost.
                             StartAnimationMatchingCachePreload();
@@ -757,9 +763,11 @@ namespace GFDStudio.GUI.Forms
             catch (OperationCanceledException)
             {
                 // A rescan/root change superseded this scan.
+                mCharacterBrowserScanComplete = false;
             }
             catch (Exception ex)
             {
+                mCharacterBrowserScanComplete = false;
                 SetCharacterBrowserStatus("Scan failed: " + ex.Message);
             }
         }

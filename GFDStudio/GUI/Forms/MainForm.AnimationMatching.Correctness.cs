@@ -19,6 +19,9 @@ namespace GFDStudio.GUI.Forms
     /// </summary>
     public partial class MainForm : IAnimationMatchingCorpusHost
     {
+        bool IAnimationMatchingCorpusHost.AnimationMatchingCorpusReady =>
+            mCharacterBrowserScanComplete;
+
         private static readonly ConcurrentDictionary<string, WeakReference<Model>> sAnimationMatchingSourceModels =
             new ConcurrentDictionary<string, WeakReference<Model>>(StringComparer.OrdinalIgnoreCase);
 

@@ -66,6 +66,14 @@ public sealed class AnimationMatchingModeController : IDisposable
         (_host as IAnimationMatchingCorpusHost)?.AnimationMatchingContextSignature ??
         (_host as IAnimationMatchingCacheHost)?.AnimationMatchingCorpusSignature;
 
+    private bool CorpusReady =>
+        (_host as IAnimationMatchingCorpusHost)?.AnimationMatchingCorpusReady ?? true;
+
+    private void ReportCorpusNotReady()
+    {
+        _view.SetStatus("Character Browser is still scanning animations; wait until it is ready before matching.");
+    }
+
     public void SyncSourceFromHost()
     {
         var source = CurrentSource;
@@ -82,6 +90,9 @@ public sealed class AnimationMatchingModeController : IDisposable
     /// </summary>
     public Task PreloadExistingIndexAsync()
     {
+        if (!CorpusReady)
+            return Task.CompletedTask;
+
         if (_host is not IAnimationMatchingCacheHost cacheHost ||
             !File.Exists(cacheHost.AnimationMatchingCachePath))
             return Task.CompletedTask;
@@ -96,6 +107,12 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async void OnSearchRequested(object? sender, EventArgs e)
     {
+        if (!CorpusReady)
+        {
+            ReportCorpusNotReady();
+            return;
+        }
+
         var source = _sourceForResults ?? CurrentSource;
         if (source is null)
         {
@@ -123,6 +140,12 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async void OnReindexRequested(object? sender, EventArgs e)
     {
+        if (!CorpusReady)
+        {
+            ReportCorpusNotReady();
+            return;
+        }
+
         RestartWork();
         try { await BuildIndexAsync(force: true); }
         catch (OperationCanceledException) { }
@@ -218,6 +241,12 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async Task BuildIndexAsync(bool force, bool restartWork = true)
     {
+        if (!CorpusReady)
+        {
+            ReportCorpusNotReady();
+            return;
+        }
+
         var contextSignature = CurrentContextSignature;
         if (_database is not null && !force &&
             string.Equals(_databaseContextSignature, contextSignature, StringComparison.Ordinal))
@@ -246,7 +275,12 @@ public sealed class AnimationMatchingModeController : IDisposable
             {
                 var cacheSignature = contextSignature ?? cacheHost.AnimationMatchingCorpusSignature;
                 _view.SetStatus("Loading animation match index…");
-                var cacheProgress = new Progress<string>(message => _view.SetStatus(message));
+                var cacheMessageShown = false;
+                var cacheProgress = new Progress<string>(message =>
+                {
+                    cacheMessageShown = true;
+                    _view.SetStatus(message);
+                });
                 _database = await Task.Run(() => AnimationIndexCache.TryLoad(
                     cacheHost.AnimationMatchingCachePath,
                     corpus,
@@ -260,7 +294,8 @@ public sealed class AnimationMatchingModeController : IDisposable
                     return;
                 }
 
-                _view.SetStatus("Cached animation index is unavailable or stale; click Reindex to rebuild.");
+                if (!cacheMessageShown)
+                    _view.SetStatus("Cached animation index is unavailable or stale; click Reindex to rebuild.");
                 return;
             }
 
