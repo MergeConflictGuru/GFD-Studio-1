@@ -59,8 +59,15 @@ public sealed class AnimationMatchingModeController : IDisposable
     private IAnimationClip? CurrentSource =>
         (_host as IAnimationMatchingCorpusHost)?.CurrentAnimationForMatching ?? _host.CurrentAnimation;
 
-    private IReadOnlyList<IAnimationClip> CurrentCorpus =>
-        (_host as IAnimationMatchingCorpusHost)?.SearchableAnimationsForMatching ?? _host.SearchableAnimations;
+    private IReadOnlyList<IAnimationClip> CurrentCorpus(bool forIndexBuild)
+    {
+        if (_host is IAnimationMatchingCorpusHost corpusHost)
+            return forIndexBuild
+                ? corpusHost.SearchableAnimationsForIndexBuild
+                : corpusHost.SearchableAnimationsForMatching;
+
+        return _host.SearchableAnimations;
+    }
 
     private string? CurrentContextSignature =>
         (_host as IAnimationMatchingCorpusHost)?.AnimationMatchingContextSignature ??
@@ -263,10 +270,10 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SetBusy(true, "Indexing animations…");
         try
         {
-            // Source-model discovery and canonical-rig validation can load many GMD files. Keep
-            // that work off the UI thread just like descriptor extraction and cache I/O.
+            // Cache opening uses only the lazy identity catalog. Explicit reindex selects the
+            // validated corpus and is the only path allowed to load source models here.
             var corpus = await Task.Run(
-                () => new AnimationCorpus(CurrentCorpus),
+                () => new AnimationCorpus(CurrentCorpus(force)),
                 _work!.Token);
             if (corpus.Clips.Count == 0)
                 throw new InvalidOperationException("No animations with a resolvable source model are available for matching.");

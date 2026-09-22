@@ -44,6 +44,12 @@ public interface IAnimationMatchingCorpusHost
 {
     bool AnimationMatchingCorpusReady { get; }
     IAnimationClip? CurrentAnimationForMatching { get; }
+    /// <summary>
+    /// Returns the cache catalog. Implementations must keep clips lazy: opening an existing index
+    /// may only inspect stable identities and must not load source models or animations.
+    /// </summary>
     IReadOnlyList<IAnimationClip> SearchableAnimationsForMatching { get; }
+    /// <summary>Returns the validated corpus used when explicitly rebuilding the index.</summary>
+    IReadOnlyList<IAnimationClip> SearchableAnimationsForIndexBuild { get; }
     string AnimationMatchingContextSignature { get; }
 }
