@@ -82,6 +82,16 @@ namespace GFDLibrary.Rendering.OpenGL
             GL.DrawElements( PrimitiveType, ElementBuffer.Count, DrawElementsType.UnsignedInt, 0 );
         }
 
+        public void UpdatePositions( Vector3[] positions )
+        {
+            PositionBuffer.UpdateData( BufferTarget.ArrayBuffer, positions );
+        }
+
+        public void UpdateNormals( Vector3[] normals )
+        {
+            NormalBuffer?.UpdateData( BufferTarget.ArrayBuffer, normals );
+        }
+
         #region IDisposable Support
         private bool mDisposed = false; // To detect redundant calls
 

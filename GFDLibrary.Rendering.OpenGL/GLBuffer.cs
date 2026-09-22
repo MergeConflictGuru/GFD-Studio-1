@@ -36,8 +36,17 @@ namespace GFDLibrary.Rendering.OpenGL
             }
             catch ( Exception )
             {
-            }
+                }
 #endif
+        }
+
+        public void UpdateData( BufferTarget target, T[] data )
+        {
+            if ( data == null || data.Length != Count )
+                throw new ArgumentException( "Updated buffer data must have the original element count.", nameof( data ) );
+
+            GL.BindBuffer( target, Id );
+            GL.BufferSubData( target, IntPtr.Zero, TotalSize, data );
         }
 
         #region IDisposable Support
