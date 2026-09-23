@@ -1804,34 +1804,7 @@ namespace GFDStudio.GUI.Forms
         }
 
         private static bool CharacterBrowserMatches(string value, string filter)
-        {
-            if (string.IsNullOrWhiteSpace(filter))
-                return true;
-
-            if (filter.Length >= 2 && filter[0] == '/' && filter[^1] == '/')
-            {
-                var pattern = filter.Substring(1, filter.Length - 2);
-                try
-                {
-                    return Regex.IsMatch(
-                        value ?? string.Empty,
-                        pattern,
-                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                        TimeSpan.FromMilliseconds(100));
-                }
-                catch (ArgumentException)
-                {
-                    // Keep an invalid filter from breaking list refreshes.
-                    return false;
-                }
-                catch (RegexMatchTimeoutException)
-                {
-                    return false;
-                }
-            }
-
-            return (value ?? string.Empty).IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
-        }
+            => FilterTextMatcher.Matches(value, filter);
 
         private bool IsCharacterBrowserAnimationForSelectedBody(CharacterAnimationEntry entry)
         {
