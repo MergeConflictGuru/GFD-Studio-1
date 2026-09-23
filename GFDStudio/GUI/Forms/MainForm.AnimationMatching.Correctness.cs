@@ -159,14 +159,17 @@ namespace GFDStudio.GUI.Forms
                         capturedPackPath, capturedKind, capturedIndex)
                     : () => LoadComposedAnimationMatchingSourceAnimation(
                         composition, capturedIndex);
-                Func<Model> modelLoader = composition == null
-                    ? () => LoadAnimationMatchingSourceModel(capturedSourceModelPath)
+                Func<Model> modelLoader =
+                    () => LoadAnimationMatchingSourceModel(capturedSourceModelPath);
+                Func<Model> previewModelLoader = composition == null
+                    ? modelLoader
                     : () => LoadAnimationMatchingSourceModel(composition);
                 clips.Add(new GfdAnimationClip(
                     GetCorrectedAnimationMatchClipId(entry),
                     entry.DisplayName,
                     modelLoader,
                     animationLoader,
+                    previewModelLoader,
                     AnimationMatchingFramesPerSecond));
             }
 

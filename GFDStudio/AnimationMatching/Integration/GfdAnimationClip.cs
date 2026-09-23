@@ -18,6 +18,7 @@ namespace GFDStudio.AnimationMatching.Integration;
 public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwner
 {
     private readonly Func<Model> _modelLoader;
+    private readonly Func<Model> _previewModelLoader;
     private readonly Func<Animation> _animationLoader;
     private readonly object _modelSync = new();
     private readonly object _animationSync = new();
@@ -46,10 +47,22 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         Func<Model> sourceModelLoader,
         Func<Animation> animationLoader,
         float framesPerSecond = 30f)
+        : this(id, displayName, sourceModelLoader, animationLoader, sourceModelLoader, framesPerSecond)
+    {
+    }
+
+    public GfdAnimationClip(
+        string id,
+        string displayName,
+        Func<Model> sourceModelLoader,
+        Func<Animation> animationLoader,
+        Func<Model> previewModelLoader,
+        float framesPerSecond = 30f)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         DisplayName = displayName ?? string.Empty;
         _modelLoader = sourceModelLoader ?? throw new ArgumentNullException(nameof(sourceModelLoader));
+        _previewModelLoader = previewModelLoader ?? _modelLoader;
         _animationLoader = animationLoader ?? throw new ArgumentNullException(nameof(animationLoader));
         FramesPerSecond = MathF.Max(1f, framesPerSecond);
     }
@@ -111,7 +124,8 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         if (targetSkeleton == null)
             throw new ArgumentNullException(nameof(targetSkeleton));
 
-        var sourceModel = SourceModel;
+        var sourceModel = _previewModelLoader() ??
+            throw new InvalidOperationException($"Could not load preview source model for {DisplayName}.");
         var animation = _animationLoader() ??
             throw new InvalidOperationException($"Could not load animation {DisplayName} for preview.");
 
