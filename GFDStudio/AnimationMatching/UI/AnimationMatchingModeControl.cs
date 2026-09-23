@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using GFDLibrary;
@@ -200,9 +201,18 @@ public sealed class AnimationMatchingModeControl : UserControl
         BackColor = Color.FromArgb(30, 30, 30),
         Padding = new Padding(3)
     };
+    private readonly TextBox _filter = new()
+    {
+        BackColor = Color.FromArgb(45, 45, 48),
+        ForeColor = Color.Gainsboro,
+        BorderStyle = BorderStyle.FixedSingle,
+        Dock = DockStyle.Fill,
+        Margin = new Padding(0, 2, 0, 4)
+    };
 
     private (int start, int end)? _selection;
     private AnimationMatchResult? _selectedResult;
+    private readonly List<(AnimationMatchResult Result, Control Card)> _resultCards = new();
     private bool _canLoadMore;
     private bool _loadMoreArmed = true;
     private bool _loadMoreCheckPending;
@@ -240,7 +250,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+        RowCount = 5,
             Margin = Padding.Empty,
             Padding = new Padding(6),
             BackColor = Color.FromArgb(30, 30, 30)
@@ -248,6 +258,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var rootBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
@@ -307,7 +318,8 @@ public sealed class AnimationMatchingModeControl : UserControl
         layout.Controls.Add(rootBar, 0, 0);
         layout.Controls.Add(actionBar, 0, 1);
         layout.Controls.Add(_status, 0, 2);
-        layout.Controls.Add(_results, 0, 3);
+        layout.Controls.Add(_filter, 0, 3);
+        layout.Controls.Add(_results, 0, 4);
         Controls.Add(layout);
 
         _browse.Click += (_, _) => BrowseRequested?.Invoke(this, EventArgs.Empty);
@@ -316,6 +328,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
         _exportParts.Click += (_, _) => ExportPartsRequested?.Invoke(this, EventArgs.Empty);
         _results.Scroll += (_, _) => MaybeRequestMoreResults();
+        _filter.TextChanged += (_, _) => ApplyResultFilter();
         _alignPositionAndYaw.CheckedChanged += (_, _) => ReactivateSelected();
         _blend.CheckedChanged += (_, _) => ReactivateSelected();
         _blendMs.ValueChanged += (_, _) => ReactivateSelected();
@@ -373,6 +386,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         _thumbnailPlayback.Reset();
         ClearThumbnailAtlas();
         _thumbnailRenderEntries.Clear();
+        _resultCards.Clear();
         _results.SuspendLayout();
         try
         {
@@ -380,7 +394,9 @@ public sealed class AnimationMatchingModeControl : UserControl
                 _results.Controls[0].Dispose();
 
             foreach (var result in results)
-                _results.Controls.Add(CreateResultCard(result));
+                AddResultCard(result);
+
+            ApplyResultFilter();
         }
         finally
         {
@@ -397,7 +413,9 @@ public sealed class AnimationMatchingModeControl : UserControl
         try
         {
             foreach (var result in results)
-                _results.Controls.Add(CreateResultCard(result));
+                AddResultCard(result);
+
+            ApplyResultFilter();
         }
         finally
         {
@@ -542,6 +560,34 @@ public sealed class AnimationMatchingModeControl : UserControl
     {
         if (_selectedResult is not null)
             CandidateActivated?.Invoke(this, _selectedResult);
+    }
+
+    private void AddResultCard(AnimationMatchResult result)
+    {
+        var card = CreateResultCard(result);
+        _resultCards.Add((result, card));
+        _results.Controls.Add(card);
+    }
+
+    private void ApplyResultFilter()
+    {
+        var filter = _filter.Text?.Trim();
+        _results.SuspendLayout();
+        try
+        {
+            foreach (var (result, card) in _resultCards)
+            {
+                card.Visible = FilterTextMatcher.Matches(result.Candidate.DisplayName, filter);
+            }
+
+            if (_selectedResult is not null &&
+                !_resultCards.Any(item => ReferenceEquals(item.Result, _selectedResult) && item.Card.Visible))
+                _selectedResult = null;
+        }
+        finally
+        {
+            _results.ResumeLayout(true);
+        }
     }
 
     private Control CreateResultCard(AnimationMatchResult result)
