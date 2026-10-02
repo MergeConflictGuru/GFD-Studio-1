@@ -27,6 +27,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
     private Model _model;
     private Node[] _canonicalNodes;
     private SkeletonDefinition _skeleton;
+    private Quaternion _characterBindRotation;
     private Animation _animation;
     private AnimationPoseSampler _poseSampler;
     private int _frameCount;
@@ -189,10 +190,9 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             poseSampler.Evaluate(transforms, time);
             var sampled = new BoneTransform[CanonicalSkeleton.JointCount];
             var bindRoot = context.skeleton.BindPose[(int)CanonicalJoint.Root];
-            var inverseBindRootRotation = Quaternion.Inverse(bindRoot.Rotation);
+            var inverseCharacterRotation = Quaternion.Inverse(_characterBindRotation);
             for (var i = 0; i < context.canonicalNodes.Length; i++)
             {
-                var node = context.canonicalNodes[i];
                 var matrix = transforms[i];
                 if (!Matrix4x4.Decompose(matrix, out var scale, out var rotation, out var translation))
                 {
@@ -204,16 +204,17 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
                 if (rotation.LengthSquared() < 1e-10f)
                     rotation = Quaternion.Identity;
 
-                // The P5D and P5R rigs are authored with different bind-space bases. Their
-                // animation channels describe the same local human motion, but their raw world
-                // transforms cannot be compared directly. Move every sampled canonical joint
-                // into the source rig's bind-root frame before the feature extractor removes
-                // the animated root translation/yaw. This preserves motion while removing only
-                // the format-specific rest-frame rotation and offset.
+                // A motion-root bone's local axes are not the character's right/up/forward:
+                // P5R Bip01 and P5D root use different sideways bases. Use the anatomical bind
+                // frame for positions, and remove each joint's own bind axes from orientation.
+                // Keep the world-space rotation delta so animated yaw, lean and joint motion
+                // remain comparable even when the same body is authored with different axes.
                 var canonicalPosition = Vector3.Transform(
                     translation - bindRoot.Position,
-                    inverseBindRootRotation);
-                var canonicalRotation = Quaternion.Normalize(inverseBindRootRotation * rotation);
+                    inverseCharacterRotation);
+                var canonicalRotation = Quaternion.Normalize(
+                    inverseCharacterRotation * rotation *
+                    Quaternion.Inverse(context.skeleton.BindPose[i].Rotation) * _characterBindRotation);
                 sampled[i] = new BoneTransform(canonicalPosition, canonicalRotation, scale);
             }
 
@@ -229,7 +230,7 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
 
         var nodes = ResolveCanonicalNodes(model);
         var bindPose = nodes.Select(GetWorldTransform).ToArray();
-        return CanonicalSkeleton.Create(bindPose, CalculateReferenceHeight(model));
+        return CanonicalSkeleton.Create(bindPose, CalculateReferenceHeight(bindPose));
     }
 
     /// <summary>Returns source/target nodes in the fixed canonical-joint order.</summary>
@@ -313,7 +314,8 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             if (_skeleton == null)
             {
                 var bindPose = _canonicalNodes.Select(GetWorldTransform).ToArray();
-                _skeleton = CanonicalSkeleton.Create(bindPose, CalculateReferenceHeight(_model));
+                _characterBindRotation = CalculateCharacterBindRotation(bindPose);
+                _skeleton = CanonicalSkeleton.Create(bindPose, CalculateReferenceHeight(bindPose));
             }
             return (_model, _canonicalNodes, _skeleton);
         }
@@ -333,17 +335,45 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         return new BoneTransform(translation, Quaternion.Normalize(rotation), scale);
     }
 
-    private static float CalculateReferenceHeight(Model model)
+    private static Quaternion CalculateCharacterBindRotation(IReadOnlyList<BoneTransform> bindPose)
     {
-        var minY = float.PositiveInfinity;
-        var maxY = float.NegativeInfinity;
-        foreach (var node in model.Nodes)
+        Vector3 Position(CanonicalJoint joint) => bindPose[(int)joint].Position;
+        var feet = (Position(CanonicalJoint.LeftFoot) + Position(CanonicalJoint.RightFoot)) * .5f;
+        var up = Position(CanonicalJoint.Head) - feet;
+        if (up.LengthSquared() < 1e-10f)
+            throw new InvalidOperationException("Source skeleton has no anatomical height.");
+        up = Vector3.Normalize(up);
+        var right = Position(CanonicalJoint.LeftHip) - Position(CanonicalJoint.RightHip);
+        right -= up * Vector3.Dot(right, up);
+        if (right.LengthSquared() < 1e-10f)
         {
-            var y = node.WorldTransform.Translation.Y;
-            minY = MathF.Min(minY, y);
-            maxY = MathF.Max(maxY, y);
+            right = Position(CanonicalJoint.LeftShoulder) - Position(CanonicalJoint.RightShoulder);
+            right -= up * Vector3.Dot(right, up);
         }
-        return MathF.Max(0.01f, maxY - minY);
+        if (right.LengthSquared() < 1e-10f)
+            throw new InvalidOperationException("Source skeleton has no anatomical width.");
+        right = Vector3.Normalize(right);
+        var forward = Vector3.Normalize(Vector3.Cross(right, up));
+        return Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(new Matrix4x4(
+            right.X, right.Y, right.Z, 0,
+            up.X, up.Y, up.Z, 0,
+            forward.X, forward.Y, forward.Z, 0,
+            0, 0, 0, 1)));
+    }
+
+    private static float CalculateReferenceHeight(IReadOnlyList<BoneTransform> bindPose)
+    {
+        // Cosmetic/helper branches and the file's choice of world axes must not affect scale.
+        var up = Vector3.Transform(Vector3.UnitY, CalculateCharacterBindRotation(bindPose));
+        var minimum = float.PositiveInfinity;
+        var maximum = float.NegativeInfinity;
+        for (var i = 1; i < bindPose.Count; i++)
+        {
+            var height = Vector3.Dot(bindPose[i].Position, up);
+            minimum = MathF.Min(minimum, height);
+            maximum = MathF.Max(maximum, height);
+        }
+        return MathF.Max(0.01f, maximum - minimum);
     }
 }
 

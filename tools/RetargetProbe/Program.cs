@@ -13,6 +13,11 @@ var stdout = Console.Out;
 try
 {
 Console.SetOut(TextWriter.Null);
+if (args.Contains("--animatch-audit"))
+{
+    Environment.ExitCode = AnimationMatchAudit.Run(args, stdout);
+    return;
+}
 if (args.Length == 3 && args[0] == "--cascadeur-job")
 {
     Environment.ExitCode = CascadeurTransition.Run(args[1], args[2]);
