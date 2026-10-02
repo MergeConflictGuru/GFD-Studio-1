@@ -203,11 +203,12 @@ public sealed class AnimationMatchingModeControl : UserControl
     };
     private readonly TextBox _filter = new()
     {
+        PlaceholderText = "Filter results…",
         BackColor = Color.FromArgb(45, 45, 48),
         ForeColor = Color.Gainsboro,
         BorderStyle = BorderStyle.FixedSingle,
         Dock = DockStyle.Fill,
-        Margin = new Padding(0, 2, 0, 4)
+        Margin = new Padding(4, 3, 0, 3)
     };
 
     private (int start, int end)? _selection;
@@ -250,31 +251,30 @@ public sealed class AnimationMatchingModeControl : UserControl
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-        RowCount = 5,
+        RowCount = 4,
             Margin = Padding.Empty,
             Padding = new Padding(6),
             BackColor = Color.FromArgb(30, 30, 30)
         };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var rootBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
         rootBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        rootBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+        rootBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _root.Margin = new Padding(0, 4, 4, 4);
         _browse.Margin = new Padding(2, 3, 0, 3);
         rootBar.Controls.Add(_root, 0, 0);
         rootBar.Controls.Add(_browse, 1, 0);
 
         var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 2, Margin = Padding.Empty };
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 98));
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
 
@@ -315,11 +315,23 @@ public sealed class AnimationMatchingModeControl : UserControl
         actionBar.Controls.Add(stitchOptions, 0, 1);
         actionBar.SetColumnSpan(stitchOptions, 5);
 
+        var statusBar = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+            BackColor = Color.Transparent
+        };
+        statusBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        statusBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
+        statusBar.Controls.Add(_status, 0, 0);
+        statusBar.Controls.Add(_filter, 1, 0);
+
         layout.Controls.Add(rootBar, 0, 0);
         layout.Controls.Add(actionBar, 0, 1);
-        layout.Controls.Add(_status, 0, 2);
-        layout.Controls.Add(_filter, 0, 3);
-        layout.Controls.Add(_results, 0, 4);
+        layout.Controls.Add(statusBar, 0, 2);
+        layout.Controls.Add(_results, 0, 3);
         Controls.Add(layout);
 
         _browse.Click += (_, _) => BrowseRequested?.Invoke(this, EventArgs.Empty);
@@ -720,6 +732,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     {
         Text = text,
         Dock = DockStyle.Fill,
+        AutoSize = true,
         FlatStyle = FlatStyle.Flat,
         BackColor = Color.FromArgb(50, 50, 54),
         ForeColor = Color.WhiteSmoke,
