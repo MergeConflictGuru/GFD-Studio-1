@@ -17,6 +17,7 @@ namespace GFDLibrary.Animations
         private readonly Dictionary<string, Node> mTargetNodesByRole;
         private readonly Dictionary<Node, int> mTargetNodeIds;
         private readonly Node mTargetMotionRoot;
+        private readonly bool mSourceUsesUnrealNames;
         private Node mSyntheticRootNode;
         internal Model SourceModel { get; }
         internal Model TargetModel { get; }
@@ -30,6 +31,8 @@ namespace GFDLibrary.Animations
             mOriginalNodes = CreateNodeLookup( originalModel.Nodes );
             mTargetNodes = CreateNodeLookup( targetModel.Nodes );
             mTargetMotionRoot = AnimationSkeletonRoles.ResolveMotionRoot( targetModel );
+            mSourceUsesUnrealNames = mOriginalNodes.ContainsKey("pelvis") &&
+                                    mOriginalNodes.ContainsKey("spine_01");
             UsesDifferentHumanoidHierarchy =
                 (mOriginalNodes.ContainsKey("Bip01 Pelvis") && mTargetNodes.ContainsKey("Hips")) ||
                 (mOriginalNodes.ContainsKey("Hips") && mTargetNodes.ContainsKey("Bip01 Pelvis"));
@@ -128,6 +131,20 @@ namespace GFDLibrary.Animations
                 }
             }
 
+            // Unreal's root is the motion root. A separate gfd_axis_root is
+            // only the coordinate parent, even when the Persona model calls it root.
+            if ( mSourceUsesUnrealNames && sourceName.Equals("root", StringComparison.OrdinalIgnoreCase) )
+            {
+                targetNode = mTargetMotionRoot;
+                return targetNode != null;
+            }
+            if ( mSourceUsesUnrealNames && sourceName.Equals("gfd_axis_root", StringComparison.OrdinalIgnoreCase) )
+            {
+                if ( AnimationSkeletonRoles.GetRole(mTargetMotionRoot?.Name) != AnimationSkeletonRoles.MotionRootRole )
+                    return false;
+                return mTargetNodesByRole.TryGetValue(AnimationSkeletonRoles.RootRole, out targetNode);
+            }
+
             if ( mTargetNodes.TryGetValue( sourceName, out targetNode ) )
                 return true;
 
@@ -158,12 +175,37 @@ namespace GFDLibrary.Animations
             return lookup;
         }
 
+        private static readonly Dictionary<string, string> UnrealHumanoidRoles = CreateUnrealHumanoidRoles();
+
+        private static Dictionary<string, string> CreateUnrealHumanoidRoles()
+        {
+            var roles = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase )
+            {
+                ["pelvis"] = "hips", ["spine_01"] = "spine", ["spine_02"] = "spine1",
+                ["spine_03"] = "spine2", ["neck_01"] = "neck"
+            };
+            foreach ( var pair in new[] { ("l", "left"), ("r", "right") } )
+            {
+                foreach ( var limb in new[] { ("clavicle", "shoulder"), ("upperarm", "arm"),
+                           ("lowerarm", "forearm"), ("hand", "hand"), ("thigh", "upleg"),
+                           ("calf", "leg"), ("foot", "foot"), ("ball", "toe") } )
+                    roles[limb.Item1 + "_" + pair.Item1] = pair.Item2 + limb.Item2;
+                foreach ( var finger in new[] { "thumb", "index", "middle", "ring", "pinky" } )
+                    for ( var segment = 1; segment <= 3; ++segment )
+                        roles[$"{finger}_{segment:D2}_{pair.Item1}"] = pair.Item2 + finger + segment;
+            }
+            return roles;
+        }
+
         private static string GetSkeletonRole( string name )
         {
             if ( string.IsNullOrWhiteSpace( name ) )
                 return null;
 
             var normalized = name.Trim();
+            // Names emitted by our Unreal FBX option must map back on import.
+            if ( UnrealHumanoidRoles.TryGetValue( normalized, out var unrealRole ) )
+                return unrealRole;
             if ( normalized.Equals( "RootNode", StringComparison.OrdinalIgnoreCase ) )
                 return AnimationSkeletonRoles.FileRootRole;
             if ( normalized.Equals( "root", StringComparison.OrdinalIgnoreCase ) )
@@ -230,7 +272,8 @@ namespace GFDLibrary.Animations
                 return side + "leg";
             if ( sideName.Equals( "Foot", StringComparison.OrdinalIgnoreCase ) )
                 return side + "foot";
-            if ( sideName.Equals( "Toe0", StringComparison.OrdinalIgnoreCase ) ||
+            if ( sideName.Equals( "ToeBase", StringComparison.OrdinalIgnoreCase ) ||
+                 sideName.Equals( "Toe0", StringComparison.OrdinalIgnoreCase ) ||
                  sideName.Equals( "Toe2", StringComparison.OrdinalIgnoreCase ) )
                 return side + "toe";
 

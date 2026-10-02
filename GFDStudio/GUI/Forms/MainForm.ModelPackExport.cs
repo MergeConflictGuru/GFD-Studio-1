@@ -19,6 +19,7 @@ namespace GFDStudio.GUI.Forms
         private const uint IncludeAnimationsControlId = 0x4701;
         private const uint UnrealBoneNamesControlId = 0x4702;
         private const uint ExportAllAnimationsControlId = 0x4703;
+        private const uint CascadeurSkinControlId = 0x4704;
         private const int HResultCancelled = unchecked( (int)0x800704C7 );
 
         private const uint FileOpenOptionsOverwritePrompt = 0x00000002;
@@ -73,7 +74,7 @@ namespace GFDStudio.GUI.Forms
                         path,
                         selection.IncludeAnimations && animationPack != null,
                         animationPack,
-                        selection.UseUnrealBoneNames );
+                        selection.UseUnrealBoneNames, selection.BindDanceSkinToHumanoid );
 
                 case DaeSaveFilterIndex:
                 case ObjSaveFilterIndex:
@@ -141,6 +142,11 @@ namespace GFDStudio.GUI.Forms
                     "Export Unreal bone names (FBX)",
                     false );
 
+                customize.AddCheckButton(
+                    CascadeurSkinControlId,
+                    "Bind Dance skin to humanoid bones (Cascadeur FBX)",
+                    false );
+
                 var showResult = dialog.Show( Handle );
                 if ( showResult == HResultCancelled )
                     return null;
@@ -151,6 +157,7 @@ namespace GFDStudio.GUI.Forms
                 customize.GetCheckButtonState( IncludeAnimationsControlId, out var includeAnimations );
                 customize.GetCheckButtonState( ExportAllAnimationsControlId, out var exportAllAnimations );
                 customize.GetCheckButtonState( UnrealBoneNamesControlId, out var useUnrealBoneNames );
+                customize.GetCheckButtonState( CascadeurSkinControlId, out var bindDanceSkinToHumanoid );
                 dialog.GetResult( out resultItem );
                 resultItem.GetDisplayName( ShellItemDisplayNameFileSystemPath, out resultPathPointer );
                 var path = Marshal.PtrToStringUni( resultPathPointer );
@@ -163,7 +170,7 @@ namespace GFDStudio.GUI.Forms
                     ( includeAnimations && animationAvailable ) ||
                     ( exportAllAnimations && allAnimationsAvailable ),
                     useUnrealBoneNames,
-                    exportAllAnimations && allAnimationsAvailable );
+                    exportAllAnimations && allAnimationsAvailable, bindDanceSkinToHumanoid );
             }
             finally
             {
@@ -231,7 +238,7 @@ namespace GFDStudio.GUI.Forms
             string path,
             bool includeAnimations,
             AnimationPack animationPack,
-            bool useUnrealBoneNames )
+            bool useUnrealBoneNames, bool bindDanceSkinToHumanoid )
         {
             // Character Browser / showroom previews can be composed from separate
             // body, face and hair GMDs while the editor tree still points at the primary
@@ -258,10 +265,10 @@ namespace GFDStudio.GUI.Forms
             {
                 if ( includeAnimations && animationPack != null )
                     ModelPackExportHelper.ExportFile(
-                        modelPack, animationPack, path, useUnrealBoneNames );
+                        modelPack, animationPack, path, useUnrealBoneNames, bindDanceSkinToHumanoid );
                 else
                     ModelPackExportHelper.ExportFile(
-                        modelPack, path, useUnrealBoneNames );
+                        modelPack, path, useUnrealBoneNames, bindDanceSkinToHumanoid );
 
                 var suffix = includeAnimations && animationPack != null
                     ? " with animations baked at 30 fps"
@@ -377,13 +384,14 @@ namespace GFDStudio.GUI.Forms
                 uint filterIndex,
                 bool includeAnimations,
                 bool useUnrealBoneNames,
-                bool exportAllAnimations )
+                bool exportAllAnimations, bool bindDanceSkinToHumanoid )
             {
                 Path = path;
                 FilterIndex = filterIndex;
                 IncludeAnimations = includeAnimations;
                 UseUnrealBoneNames = useUnrealBoneNames;
                 ExportAllAnimations = exportAllAnimations;
+                BindDanceSkinToHumanoid = bindDanceSkinToHumanoid;
             }
 
             public string Path { get; }
@@ -391,6 +399,7 @@ namespace GFDStudio.GUI.Forms
             public bool IncludeAnimations { get; }
             public bool UseUnrealBoneNames { get; }
             public bool ExportAllAnimations { get; }
+            public bool BindDanceSkinToHumanoid { get; }
         }
 
         [StructLayout( LayoutKind.Sequential, CharSet = CharSet.Unicode )]

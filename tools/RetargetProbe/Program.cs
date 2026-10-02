@@ -5,13 +5,66 @@ using GFDLibrary.Models;
 using System.Runtime.Loader;
 
 AssemblyLoadContext.Default.Resolving += (_, name) => {
-    var path = Path.GetFullPath(Path.Combine("GFDStudio-binary", name.Name + ".dll"));
+    var besideExecutable = Path.Combine(AppContext.BaseDirectory, name.Name + ".dll");
+    var path = File.Exists(besideExecutable) ? besideExecutable : Path.GetFullPath(Path.Combine("GFDStudio-binary", name.Name + ".dll"));
     return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
 };
 var stdout = Console.Out;
 try
 {
 Console.SetOut(TextWriter.Null);
+if (args.Length == 3 && args[0] == "--cascadeur-job")
+{
+    Environment.ExitCode = CascadeurTransition.Run(args[1], args[2]);
+    Console.SetOut(stdout); Console.WriteLine("Cascadeur job " + args[1] + " finished");
+    return;
+}
+if (args.Contains("--cascadeur-export"))
+{
+    string option(string key) => args.First(a => a.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase))[(key.Length + 1)..];
+    var model = Resource.Load<ModelPack>(option("--model"));
+    var input = Resource.Load<AnimationPack>(option("--animation"));
+    var clip = int.Parse(option("--clip"));
+    var output = Path.GetFullPath(option("--output"));
+    Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+    var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(AppContext.BaseDirectory, "GFDLibrary.Conversion.FbxSdk.dll"));
+    var configType = assembly.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkModelPackExporterConfig")!;
+    var config = Activator.CreateInstance(configType)!;
+    configType.GetProperty("UseUnrealBoneNames")!.SetValue(config, true);
+    configType.GetProperty("BindDanceSkinToHumanoid")!.SetValue(config, !args.Contains("--keep-helper-skin"));
+    var mapper = assembly.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkBoneNameMapper")!;
+    var exportName = mapper.GetMethod("GetExportName")!;
+    foreach (var node in model.Model.Nodes)
+    {
+        var role = AnimationSkeletonRoles.GetRole(node.Name);
+        var renamed = (string)exportName.Invoke(null, new object[] { model.Model, node, true })!;
+        if (role != null && role != AnimationSkeletonRoles.MotionRootRole && role != AnimationSkeletonRoles.RootRole &&
+            AnimationSkeletonRoles.GetRole(renamed) != role)
+            throw new Exception($"Bone name round trip failed: {node.Name} -> {renamed}");
+    }
+    assembly.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkModelPackExporter")!.GetMethod("ExportFile")!
+        .Invoke(null, new object[] { model, output, config });
+    var selected = new AnimationPack(input.Version);
+    selected.Animations.Add(input.Animations[clip]);
+    assembly.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkAnimationExporter")!.GetMethods().Single(m => m.Name == "AppendFile" && m.GetParameters().Length == 4)
+        .Invoke(null, new object[] { model.Model, selected, output, config });
+    var renamedModel = Resource.Load<ModelPack>(option("--model"));
+    var nodePairs = renamedModel.Model.Nodes.Select(n => (Node: n, Original: n.Name)).ToArray();
+    foreach (var pair in nodePairs)
+        pair.Node.Name = (string)exportName.Invoke(null, new object[] { model.Model, pair.Node, true })!;
+    var mapType = typeof(AnimationSkeletonRoles).Assembly.GetType("GFDLibrary.Animations.AnimationRetargetMap")!;
+    var map = mapType.GetMethod("Create")!.Invoke(null, new object[] { renamedModel.Model, model.Model });
+    foreach (var pair in nodePairs)
+    {
+        var call = new object?[] { pair.Node.Name, null, null };
+        var found = (bool)mapType.GetMethod("TryGetTarget")!.Invoke(map, call)!;
+        if (!found || ((Node)call[2]!).Name != pair.Original)
+            throw new Exception($"Persona bone import failed: {pair.Original} -> {pair.Node.Name} -> {((Node?)call[2])?.Name}");
+    }
+    Console.SetOut(stdout);
+    Console.WriteLine($"Exported {output}, clip {clip}, duration {selected.Animations[0].Duration}, humanoid skin={!args.Contains("--keep-helper-skin")}; bone names round trip passed");
+    return;
+}
 var otherCharacter = args.Contains("--other");
 var useLocalBindSpace = !args.Contains("--world-space", StringComparer.OrdinalIgnoreCase);
 var sourceOption = args.FirstOrDefault(a => a.StartsWith("--source=", StringComparison.OrdinalIgnoreCase));
