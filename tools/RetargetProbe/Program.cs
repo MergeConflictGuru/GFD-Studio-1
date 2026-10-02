@@ -4,6 +4,11 @@ using GFDLibrary.Animations;
 using GFDLibrary.Models;
 using System.Runtime.Loader;
 
+internal static class Program
+{
+    [STAThread]
+    private static void Main(string[] args)
+    {
 AssemblyLoadContext.Default.Resolving += (_, name) => {
     var besideExecutable = Path.Combine(AppContext.BaseDirectory, name.Name + ".dll");
     var path = File.Exists(besideExecutable) ? besideExecutable : Path.GetFullPath(Path.Combine("GFDStudio-binary", name.Name + ".dll"));
@@ -13,6 +18,16 @@ var stdout = Console.Out;
 try
 {
 Console.SetOut(TextWriter.Null);
+if (args.Length == 2 && args[0] == "--ai-host-audit")
+{
+    Environment.ExitCode = BlendAudit.Host(args[1]);
+    return;
+}
+if (args.Length == 2 && args[0] == "--blend-audit")
+{
+    Environment.ExitCode = BlendAudit.Run(args[1]);
+    return;
+}
 if (args.Contains("--animatch-audit"))
 {
     Environment.ExitCode = AnimationMatchAudit.Run(args, stdout);
@@ -532,4 +547,7 @@ catch (Exception exception)
     Console.SetOut(stdout);
     Console.Error.WriteLine("Retarget probe failed: " + exception);
     Environment.ExitCode = 1;
+}
+
+    }
 }

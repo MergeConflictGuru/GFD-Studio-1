@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Runtime.Loader;
@@ -35,6 +35,8 @@ internal static class CascadeurTransition
         public Placement Placement { get; set; } = new();
         public string Motion { get; set; } = "Acrobatic";
         public string Output { get; set; } = "output";
+        public int PoseCount { get; set; } = 12;
+        public int SampleStep { get; set; } = 8;
     }
     public sealed class Bone
     {
@@ -109,6 +111,8 @@ internal static class CascadeurTransition
     static Animation Load(Clip clip, string directory)
     {
         var pack=Resource.Load<AnimationPack>(Resolve(clip.Pack,directory));
+        if (clip.Index == -2) clip.Index = 0;
+        if (clip.Index == -1) clip.Index = Enumerable.Range(0,pack.Animations.Count).MaxBy(i=>pack.Animations[i].Duration);
         if (clip.Index<0 || clip.Index>=pack.Animations.Count) throw new ArgumentException("Clip index outside pack");
         var source=pack.Animations[clip.Index];
         var animation=new Animation(pack.Version){Duration=source.Duration};
@@ -119,7 +123,7 @@ internal static class CascadeurTransition
             if(clip.Index>=extra.Animations.Count) throw new ArgumentException("Layer pack has no requested clip");
             var layer=extra.Animations[clip.Index];
             if(Math.Abs(layer.Duration-source.Duration)>.001f) throw new ArgumentException("Layer duration differs from body clip");
-            animation.Controllers.AddRange(layer.Controllers);
+            SplitCharacterAnimationComposer.AddComponentTracks(animation,layer);
         }
         var last=(int)Math.Round(animation.Duration*30);
         clip.EndFrame??=last;
@@ -163,6 +167,83 @@ internal static class CascadeurTransition
         var nodes=model.Model.Nodes.ToArray();
         var bind=AnimationPoseEvaluator.Evaluate(model.Model,null,0);
         var manifestFile=Path.Combine(directory,"manifest.json");
+        if(mode=="select-poses")
+        {
+            var allClips=job.ClipA.Index == -2;
+            var animation=Load(job.ClipA,jobDirectory);
+            var sourcePack=Resource.Load<AnimationPack>(Resolve(job.ClipA.Pack,jobDirectory));
+            var clipIndices=allClips ? Enumerable.Range(0,sourcePack.Animations.Count).ToArray() : new[]{job.ClipA.Index};
+            var animations=clipIndices.ToDictionary(i=>i,i=>Load(new Clip {Pack=job.ClipA.Pack,Index=i,Layers=job.ClipA.Layers},jobDirectory));
+            var samples=clipIndices.SelectMany(i=>Enumerable.Range(0,(int)Math.Round(animations[i].Duration*30)+1)
+                .Where(f=>f%Math.Max(1,job.SampleStep)==0).Select(f=>(clip:i,frame:f))).ToArray();
+            var root=AnimationSkeletonRoles.ResolveMotionRoot(model.Model);
+            var body=nodes.Where(n=>AnimationSkeletonRoles.GetRole(n.Name) is string role
+                && !role.Contains("hair") && !role.Contains("root") && !role.Contains("finger")
+                && !role.Contains("thumb")).ToArray();
+            var height=MathF.Max(1,nodes.Max(n=>bind[n].Translation.Y)-nodes.Min(n=>bind[n].Translation.Y));
+            var frames=samples.Select(sample=>sample.frame).ToArray();
+            var descriptors=new List<float[]>();
+            foreach(var sample in samples)
+            {
+                var frame=sample.frame;
+                var sampledAnimation=animations[sample.clip];
+                var pose=AnimationPoseEvaluator.Evaluate(model.Model,sampledAnimation,frame/30f);
+                var previous=AnimationPoseEvaluator.Evaluate(model.Model,sampledAnimation,Math.Max(0,frame-3)/30f);
+                var invYaw=Matrix4x4.CreateRotationY(-Heading(pose[root]));
+                var values=new List<float>{pose[root].Translation.Y/height};
+                foreach(var bone in body)
+                {
+                    var position=Vector3.TransformNormal(pose[bone].Translation-pose[root].Translation,invYaw)/height;
+                    var velocity=Vector3.TransformNormal(pose[bone].Translation-previous[bone].Translation,invYaw)/height;
+                    var direction=Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitZ,pose[bone]*invYaw));
+                    values.AddRange(new[]{position.X,position.Y,position.Z,velocity.X*2,velocity.Y*2,velocity.Z*2,
+                        direction.X*.15f,direction.Y*.15f,direction.Z*.15f});
+                }
+                descriptors.Add(values.ToArray());
+            }
+            float Distance(int a,int b) => descriptors[a].Zip(descriptors[b],(x,y)=>(x-y)*(x-y)).Sum();
+            var selected=new List<int>{0};
+            var distances=Enumerable.Range(0,frames.Length).Select(i=>Distance(i,0)).ToArray();
+            while(selected.Count<Math.Min(job.PoseCount,frames.Length))
+            {
+                var best=Enumerable.Range(0,frames.Length).Where(i=>!selected.Contains(i)).MaxBy(i=>distances[i]);
+                selected.Add(best);
+                for(var i=0;i<frames.Length;++i) distances[i]=Math.Min(distances[i],Distance(i,best));
+            }
+            selected=selected.OrderBy(i=>frames[i]).ToList();
+            var mapping=Enumerable.Range(0,frames.Length).Select(i=>new {sourceClip=samples[i].clip,frame=frames[i],clip=Enumerable.Range(0,selected.Count).MinBy(j=>Distance(i,selected[j]))}).ToArray();
+            Write(Path.Combine(directory,"poses.json"),new {fps=30,frameCount=allClips ? animations.Values.Sum(a=>(int)Math.Round(a.Duration*30)+1) : job.ClipA.EndFrame.Value+1,
+                danceClip=allClips ? -2 : job.ClipA.Index,sourceClips=clipIndices.Select(i=>new {index=i,frameCount=(int)Math.Round(animations[i].Duration*30)+1}),
+                selectedSamples=selected.Select(i=>new {sourceClip=samples[i].clip,frame=frames[i]}),
+                sampleStep=job.SampleStep,selectedFrames=selected.Select(i=>frames[i]),mapping,
+                descriptors=selected.Select(i=>descriptors[i]),descriptorBones=body.Select(n=>n.Name)});
+            return 0;
+        }
+        if(mode=="pack-transitions")
+        {
+            var poses=JsonSerializer.Deserialize<JsonElement>(File.ReadAllText(Path.Combine(directory,"poses.json")));
+            var frames=poses.GetProperty("selectedFrames").EnumerateArray().Select(f=>f.GetInt32()).ToArray();
+            var output=new AnimationPack(model.Version);
+            foreach(var frame in frames)
+            {
+                var index=output.Animations.Count;
+                var prefix=poses.TryGetProperty("selectedSamples",out var selectedSamples) ?
+                    "c"+selectedSamples[index].GetProperty("sourceClip").GetInt32().ToString("D2")+"_" : "";
+                var pack=Resource.Load<AnimationPack>(Path.Combine(directory,prefix+"f"+frame.ToString("D5"),"between.GAP"));
+                output.Animations.Add(pack.Animations[0]);
+            }
+            output.Save(Path.Combine(directory,"dance_to_ko3.GAP"));
+            var readback=Resource.Load<AnimationPack>(Path.Combine(directory,"dance_to_ko3.GAP"));
+            for (var i=0;i<readback.Animations.Count;++i)
+            {
+                var animation=readback.Animations[i];
+                PoseRender.Draw(model.Model,AnimationPoseEvaluator.Evaluate(model.Model,animation,0),
+                    model.Model,AnimationPoseEvaluator.Evaluate(model.Model,animation,animation.Duration*.5f),
+                    Path.Combine(directory,$"transition_{i:D2}_start_middle.png"),
+                    $"Dance frame {frames[i]} to KO 3: boundary / generated AI middle (GAP readback)");
+            }
+            return 0;
+        }
         if(mode=="fix-knees")
         {
             var pack=Resource.Load<AnimationPack>(Resolve(job.ClipA.Pack,jobDirectory));

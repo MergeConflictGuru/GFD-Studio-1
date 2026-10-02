@@ -464,7 +464,7 @@ namespace GFDStudio.GUI.Forms
             var extension = Path.GetExtension(selectedPath);
             var sourcePath = Path.Combine(directory, stem + "_source" + extension);
             var candidatePath = Path.Combine(directory, stem + "_candidate" + extension);
-            if (File.Exists(sourcePath) || File.Exists(candidatePath))
+            if (clip is not AiBlendAnimationClip && (File.Exists(sourcePath) || File.Exists(candidatePath)))
             {
                 var overwrite = MessageBox.Show(
                     this,
@@ -480,6 +480,12 @@ namespace GFDStudio.GUI.Forms
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
+                if (previewClip is AiBlendAnimationClip ai)
+                {
+                    // Three clips: source, AI middle and candidate, sharing boundary poses.
+                    ai.Pieces.Save(selectedPath);
+                    return;
+                }
                 if (previewClip is not StitchedAnimation stitched)
                     throw new InvalidOperationException("The selected animation is not a stitched clip.");
 

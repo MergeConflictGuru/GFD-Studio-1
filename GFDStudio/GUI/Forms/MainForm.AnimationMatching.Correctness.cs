@@ -170,7 +170,8 @@ namespace GFDStudio.GUI.Forms
                     modelLoader,
                     animationLoader,
                     previewModelLoader,
-                    AnimationMatchingFramesPerSecond));
+                    AnimationMatchingFramesPerSecond)
+                { SourcePackPath = capturedPackPath, SourceClipIndex = capturedIndex });
             }
 
             if (skippedWithoutSourceModel > 0)

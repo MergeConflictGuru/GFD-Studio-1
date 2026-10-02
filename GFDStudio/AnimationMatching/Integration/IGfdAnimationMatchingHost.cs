@@ -10,6 +10,7 @@ namespace GFDStudio.AnimationMatching.Integration;
 /// </summary>
 public interface IGfdAnimationMatchingHost
 {
+    Task<IAnimationClip> GenerateAiBlendAsync(Stitching.StitchedAnimation clip, float seconds, string styleHint, CancellationToken cancellationToken);
     IAnimationClip? CurrentAnimation { get; }
     IReadOnlyList<IAnimationClip> SearchableAnimations { get; }
 

@@ -156,16 +156,19 @@ public sealed class AnimationMatchingModeControl : UserControl
         BackColor = Color.Transparent,
         Anchor = AnchorStyles.Left
     };
-    private readonly CheckBox _blend = new()
+    private readonly RadioButton _simpleBlend = new()
     {
-        Text = "Blend",
+        Text = "Simple blend",
         Checked = true,
         AutoSize = true,
         ForeColor = Color.Gainsboro,
         BackColor = Color.Transparent,
         Anchor = AnchorStyles.Left
     };
-    private readonly NumericUpDown _blendMs = new()
+    private readonly RadioButton _noBlend = new() { Text = "No blend", AutoSize = true, ForeColor = Color.Gainsboro };
+    private readonly RadioButton _aiBlend = new() { Text = "AI blend", AutoSize = true, ForeColor = Color.Gainsboro };
+    private readonly TextBox _styleHint = new() { PlaceholderText = "Style hint (optional)", Width = 230, BackColor = Color.FromArgb(45,45,48), ForeColor = Color.Gainsboro };
+    private readonly NumericUpDown _blendDurationMs = new()
     {
         Minimum = 0,
         Maximum = 2000,
@@ -257,7 +260,7 @@ public sealed class AnimationMatchingModeControl : UserControl
             BackColor = Color.FromArgb(30, 30, 30)
         };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -269,7 +272,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         rootBar.Controls.Add(_root, 0, 0);
         rootBar.Controls.Add(_browse, 1, 0);
 
-        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 2, Margin = Padding.Empty };
+        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 3, Margin = Padding.Empty };
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -277,6 +280,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
 
         var stitchOptions = new FlowLayoutPanel
         {
@@ -297,8 +301,8 @@ public sealed class AnimationMatchingModeControl : UserControl
         _back.Margin = new Padding(0, 3, 2, 3);
         _source.Margin = new Padding(5, 0, 4, 0);
         _alignPositionAndYaw.Margin = new Padding(2, 0, 0, 0);
-        _blend.Margin = new Padding(2, 0, 0, 0);
-        _blendMs.Margin = new Padding(2, 5, 1, 3);
+        _simpleBlend.Margin = new Padding(2, 0, 0, 0);
+        _blendDurationMs.Margin = new Padding(2, 5, 1, 3);
         _reindex.Margin = new Padding(2, 3, 2, 3);
         _export.Margin = new Padding(2, 3, 0, 3);
         _exportParts.Margin = new Padding(2, 3, 0, 3);
@@ -309,11 +313,17 @@ public sealed class AnimationMatchingModeControl : UserControl
         actionBar.Controls.Add(_export, 3, 0);
         actionBar.Controls.Add(_exportParts, 4, 0);
         stitchOptions.Controls.Add(_alignPositionAndYaw);
-        stitchOptions.Controls.Add(_blend);
-        stitchOptions.Controls.Add(_blendMs);
+        stitchOptions.Controls.Add(_noBlend);
+        stitchOptions.Controls.Add(_simpleBlend);
+        stitchOptions.Controls.Add(_aiBlend);
+        stitchOptions.Controls.Add(_blendDurationMs);
         stitchOptions.Controls.Add(ms);
         actionBar.Controls.Add(stitchOptions, 0, 1);
         actionBar.SetColumnSpan(stitchOptions, 5);
+        actionBar.Controls.Add(_styleHint, 0, 2);
+        actionBar.SetColumnSpan(_styleHint, 5);
+        _styleHint.Enabled = false;
+        _aiBlend.Enabled = GFDStudio.GUI.Forms.MainForm.FindCascadeurDirectory() != null;
 
         var statusBar = new TableLayoutPanel
         {
@@ -342,14 +352,20 @@ public sealed class AnimationMatchingModeControl : UserControl
         _results.Scroll += (_, _) => MaybeRequestMoreResults();
         _filter.TextChanged += (_, _) => ApplyResultFilter();
         _alignPositionAndYaw.CheckedChanged += (_, _) => ReactivateSelected();
-        _blend.CheckedChanged += (_, _) => ReactivateSelected();
-        _blendMs.ValueChanged += (_, _) => ReactivateSelected();
+        _simpleBlend.CheckedChanged += (_, _) => { if (_simpleBlend.Checked) ReactivateSelected(); };
+        _noBlend.CheckedChanged += (_, _) => { if (_noBlend.Checked) ReactivateSelected(); };
+        _aiBlend.CheckedChanged += (_, _) => { _styleHint.Enabled = _aiBlend.Checked; if (_aiBlend.Checked) ReactivateSelected(); };
+        _styleHint.Leave += (_, _) => { if (_aiBlend.Checked) ReactivateSelected(); };
+        _styleHint.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; ReactivateSelected(); } };
+        _blendDurationMs.ValueChanged += (_, _) => ReactivateSelected();
     }
 
     public (int start, int end)? Selection => _selection;
     public bool AlignPositionAndYaw => _alignPositionAndYaw.Checked;
-    public bool BlendingEnabled => _blend.Checked;
-    public float BlendSeconds => (float)_blendMs.Value / 1000f;
+    public bool BlendingEnabled => !_noBlend.Checked;
+    public bool AiBlendEnabled => _aiBlend.Checked;
+    public string StyleHint => _styleHint.Text.Trim();
+    public float BlendSeconds => (float)_blendDurationMs.Value / 1000f;
 
     public event EventHandler? BrowseRequested;
     public event EventHandler? BackRequested;

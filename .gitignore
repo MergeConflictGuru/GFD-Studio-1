@@ -37,3 +37,4 @@ AtlusGfdLibTesting/
 /GFDStudio-binary/
 .dotnet-cli-home
 artifacts/
+*.py?

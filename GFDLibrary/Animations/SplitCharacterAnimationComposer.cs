@@ -33,7 +33,15 @@ namespace GFDLibrary.Animations
                 {
                     if (controller.TargetKind == TargetKind.Node &&
                         bodyTargets.Contains(controller.TargetName))
-                        continue;
+                    {
+                        // Converted body clips may contain bind-pose cosmetic tracks.
+                        // The separate costume/hair component owns that branch; shared
+                        // semantic roots and body joints still come from the body.
+                        if (!string.IsNullOrWhiteSpace(AnimationSkeletonRoles.GetRole(controller.TargetName)))
+                            continue;
+                        body.Controllers.RemoveAll(c => c.TargetKind == TargetKind.Node &&
+                            string.Equals(c.TargetName,controller.TargetName,StringComparison.OrdinalIgnoreCase));
+                    }
 
                     body.Controllers.Add(controller);
                 }

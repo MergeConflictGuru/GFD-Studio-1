@@ -68,6 +68,8 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
         FramesPerSecond = MathF.Max(1f, framesPerSecond);
     }
 
+    public string SourcePackPath { get; set; }
+    public int SourceClipIndex { get; set; }
     public string Id { get; }
     public string DisplayName { get; }
     public Model SourceModel => EnsureModelContext().model;
@@ -136,7 +138,45 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
             animation.Retarget(sourceModel, targetModel, false,
                 MainForm.settings.UseLocalBindSpaceRetargeting);
 
+        ComposeCostumeAccessoryTracks(animation, targetModel);
         return new GfdTargetAnimationClip(Id, DisplayName, targetModel, animation, FramesPerSecond, targetSkeleton);
+    }
+
+    private void ComposeCostumeAccessoryTracks(Animation animation, Model model)
+    {
+        if (string.IsNullOrWhiteSpace(SourcePackPath)) return;
+        var directory = Path.GetDirectoryName(SourcePackPath);
+        var stem = Path.GetFileNameWithoutExtension(SourcePackPath);
+        if (!Directory.Exists(directory)) return;
+        var missing = model.Nodes.Where(n =>
+            string.IsNullOrWhiteSpace(AnimationSkeletonRoles.GetRole(n.Name)))
+            .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
+        if (missing.Count == 0) return;
+        // A corpus clip may have been resolved with a different costume's source
+        // model. Its canonical matching pose is still usable, but the displayed
+        // costume needs its own accessory curves. Costume curves also replace
+        // bind-pose accessory tracks left by a body bake. Semantic body roots
+        // and limb tracks remain owned by the body animation.
+        var candidates = Directory.EnumerateFiles(directory, stem + "_*.GAP")
+            .Where(file => System.Text.RegularExpressions.Regex.IsMatch(
+                Path.GetFileNameWithoutExtension(file), "^" +
+                System.Text.RegularExpressions.Regex.Escape(stem) + @"_\d+$"))
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase);
+        foreach (var file in candidates)
+        {
+            var pack = GFDLibrary.Resource.Load<AnimationPack>(file);
+            if ((uint)SourceClipIndex >= (uint)pack.Animations.Count) continue;
+            var component = pack.Animations[SourceClipIndex];
+            if (Math.Abs(component.Duration - animation.Duration) > 1f / FramesPerSecond) continue;
+            foreach (var controller in component.Controllers)
+                if (controller.TargetKind == TargetKind.Node && missing.Remove(controller.TargetName))
+                {
+                    animation.Controllers.RemoveAll(c => c.TargetKind == TargetKind.Node && c.TargetName == controller.TargetName);
+                    animation.Controllers.Add(controller);
+                }
+            if (missing.Count == 0) break;
+        }
+        animation.FixTargetIds(model);
     }
 
     /// <summary>Drops decoded GAP data while retaining the source skeleton and duration.</summary>

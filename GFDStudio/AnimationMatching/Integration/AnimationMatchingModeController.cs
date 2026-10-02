@@ -24,7 +24,9 @@ public sealed class AnimationMatchingModeController : IDisposable
     private AnimationSearchDatabase? _database;
     private string? _databaseContextSignature;
     private IAnimationClip? _sourceForResults;
-    private StitchedAnimation? _stitched;
+    private IAnimationClip? _stitched;
+    private CancellationTokenSource? _blendWork;
+    private int _blendGeneration;
     private CancellationTokenSource? _work;
     private Task? _cachePreload;
     private readonly SemaphoreSlim _thumbnailGate = new(1, 1);
@@ -235,6 +237,8 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private void ResetResultStream()
     {
+        ++_blendGeneration;
+        _blendWork?.Cancel();
         _matcher = null;
         _searchSource = null;
         _searchRangeStart = null;
@@ -353,20 +357,32 @@ public sealed class AnimationMatchingModeController : IDisposable
         finally { _view.SetBusy(false); }
     }
 
-    private void OnCandidateActivated(object? sender, AnimationMatchResult result)
+    private async void OnCandidateActivated(object? sender, AnimationMatchResult result)
     {
         var source = _sourceForResults ?? CurrentSource;
         if (source is null) return;
-        var blend = _view.BlendingEnabled ? _view.BlendSeconds : 0f;
-        _stitched = new StitchedAnimation(
-            source,
-            result.SourceFrame,
-            result.Candidate,
-            result.CandidateFrame,
-            blend,
+        var generation = ++_blendGeneration;
+        _blendWork?.Cancel();
+        _blendWork = new CancellationTokenSource();
+        var token = _blendWork.Token;
+        var ai = _view.AiBlendEnabled;
+        var seconds = _view.BlendSeconds;
+        var stitched = new StitchedAnimation(source, result.SourceFrame, result.Candidate,
+            result.CandidateFrame, !ai && _view.BlendingEnabled ? seconds : 0f,
             _view.AlignPositionAndYaw);
-        _view.SetCombinedTimeline(_stitched.FrameCount, result.SourceFrame);
-        _host.PreviewAnimation(_stitched, result.SourceFrame);
+        _stitched = ai ? null : stitched;
+        if (!ai) { _host.PreviewAnimation(stitched, result.SourceFrame); return; }
+        _view.SetStatus("Generating AI blend in Cascadeur…");
+        try
+        {
+            var generated = await _host.GenerateAiBlendAsync(stitched, seconds, _view.StyleHint, token);
+            if (generation != _blendGeneration || token.IsCancellationRequested) return;
+            _stitched = generated;
+            _view.SetCombinedTimeline(generated.FrameCount, result.SourceFrame);
+            _host.PreviewAnimation(generated, result.SourceFrame);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (generation == _blendGeneration) _view.SetStatus("AI blend: " + ex.Message); }
     }
 
     private async void OnCandidateOpened(object? sender, AnimationMatchResult result)
@@ -465,6 +481,7 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     public void Dispose()
     {
+        _blendWork?.Cancel();
         _work?.Cancel();
         _work?.Dispose();
         _view.SearchRequested -= OnSearchRequested;

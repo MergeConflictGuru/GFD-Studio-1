@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <Compile Include="$(IntermediateOutputPath)Generated\CommitNumber.g.cs" />
+    <None Include="..\tools\CascadeurBridge\*.py" Link="app_data\cascadeur\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
 
     <None Update="app_data\icons\folder.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
