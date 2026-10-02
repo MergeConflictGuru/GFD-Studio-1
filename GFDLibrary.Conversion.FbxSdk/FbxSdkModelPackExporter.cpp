@@ -503,20 +503,43 @@ namespace GFDLibrary::Conversion::FbxSdk
 		fbxSkin->SetSkinningType(FbxSkin::EType::eLinear);
 		fbxMesh->AddDeformer(fbxSkin);
 
-		if (mesh->VertexWeights)
-		{
-			for (int i = 0; i < mesh->VertexWeights->Length; ++i)
-			{
-				auto vWeights = mesh->VertexWeights[i];
-				for (int j = 0; j < vWeights.Weights->Length; ++j)
-				{
-					auto weight = vWeights.Weights[j];
-					if (weight < 0.001) continue;
-
-					auto boneIndex = vWeights.Indices[j];
-					auto bone = mModel->Bones[boneIndex];
-					auto nodeIndex = bone->NodeIndex;
-
+        if (mesh->VertexWeights)
+        {
+            auto skinNodes = gcnew array<int>(mModelNodes->Count);
+            for (int nodeIndex = 0; nodeIndex < mModelNodes->Count; ++nodeIndex)
+            {
+                skinNodes[nodeIndex] = nodeIndex;
+                if (mConfig == nullptr || !mConfig->BindDanceSkinToHumanoid) continue;
+                auto role = FbxSdkBoneNameMapper::GetDanceSkinDriverRole(mModelNodes[nodeIndex]->Name);
+                if (role == nullptr) continue;
+                for (int candidate = 0; candidate < mModelNodes->Count; ++candidate)
+                {
+                    if (String::Equals(AnimationSkeletonRoles::GetRole(mModelNodes[candidate]->Name),
+                                       role, StringComparison::OrdinalIgnoreCase))
+                    {
+                        skinNodes[nodeIndex] = candidate;
+                        break;
+                    }
+                }
+            }
+            for (int i = 0; i < mesh->VertexWeights->Length; ++i)
+            {
+                auto vWeights = mesh->VertexWeights[i];
+                auto nodeWeights = gcnew Dictionary<int, float>();
+                for (int j = 0; j < vWeights.Weights->Length; ++j)
+                {
+                    auto weight = vWeights.Weights[j];
+                    if (weight < 0.001) continue;
+                    auto nodeIndex = skinNodes[mModel->Bones[vWeights.Indices[j]]->NodeIndex];
+                    // Several helper influences can become one humanoid influence.
+                    float accumulated;
+                    nodeWeights->TryGetValue(nodeIndex, accumulated);
+                    nodeWeights[nodeIndex] = accumulated + weight;
+                }
+                for each (auto influence in nodeWeights)
+                {
+                    auto nodeIndex = influence.Key;
+                    auto weight = influence.Value;
 					IntPtr fClusterPtr;
 					FbxCluster* fbxCluster;
 					if (!mNodeIndexToFbxClusterLookup->TryGetValue(nodeIndex, fClusterPtr))
@@ -540,9 +563,9 @@ namespace GFDLibrary::Conversion::FbxSdk
 					}
 
 					fbxCluster->AddControlPointIndex(i, weight);
-				}
-			}
-		}
+                }
+            }
+        }
 		else if (mModel->Bones != nullptr && mModel->Bones->Count > 0)
 		{
 			// If this is an animated model, the mesh will be parented to the root in the scene

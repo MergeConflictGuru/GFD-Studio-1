@@ -80,10 +80,24 @@ namespace GFDLibrary.Animations
                     {
                         var angle = Flexion(Local(leg, AnimationPoseEvaluator.Evaluate(target, animation, time)));
                         var upper = Array.FindIndex(samples, s => s.angle >= angle);
-                        if (upper < 0) upper = samples.Length - 1;
                         var lower = Math.Max(0, upper - 1);
+                        if (upper < 0)
+                        {
+                            upper = samples.Length - 1;
+                            lower = upper - 1;
+                            while(lower > 0 && samples[upper].angle-samples[lower].angle < MathF.PI/18) --lower;
+                        }
+                        else if (upper == 0)
+                        {
+                            lower = 0;
+                            upper = 1;
+                            while(upper < samples.Length-1 && samples[upper].angle-samples[lower].angle < MathF.PI/18) ++upper;
+                        }
+                        // KO poses can fold further than the calibration dance.
+                        // Continue the end trend across at least ten degrees,
+                        // instead of freezing boot helpers at the last sample.
                         var span = samples[upper].angle - samples[lower].angle;
-                        var amount = span > 0 ? Math.Clamp((angle - samples[lower].angle) / span, 0, 1) : 0;
+                        var amount = span > 0 ? (Math.Clamp(angle,-MathF.PI,MathF.PI)-samples[lower].angle)/span : 0;
                         for (var i = 0; i < helpers.Length; i++)
                         {
                             Matrix4x4.Decompose(samples[lower].locals[i], out var s0, out var r0, out var p0);

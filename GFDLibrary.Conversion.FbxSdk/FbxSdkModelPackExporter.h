@@ -20,9 +20,11 @@ namespace GFDLibrary::Conversion::FbxSdk
 		inline FbxSdkModelPackExporterConfig()
 		{
 			UseUnrealBoneNames = false;
+			BindDanceSkinToHumanoid = false;
 		}
 
 		property bool UseUnrealBoneNames;
+		property bool BindDanceSkinToHumanoid;
 	};
 
 	public ref class FbxSdkModelPackExporterException : public Exception

@@ -9,7 +9,7 @@ namespace GFDStudio.FormatModules
 {
     public static class ModelPackExportHelper
     {
-        public static void ExportFile( ModelPack modelPack, string path, bool useUnrealBoneNames = false )
+        public static void ExportFile( ModelPack modelPack, string path, bool useUnrealBoneNames = false, bool bindDanceSkinToHumanoid = false )
         {
             var ext = Path.GetExtension( path );
             if ( ext.Equals( ".fbx", StringComparison.OrdinalIgnoreCase ) )
@@ -20,7 +20,7 @@ namespace GFDStudio.FormatModules
                 FbxSdkModelPackExporter.ExportFile(
                     modelPack,
                     path,
-                    new FbxSdkModelPackExporterConfig { UseUnrealBoneNames = useUnrealBoneNames } );
+                    new FbxSdkModelPackExporterConfig { UseUnrealBoneNames = useUnrealBoneNames, BindDanceSkinToHumanoid = bindDanceSkinToHumanoid } );
             }
             else
             {
@@ -32,7 +32,7 @@ namespace GFDStudio.FormatModules
             ModelPack modelPack,
             AnimationPack animationPack,
             string path,
-            bool useUnrealBoneNames = false )
+            bool useUnrealBoneNames = false, bool bindDanceSkinToHumanoid = false )
         {
             if ( modelPack == null )
                 throw new ArgumentNullException( nameof( modelPack ) );
@@ -45,7 +45,8 @@ namespace GFDStudio.FormatModules
 
             var config = new FbxSdkModelPackExporterConfig
             {
-                UseUnrealBoneNames = useUnrealBoneNames
+                UseUnrealBoneNames = useUnrealBoneNames,
+                BindDanceSkinToHumanoid = bindDanceSkinToHumanoid
             };
             FbxSdkModelPackExporter.ExportFile( modelPack, path, config );
             FbxSdkAnimationExporter.AppendFile( modelPack.Model, animationPack, path, config );

@@ -74,6 +74,29 @@ namespace GFDLibrary::Conversion::FbxSdk
             return finger != nullptr ? finger : node->Name;
         }
 
+        // Cascadeur drives the humanoid joints, not Persona's deformation helpers.
+        // Only used for optional skin binding; helper nodes and animation tracks stay.
+        static String^ GetDanceSkinDriverRole(String^ name)
+        {
+            if (String::IsNullOrEmpty(name) || name->Length < 3)
+                return nullptr;
+            String^ side = nullptr;
+            if (name->StartsWith("L_", StringComparison::OrdinalIgnoreCase)) side = "left";
+            if (name->StartsWith("R_", StringComparison::OrdinalIgnoreCase)) side = "right";
+            if (side == nullptr) return nullptr;
+            auto helper = name->Substring(2);
+            if (EqualsRole(helper, "Knee_Roll_01") || EqualsRole(helper, "Knee_Roll_02") ||
+                EqualsRole(helper, "ExKnee")) return side + "leg";
+            if (EqualsRole(helper, "UpLeg_Roll_01") || EqualsRole(helper, "UpLeg_Roll_02") ||
+                EqualsRole(helper, "ExUpLeg")) return side + "upleg";
+            if (EqualsRole(helper, "Arm_Roll_01") || EqualsRole(helper, "Arm_Roll_02"))
+                return side + "arm";
+            if (EqualsRole(helper, "Elbow_Roll") || EqualsRole(helper, "ForeArm_Roll_01") ||
+                EqualsRole(helper, "ForeArm_Roll_02") || EqualsRole(helper, "ForeArm_Roll_03"))
+                return side + "forearm";
+            return nullptr;
+        }
+
     private:
         static bool EqualsRole(String^ value, String^ expected)
         {
