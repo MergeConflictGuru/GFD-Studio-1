@@ -49,9 +49,9 @@ public enum CanonicalJoint
 /// </summary>
 public static class CanonicalSkeleton
 {
-    // v3 normalizes sampled clips into their source rig's bind-root frame before feature
-    // extraction. This keeps P5/P5D and P5R's different model-space bases comparable.
-    public const int Version = 3;
+    // v4 uses anatomical character axes, bind-relative joint orientations and body-only height.
+    // Earlier descriptors contain rig-axis/cosmetic biases and must be rebuilt from source.
+    public const int Version = 4;
     public const int JointCount = 18;
 
     public static readonly string[] Names =
