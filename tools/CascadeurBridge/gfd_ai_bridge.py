@@ -43,7 +43,8 @@ def run(scene):
 
 def idle(scene):
     run(scene)
-    while not _requests.empty():
+    # Each stage gets its own idle event, after Cascadeur updates the scene.
+    if not _requests.empty():
         request=_requests.get();request['started']=True
         try:
             exec(request['code'],{'csc':csc,'scene':scene,'app':csc.app.get_application()})

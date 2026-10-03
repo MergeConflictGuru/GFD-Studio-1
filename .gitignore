@@ -38,3 +38,4 @@ AtlusGfdLibTesting/
 .dotnet-cli-home
 artifacts/
 *.py?
+tmp/

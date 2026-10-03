@@ -51,7 +51,7 @@ def cascadeur(stage, manifest, server):
             f"os.environ['CASCADEUR_HOME'] = {str(CASCADEUR)!r}\n"
             f"_transition = runpy.run_path({str(module)!r})\n"
             "try:\n"
-            f"    _transition[{stage!r}]({str(manifest)!r})\n"
+            f"    _transition[{stage!r}]({str(manifest)!r}{', scene' if stage == 'close_generated' else ''})\n"
             f"    open({str(receipt)!r},'w').write(json.dumps({{'ok':True}}))\n"
             "except Exception:\n"
             f"    open({str(receipt)!r},'w').write(json.dumps({{'ok':False,'error':traceback.format_exc()}}))\n"
@@ -181,14 +181,21 @@ def main():
             (cache/'rig.part').replace(cache/'rig.casc')
             print('Saved model rig for later clips',flush=True)
         stage('import_animation',cascadeur,'animation',manifest,args.server)
+        stage('close_older_scenes',cascadeur,'close_generated',manifest,args.server)
     if args.stage in ['run','interpolate']:
         stage('ai',cascadeur,'interpolate',manifest,args.server)
+        stage('reconnect_ai',cascadeur,'reconnect_ai',manifest,args.server)
+        stage('close_older_scenes',cascadeur,'close_generated',manifest,args.server)
     if args.stage in ['run','finish']:
         stage('bake',cascadeur,'bake',manifest,args.server)
         stage('write_gap',bridge,args.bridge,'finish',job)
         print('GAP output:',output,flush=True)
     if args.stage == 'preview' or (args.preview and args.stage in ['run','finish']):
         stage('preview',cascadeur,'preview',manifest,args.server)
+        stage('close_older_scenes',cascadeur,'close_generated',manifest,args.server)
+    elif args.stage in ['run','finish']:
+        stage('leave_job_scene',cascadeur,'release',manifest,args.server)
+        stage('close_job_scenes',cascadeur,'close_generated',manifest,args.server)
     timings['total'] = round(time.monotonic()-started,3)
     (output/'timings.json').write_text(json.dumps(timings,indent=2))
     print('Time:',timings['total'],'seconds',flush=True)

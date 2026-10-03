@@ -132,10 +132,12 @@ def animation(file):
     view.save(str(Path(m['directory'])/'transition.casc'))
     print('Imported both clips onto the generated rig')
 
+
 def interpolate(file):
     m = read_manifest(file)
     app, view = view_for(m)
     scene = view.domain_scene()
+    app.get_tools_manager().get_tool('InbetweeningTool').editor(view).set_update_parameter(True)
     lv = scene.layers_viewer()
     first, last = m['gapStart'], m['gapEnd']
     # Rig layers contain the body points and hand controllers. Unrigged
@@ -190,6 +192,12 @@ def bake(file):
         pose = {name: (np.asarray(dv.get_data_value(data, frame), dtype=float).T @ conversion).reshape(-1).tolist()
                 for name, data in joints.items()}
         frames.append(pose)
+    if len(frames) > 2:
+        body = [name for name in ('Hips', 'LeftHand', 'RightHand', 'LeftFoot', 'RightFoot') if name in frames[0]]
+        def difference(pose):
+            return max((abs(a-b) for name in body for a,b in zip(frames[0][name], pose[name])), default=0.0)
+        if difference(frames[-1]) > 1e-4 and max(map(difference, frames[1:-1])) < 1e-4:
+            raise RuntimeError('Cascadeur AI held the first pose through the whole transition; refusing to export a frozen middle')
     output = Path(m['directory'])/'baked.json'
     output.write_text(json.dumps({'frames': frames}, separators=(',',':')))
     print('Baked', len(frames), 'frames on', len(joints), 'game joints')
@@ -210,3 +218,50 @@ def preview(file):
     frame_body(view)
     view.save(filename)
     print('Opened GAP with game skin bindings')
+
+def generated_scene(view):
+    """Recognize helper-created tabs without closing user documents."""
+    file = Path(view.get_path_name())
+    if file.name not in {'transition.casc', 'game_roundtrip.casc'} and not file.name.startswith('previous_'):
+        return False
+    manifest = file.parent/'manifest.json'
+    if not manifest.is_file():
+        return False
+    try:
+        return Path(read_manifest(manifest)['directory']).resolve() == file.parent.resolve()
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def release(file):
+    # Change tabs first; the following idle call can then close the job scene.
+    manager = csc.app.get_application().get_scene_manager()
+    user_scene = next((view for view in manager.scenes() if not generated_scene(view)), None)
+    if user_scene is None:
+        user_scene = manager.create_application_scene()
+    manager.set_current_scene(user_scene)
+
+
+def close_generated(file, idle_scene):
+    manager = csc.app.get_application().get_scene_manager()
+    keep = manager.current_scene()
+    count = 0
+    for old in list(manager.scenes()):
+        if old == keep or old.domain_scene() == idle_scene or not generated_scene(old):
+            continue
+        manager.remove_application_scene(old)
+        count += 1
+    print('Closed', count, 'generated scene tabs')
+
+
+def reconnect_ai(file):
+    # The first AI edit leaves imported GLOBAL tracks disconnected from the
+    # inbetweening core. Reload with the AI intervals already present, then
+    # regenerate against the loaded controller data before baking.
+    m = read_manifest(file)
+    app, view = view_for(m)
+    view.save(str(Path(m['directory'])/'previous_ai.casc'))
+    if not app.get_data_source_manager().load_scene(str(Path(m['directory'])/'transition.casc')):
+        raise RuntimeError('Cascadeur could not reopen the AI interval')
+    interpolate(file)
+
