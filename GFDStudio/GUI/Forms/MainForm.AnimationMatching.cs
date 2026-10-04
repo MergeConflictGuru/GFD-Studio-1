@@ -101,6 +101,9 @@ namespace GFDStudio.GUI.Forms
                 mAnimationMatchControllerContext = null;
             };
             splitContainer_Main.Panel2.Controls.Add(mAnimationMatchView);
+            EnableShowroomGapDrop(splitContainer_Main.Panel2);
+            EnableShowroomGapDrop(ModelViewControl.Instance);
+            EnableShowroomGapDrop(tableLayoutPanel_AnimationControls);
 
             // Capture exactly the animation that the shared showroom viewer is displaying. Preview
             // loads made by the matcher are suppressed so trying another candidate still compares

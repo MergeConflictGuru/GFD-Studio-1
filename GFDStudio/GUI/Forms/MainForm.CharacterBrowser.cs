@@ -119,6 +119,7 @@ namespace GFDStudio.GUI.Forms
             public string BrowserRoot { get; init; }
             public bool UseLocalBindSpace { get; init; }
             public bool CanUseWithoutRetarget { get; init; }
+            public bool LoadAllGapCompanions { get; init; }
             public CharacterModelEntry SourceModelEntry { get; init; }
             public IReadOnlyList<CharacterModelEntry> ModelEntries { get; init; }
         }
@@ -2364,7 +2365,7 @@ namespace GFDStudio.GUI.Forms
         }
 
         private CharacterBrowserAnimationPreparationContext
-            CaptureCharacterBrowserAnimationPreparationContext(CharacterAnimationEntry entry)
+            CaptureCharacterBrowserAnimationPreparationContext(CharacterAnimationEntry entry, bool loadAllGapCompanions = false)
         {
             var modelEntries = mCharacterModels.ToArray();
             var targetModelPack = mCharacterBrowserCurrentModelPack ??
@@ -2375,10 +2376,20 @@ namespace GFDStudio.GUI.Forms
             var selectedHairPath = GetSelectedCharacterBrowserHairPath();
             var sourceModelEntry = FindCharacterModelForAnimation(
                 entry.PackPath, modelEntries, targetModelPath);
+            if (loadAllGapCompanions && sourceModelEntry == null)
+            {
+                var characterId = ExtractCharacterId(entry.PackPath);
+                if (!string.IsNullOrWhiteSpace(characterId))
+                    sourceModelEntry = modelEntries.Where(model => model.Part == CharacterModelPart.Body &&
+                        string.Equals(ExtractCharacterId(model.Path), characterId, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(model => AreSamePath(model.Path, targetModelPath))
+                        .ThenBy(model => model.Path, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+            }
 
             return new CharacterBrowserAnimationPreparationContext
             {
                 Entry = entry,
+                LoadAllGapCompanions = loadAllGapCompanions,
                 TargetModelPack = targetModelPack,
                 TargetModelPath = targetModelPath,
                 SelectedBodyPath = selectedBodyPath,
@@ -2642,13 +2653,20 @@ namespace GFDStudio.GUI.Forms
             if (animation == null)
                 return new CharacterBrowserPreparedAnimation();
 
+            var hasSplitComponents = false;
+            IReadOnlyCollection<string> autoLoadedPackPaths = Array.Empty<string>();
+            if (context.LoadAllGapCompanions)
+            {
+                animation = ComposeDroppedGapAnimation(entry, animation, out autoLoadedPackPaths, token);
+                hasSplitComponents = autoLoadedPackPaths.Count > 1;
+            }
             var targetModelPack = context.TargetModelPack;
             if (targetModelPack?.Model == null)
             {
                 return new CharacterBrowserPreparedAnimation
                 {
                     Animation = animation,
-                    AutoLoadedPackPaths = Array.Empty<string>()
+                    AutoLoadedPackPaths = autoLoadedPackPaths
                 };
             }
 
@@ -2659,7 +2677,7 @@ namespace GFDStudio.GUI.Forms
                 {
                     Animation = animation,
                     RetargetNote = "source model not found; preview uses original animation",
-                    AutoLoadedPackPaths = Array.Empty<string>()
+                    AutoLoadedPackPaths = autoLoadedPackPaths
                 };
             }
 
@@ -2671,13 +2689,11 @@ namespace GFDStudio.GUI.Forms
                 {
                     Animation = animation,
                     RetargetNote = "source model has no model data; preview uses original animation",
-                    AutoLoadedPackPaths = Array.Empty<string>()
+                    AutoLoadedPackPaths = autoLoadedPackPaths
                 };
             }
 
-            var hasSplitComponents = false;
-            IReadOnlyCollection<string> autoLoadedPackPaths = Array.Empty<string>();
-            if (entry.Kind == CharacterAnimationListKind.Animation)
+            if (!context.LoadAllGapCompanions && entry.Kind == CharacterAnimationListKind.Animation)
             {
                 animation = ComposeCharacterBrowserAnimation(
                     entry, animation, context.SelectedBodyPath, context.SelectedFacePath,
@@ -2686,8 +2702,18 @@ namespace GFDStudio.GUI.Forms
 
             if (hasSplitComponents)
             {
+                var facePath = context.SelectedFacePath;
+                var hairPath = context.SelectedHairPath;
+                if (context.LoadAllGapCompanions)
+                {
+                    facePath = autoLoadedPackPaths.FirstOrDefault(path =>
+                        Path.GetFileNameWithoutExtension(path).EndsWith("_f", StringComparison.OrdinalIgnoreCase));
+                    var hairStem = autoLoadedPackPaths.Select(GetCharacterBrowserAnimationHairStem)
+                        .FirstOrDefault(stem => !string.IsNullOrWhiteSpace(stem));
+                    hairPath = hairStem == null ? null : Path.Combine(Path.GetDirectoryName(entry.PackPath), hairStem + ".GMD");
+                }
                 sourceModelPack = ComposeCharacterBrowserAnimationSourceModel(
-                    entry.PackPath, context.SelectedFacePath, context.SelectedHairPath,
+                    entry.PackPath, facePath, hairPath,
                     sourceModelEntry, sourceModelPack, context.ModelEntries);
             }
 
@@ -2750,7 +2776,7 @@ namespace GFDStudio.GUI.Forms
             {
                 Animation = animation,
                 RetargetNote = retargetNote,
-                AutoLoadedPackPaths = hasSplitComponents ? autoLoadedPackPaths : Array.Empty<string>()
+                AutoLoadedPackPaths = autoLoadedPackPaths
             };
         }
 

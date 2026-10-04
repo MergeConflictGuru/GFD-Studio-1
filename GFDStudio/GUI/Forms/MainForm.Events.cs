@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
@@ -57,7 +57,7 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
-        private void HandleDragDrop( object sender, DragEventArgs e )
+        private async void HandleDragDrop( object sender, DragEventArgs e )
         {
             var data = e.Data.GetData( DataFormats.FileDrop );
             if ( data == null )
@@ -71,7 +71,10 @@ namespace GFDStudio.GUI.Forms
             if ( !File.Exists( path ) )
                 return;
 
-            OpenFile( path );
+            if (GetDroppedGap(e.Data) is string gap)
+                await LoadDroppedShowroomGapAsync(gap);
+            else
+                OpenFile( path );
         }
 
         private static void HandleDragEnter( object sender, DragEventArgs e )
