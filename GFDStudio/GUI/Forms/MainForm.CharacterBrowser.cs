@@ -224,6 +224,7 @@ namespace GFDStudio.GUI.Forms
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            _ = PreloadAiBlendAsync();
 
             if (mCharacterBrowserPanel != null)
                 return;

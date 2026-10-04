@@ -195,7 +195,7 @@ public static class AnimationIndexCache
                             options,
                             corpusSignature,
                             progress,
-                            out var cachedCorpus))
+                            out var cachedCorpus, out var missingCount, out var newCount))
                         return null;
 
                     var prepared = PrepareFeatureLayout(cachedCorpus, options, header.DescriptorDimensions);
@@ -223,7 +223,7 @@ public static class AnimationIndexCache
                     try
                     {
                         var tree = new VpTree(mapped, header.ProjectionDimensions, header.TreeRoot);
-                        return AnimationSearchDatabase.FromMappedCache(
+                        var database = AnimationSearchDatabase.FromMappedCache(
                             cachedCorpus,
                             options,
                             prepared.extractor,
@@ -234,6 +234,9 @@ public static class AnimationIndexCache
                             prepared.dimensionWeights,
                             prepared.projection,
                             tree);
+                        database.MissingAnimationCount = missingCount;
+                        database.NewAnimationCount = newCount;
+                        return database;
                     }
                     catch
                     {
@@ -366,7 +369,7 @@ public static class AnimationIndexCache
         // encode the common feature-bone count. Reconstruct this tiny layout directly instead of
         // asking every lazy GfdAnimationClip for Skeleton (which would parse every source model).
         var perHistoryDimensions = checked(options.HistorySeconds.Length * 12);
-        var featureDimensions = dimensions - 4;
+        var featureDimensions = dimensions - PoseFeatureExtractor.ExtraFeatureDimensions;
         if (featureDimensions <= 0 || featureDimensions % perHistoryDimensions != 0)
             throw new InvalidDataException("Animation matching cache descriptor dimensions are invalid.");
 
@@ -479,20 +482,19 @@ public static class AnimationIndexCache
         AnimationMatchOptions options,
         string corpusSignature,
         IProgress<string>? progress,
-        out AnimationCorpus cachedCorpus)
+        out AnimationCorpus cachedCorpus, out int missingCount, out int newCount)
     {
         cachedCorpus = null!;
+        missingCount = newCount = 0;
         reader.BaseStream.Position = header.MetadataOffset;
         var metadataEnd = checked(header.MetadataOffset + header.MetadataLength);
 
         var cachedSignature = reader.ReadString();
-        if (!string.Equals(cachedSignature, corpusSignature ?? string.Empty, StringComparison.Ordinal) &&
-            !IsLegacyScanGenerationCompatible(cachedSignature, corpusSignature))
+        // Animation additions/removals do not change the saved descriptor layout.
+        // Keep cached clip slots intact because all frame addresses refer to those slots.
+        if (!string.Equals(cachedSignature.Split('|')[0], (corpusSignature ?? string.Empty).Split('|')[0], StringComparison.Ordinal))
         {
-            progress?.Report(
-                $"Cached animation index corpus signature differs " +
-                $"(saved={GetSignatureToken(cachedSignature)}, current={GetSignatureToken(corpusSignature)}); " +
-                "click Reindex to rebuild.");
+            progress?.Report("Cached animation index uses a different animation composition; click Reindex to rebuild.");
             return false;
         }
 
@@ -513,23 +515,41 @@ public static class AnimationIndexCache
         foreach (var clip in catalog.Clips)
             clipsById.TryAdd(clip.Id, clip);
 
+        var cachedIds = new HashSet<string>(StringComparer.Ordinal);
         var cachedClips = new IAnimationClip[header.ClipCount];
         for (var i = 0; i < header.ClipCount; i++)
         {
             var clipId = reader.ReadString();
-            if (!clipsById.TryGetValue(clipId, out var clip))
+            cachedIds.Add(clipId);
+            if (clipsById.TryGetValue(clipId, out var clip))
+                cachedClips[i] = clip;
+            else
             {
-                progress?.Report($"Cached animation index clip {i:N0} is not present in the current catalog; click Reindex to rebuild.");
-                return false;
+                cachedClips[i] = new MissingIndexedAnimation(clipId);
+                missingCount++;
             }
-            cachedClips[i] = clip;
         }
+        foreach (var id in clipsById.Keys)
+            if (!cachedIds.Contains(id)) newCount++;
 
         if (reader.BaseStream.Position > metadataEnd)
             return false;
 
         cachedCorpus = new AnimationCorpus(cachedClips);
         return true;
+    }
+
+    // These slots keep the mmap addresses stable; the search excludes them before sampling.
+    internal sealed class MissingIndexedAnimation : IAnimationClip
+    {
+        public MissingIndexedAnimation(string id) => Id = id;
+        public string Id { get; }
+        public string DisplayName => Id;
+        public SkeletonDefinition Skeleton => throw new InvalidOperationException("Missing indexed animation cannot be sampled.");
+        public int FrameCount => 0;
+        public float FramesPerSecond => 30;
+        public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)
+            => throw new InvalidOperationException("Missing indexed animation cannot be sampled.");
     }
 
     private static bool IsLegacyScanGenerationCompatible(string cachedSignature, string currentSignature)

@@ -15,6 +15,7 @@ namespace GFDStudio.AnimationMatching.Features;
 /// </summary>
 public sealed class PoseFeatureExtractor
 {
+    public const int ExtraFeatureDimensions = 10;
     private readonly AnimationMatchOptions _options;
 
     public PoseFeatureExtractor(AnimationMatchOptions options)
@@ -70,7 +71,7 @@ public sealed class PoseFeatureExtractor
     {
         // each history sample: pos(3) + vel(3) + orientation-forward(3) + orientation-up(3) per bone
         // plus planar root speed(2) + vertical speed(1) + yaw rate(1)
-        return _options.HistorySeconds.Length * featureBoneCount * 12 + 4;
+        return _options.HistorySeconds.Length * featureBoneCount * 12 + ExtraFeatureDimensions;
     }
 
     /// <summary>
@@ -96,6 +97,8 @@ public sealed class PoseFeatureExtractor
         var root = MathF.Sqrt(MathF.Max(0f, _options.RootSpeedWeight));
         weights[cursor++] = root; weights[cursor++] = root; weights[cursor++] = root;
         weights[cursor++] = MathF.Sqrt(MathF.Max(0f, _options.RootYawRateWeight));
+        var support = MathF.Sqrt(MathF.Max(0f, _options.FootSupportWeight));
+        for (var i = 0; i < 6; i++) weights[cursor++] = support;
         return weights;
     }
 
@@ -178,6 +181,28 @@ public sealed class PoseFeatureExtractor
             destination[cursor++] = rootVelocity.Z * rootSpeedScale;
             destination[cursor++] = rootVelocity.Y * rootSpeedScale;
             destination[cursor++] = yawRate * MathF.Sqrt(_options.RootYawRateWeight);
+            // Foot height and speed distinguish a planted foot from a passing one.
+            // Use the same six slots for canonical and named source skeletons.
+            var supportScale = MathF.Sqrt(MathF.Max(0f, _options.FootSupportWeight));
+            var feet = new[] { "left", "right" }.Select(side =>
+                Enumerable.Range(0, skeleton.BoneCount).FirstOrDefault(i =>
+                    NormalizeBoneName(skeleton.BoneNames[i]).Contains(side + "foot"), -1)).ToArray();
+            var floor = float.PositiveInfinity;
+            foreach (var index in feet) if (index >= 0) floor = MathF.Min(floor, pivotPose[index].Position.Y);
+            if (!float.IsFinite(floor)) floor = pivotRoot.Position.Y;
+            foreach (var foot in feet)
+            {
+                if (foot < 0)
+                {
+                    for (var d = 0; d < 3; d++) destination[cursor++] = 0;
+                    continue;
+                }
+                var height = (pivotPose[foot].Position.Y - floor) * invHeight;
+                var speed = Vector3.Distance(prev[foot].Position, next[foot].Position) / rootDt * invHeight;
+                destination[cursor++] = height * supportScale;
+                destination[cursor++] = speed * supportScale;
+                destination[cursor++] = supportScale / (1f + MathF.Max(0, height) * 30f + speed * 3f);
+            }
         }
         finally
         {

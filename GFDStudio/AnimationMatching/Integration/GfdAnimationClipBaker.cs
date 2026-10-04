@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using GFDLibrary.Animations;
 using GFDLibrary.Models;
@@ -16,6 +17,37 @@ namespace GFDStudio.AnimationMatching.Integration;
 /// </summary>
 public static class GfdAnimationClipBaker
 {
+    // Resource names accompany the displayed model, not canonical search clips.
+    // Capture them on the UI thread before preview/export starts background work.
+    private sealed record RetargetResources(string ModelFile, string CorpusRoot);
+    private static readonly ConditionalWeakTable<Model, RetargetResources> RetargetFiles = new();
+
+    public static void SetTargetRetargetResources(Model model, string modelFile, string corpusRoot)
+    {
+        if (model == null || string.IsNullOrWhiteSpace(modelFile) || string.IsNullOrWhiteSpace(corpusRoot))
+            return;
+        lock (RetargetFiles)
+        {
+            RetargetFiles.Remove(model);
+            RetargetFiles.Add(model, new RetargetResources(modelFile, corpusRoot));
+        }
+    }
+
+    internal static bool TryGetTargetRetargetResources(Model model, out string modelFile, out string corpusRoot)
+    {
+        lock (RetargetFiles)
+        {
+            if (RetargetFiles.TryGetValue(model, out var resources))
+            {
+                modelFile = resources.ModelFile;
+                corpusRoot = resources.CorpusRoot;
+                return true;
+            }
+        }
+        modelFile = corpusRoot = null;
+        return false;
+    }
+
     public static Animation Bake(
         IAnimationClip clip,
         Model targetModel,
@@ -196,7 +228,7 @@ public static class GfdAnimationClipBaker
                 CreateTargetPreviewClip(stitched.CandidateClip, targetModel, targetSkeleton),
                 stitched.CandidateStartFrame,
                 stitched.BlendSeconds,
-                stitched.AlignPositionAndYaw),
+                stitched.AlignPositionAndYaw, stitched.MatchUp, stitched.YawJitterDegrees) { CollisionCorrectionEnabled = stitched.CollisionCorrectionEnabled },
             TailAnimation tail => new TailAnimation(
                 CreateTargetPreviewClip(tail.CandidateClip, targetModel, targetSkeleton),
                 tail.StartFrame),

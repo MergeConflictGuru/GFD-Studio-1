@@ -96,7 +96,7 @@ def ensure_server(cascadeur_dir, server, initial_file):
         plugin.write_bytes(source.read_bytes())
     host, port = server.rsplit(':',1)
     def ready():
-        connection = http.client.HTTPConnection(host,int(port),timeout=2)
+        connection = http.client.HTTPConnection(host,int(port),timeout=10)
         try:
             connection.request('GET','/health')
             return json.loads(connection.getresponse().read()).get('ok',False)
@@ -106,14 +106,14 @@ def ensure_server(cascadeur_dir, server, initial_file):
     # Do not start a second app over somebody's open scenes.
     if app_running():
         # The app may still be loading a scene before its first idle callback.
-        deadline=time.monotonic()+15
+        deadline=time.monotonic()+60
         while time.monotonic()<deadline:
             if ready():return
             time.sleep(1)
         raise RuntimeError('In Cascadeur choose Settings > Reload scripts once, or Scripts > MCP > Start script server. Keep playback paused.')
     startup=subprocess.STARTUPINFO();startup.dwFlags|=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
     subprocess.Popen([str(cascadeur_dir/'cascadeur.exe'),str(initial_file)],cwd=cascadeur_dir,startupinfo=startup)
-    deadline=time.monotonic()+150
+    deadline=time.monotonic()+600
     while time.monotonic()<deadline:
         if ready():return
         time.sleep(1)
@@ -122,7 +122,7 @@ def ensure_server(cascadeur_dir, server, initial_file):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cascadeur',type=Path,default=CASCADEUR)
-    parser.add_argument('stage', choices=['run','prepare','rig','interpolate','finish','preview'])
+    parser.add_argument('stage', choices=['run','prepare','rig','interpolate','finish','repair','preview'])
     parser.add_argument('job',type=Path)
     parser.add_argument('--bridge',type=Path,default=DEFAULT_BRIDGE)
     parser.add_argument('--server',default='127.0.0.1:8765')
@@ -160,7 +160,7 @@ def main():
         prepared = json.loads(manifest.read_text())
         if prepared.get('jobHash') != hashlib.sha256(job.read_bytes()).hexdigest().upper():
             raise RuntimeError('Job settings changed; prepare and rig again before using this scene')
-    if args.stage in ['run','rig','interpolate','finish','preview']:
+    if args.stage in ['run','rig','interpolate','finish','repair','preview']:
         ensure_server(args.cascadeur.resolve(),args.server,output/'rig.fbx')
     if args.stage in ['run','rig']:
         cache = rig_cache(Path(prepared['model']),args.bridge.resolve())
@@ -186,14 +186,82 @@ def main():
         stage('ai',cascadeur,'interpolate',manifest,args.server)
         stage('reconnect_ai',cascadeur,'reconnect_ai',manifest,args.server)
         stage('close_older_scenes',cascadeur,'close_generated',manifest,args.server)
-    if args.stage in ['run','finish']:
-        stage('bake',cascadeur,'bake',manifest,args.server)
+    if args.stage == 'repair':
+        if not (output/'uncleaned_controllers.json').exists():
+            raise RuntimeError('This older scene has no saved pre-collision poses. Regenerate it rather than cleaning an already distorted middle.')
+        stage('open_saved_scene',cascadeur,'load_saved',manifest,args.server)
+        stage('close_older_scenes',cascadeur,'close_generated',manifest,args.server)
+    if args.stage == 'repair':
+        stage('restore_uncleaned_before_repair',cascadeur,'restore_uncleaned',manifest,args.server)
+    if args.stage in ['run','finish','repair']:
+        max_passes = int(prepared.get('collisionPasses', 3))
+        if not 1 <= max_passes <= 8:
+            raise ValueError('Collision passes must be 1..8')
+        max_padding = float(prepared.get('collisionMaxPaddingPercent', 0))
+        if not 0 <= max_padding <= 100:
+            raise ValueError('Maximum collision padding must be 0..100 percent')
+        # Compare every collision attempt against the untouched AI middle.
+        # Prefer that middle over a disruptive correction, even if it intersects.
+        stage('snapshot_uncleaned',cascadeur,'snapshot_uncleaned',manifest,args.server)
+        stage('bake_uncleaned',cascadeur,'bake',manifest,args.server)
+        shutil.copy2(output/'baked.json',output/'uncleaned_baked.json')
+        import runpy
+        capsule_report=runpy.run_path(str(SCRIPT_DIR/'transition_collision_report.py'))['report']
+        motion_report=runpy.run_path(str(SCRIPT_DIR/'transition_motion_guard.py'))['report']
+        initial_review=capsule_report(output)
+        (output/'uncleaned_head_neck_review.json').write_text(json.dumps(initial_review,indent=2))
+        settings=json.loads(manifest.read_text())
+        settings['collisionAffectedSides']=sorted({e['side'] for e in initial_review.get('events',[])})
+        manifest.write_text(json.dumps(settings,separators=(',',':')))
+        attempts=[];use_uncleaned=False;reason='disabled' if not prepared.get('cleanCollisions',True) else 'no flagged head/neck contact'
+        if prepared.get('cleanCollisions',True) and initial_review.get('flaggedFrames',0):
+            for attempt in range(max_passes):
+                settings=json.loads(manifest.read_text())
+                settings['collisionPaddingPercent']=max_padding*attempt/max(1,max_passes-1)
+                manifest.write_text(json.dumps(settings,separators=(',',':')))
+                stage('collision_cleaning_'+str(attempt+1),cascadeur,'clean_collisions',manifest,args.server)
+                stage('bake_'+str(attempt+1),cascadeur,'bake',manifest,args.server)
+                comparison=motion_report(output)
+                review=capsule_report(output)
+                attempts.append({'attempt':attempt+1,'motion':comparison,'headNeck':review,
+                                 'cleaning':json.loads((output/'collision_cleaning.json').read_text())})
+                if not comparison['accepted']:
+                    shutil.copy2(output/'baked.json',output/f'rejected_baked_pass{attempt+1}.json')
+                    use_uncleaned=True;reason='correction changed unrelated joints or added sharp motion'
+                    break
+                if not review.get('flaggedFrames',0):
+                    reason='accepted bounded arm correction'
+                    break
+            else:
+                use_uncleaned=True;reason='head/neck contact was not cleared within the allowed attempts'
+        if use_uncleaned:
+            stage('restore_uncleaned',cascadeur,'restore_uncleaned',manifest,args.server)
+            stage('bake_restored',cascadeur,'bake',manifest,args.server)
+            restoration=motion_report(output)
+            (output/'collision_restoration_review.json').write_text(json.dumps(restoration,indent=2))
+            # GAP export uses the captured AI frames, not a second solver result.
+            shutil.copy2(output/'uncleaned_baked.json',output/'baked.json')
+            print('Rejected collision correction; using the untouched AI middle:',reason,flush=True)
+        stage('seal_middle',cascadeur,'seal_middle',manifest,args.server)
+        if not use_uncleaned:
+            stage('bake_sealed_middle',cascadeur,'bake',manifest,args.server)
+            sealed_motion=motion_report(output)
+            if not sealed_motion['accepted']:
+                use_uncleaned=True;reason='saving controller keys changed the middle too much'
+                stage('restore_after_keying',cascadeur,'restore_uncleaned',manifest,args.server)
+                shutil.copy2(output/'uncleaned_baked.json',output/'baked.json')
+        review=capsule_report(output)
+        (output/'head_neck_review.json').write_text(json.dumps(review,indent=2))
+        (output/'collision_cleaning.json').write_text(json.dumps({
+            'enabled':bool(attempts),'usedUncleanedMiddle':use_uncleaned or not attempts,'reason':reason,
+            'passes':len(attempts),'maxPasses':max_passes,'attempts':attempts,
+            'needsVisualReview':bool(review.get('flaggedFrames',0)),'automaticAiUpdates':False},indent=2))
         stage('write_gap',bridge,args.bridge,'finish',job)
         print('GAP output:',output,flush=True)
-    if args.stage == 'preview' or (args.preview and args.stage in ['run','finish']):
+    if args.stage == 'preview' or (args.preview and args.stage in ['run','finish','repair']):
         stage('preview',cascadeur,'preview',manifest,args.server)
         stage('close_older_scenes',cascadeur,'close_generated',manifest,args.server)
-    elif args.stage in ['run','finish']:
+    elif args.stage in ['run','finish','repair']:
         stage('leave_job_scene',cascadeur,'release',manifest,args.server)
         stage('close_job_scenes',cascadeur,'close_generated',manifest,args.server)
     timings['total'] = round(time.monotonic()-started,3)

@@ -39,3 +39,6 @@ AtlusGfdLibTesting/
 artifacts/
 *.py?
 tmp/
+
+# Shared sources live in DaYoBuO; this is a directory junction.
+/SLIDE/

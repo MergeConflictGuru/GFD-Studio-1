@@ -9,7 +9,7 @@ using GFDLibrary.Animations.Keys;
 using GFDLibrary.Models;
 
 // JSON bridge keeps the Persona hierarchy when Cascadeur inserts rig joints.
-internal static class CascadeurTransition
+internal static partial class CascadeurTransition
 {
     public sealed class Clip
     {
@@ -21,8 +21,11 @@ internal static class CascadeurTransition
     }
     public sealed class Placement
     {
-        public bool MatchPosition { get; set; }
-        public bool MatchYaw { get; set; }
+        public bool MatchPosition { get; set; } = true;
+        public bool MatchYaw { get; set; } = true;
+        public bool MatchUp { get; set; }
+        public float YawJitterDegrees { get; set; }
+        public int YawJitterSeed { get; set; }
         public float[] Translation { get; set; } = new float[3];
         public float YawDegrees { get; set; }
     }
@@ -33,10 +36,22 @@ internal static class CascadeurTransition
         public Clip ClipB { get; set; } = new();
         public int TransitionFrames { get; set; } = 12;
         public Placement Placement { get; set; } = new();
-        public string Motion { get; set; } = "Acrobatic";
+        public string Motion { get; set; } = "";
         public string Output { get; set; } = "output";
         public int PoseCount { get; set; } = 12;
         public int SampleStep { get; set; } = 8;
+        public int ReusePoseCount { get; set; } = 33;
+        public int MinTransitionFrames { get; set; } = 18;
+        public int MaxTransitionFrames { get; set; } = 48;
+        public bool VariableDuration { get; set; } = true;
+        public float MaxBTrimPercent { get; set; } = 45;
+        public int LeadInFrames { get; set; } = 30;
+        public bool CleanCollisions { get; set; } = true;
+        public float CollisionMuscleStiffness { get; set; } = 15;
+        public int CollisionPasses { get; set; } = 3;
+        public float CollisionMaxPaddingPercent { get; set; } = 0;
+        public float CollisionMaxCorrectionPercent { get; set; } = 5;
+        public float CollisionMaxAccelerationPercent { get; set; } = .75f;
     }
     public sealed class Bone
     {
@@ -55,6 +70,12 @@ internal static class CascadeurTransition
         public string JobHash { get; set; } = "";
         public string Motion { get; set; } = "";
         public int Fps { get; set; } = 30;
+        public bool CleanCollisions { get; set; } = true;
+        public float CollisionMuscleStiffness { get; set; } = 15;
+        public int CollisionPasses { get; set; } = 3;
+        public float CollisionMaxPaddingPercent { get; set; } = 0;
+        public float CollisionMaxCorrectionPercent { get; set; } = 5;
+        public float CollisionMaxAccelerationPercent { get; set; } = .75f;
         public int GapStart { get; set; }
         public int GapEnd { get; set; }
         public int FrameCount { get; set; }
@@ -91,10 +112,31 @@ internal static class CascadeurTransition
         for (var p=node;p!=null;p=p.Parent) if (ReferenceEquals(p,root)) return true;
         return false;
     }
-    static float Heading(Matrix4x4 m)
+    static float BodyFacingYaw(Model model, Dictionary<Node, Matrix4x4> pose)
     {
-        var direction=Vector3.TransformNormal(Vector3.UnitZ,m);
-        return MathF.Atan2(direction.X,direction.Z);
+        var bones=model.Nodes.ToArray();var root=AnimationSkeletonRoles.ResolveMotionRoot(model);
+        Matrix4x4.Decompose(pose[root],out _,out var rotation,out _);
+        return AnimationFacing.YawRadians(bones.Select(n=>n.Name).ToArray(),i=>pose[bones[i]].Translation,rotation);
+    }
+    static float YawVariation(Placement settings,int sourceClip,int sourceFrame,int destinationClip,int destinationFrame)
+    {
+        if(!float.IsFinite(settings.YawJitterDegrees) || settings.YawJitterDegrees<0 || settings.YawJitterDegrees>180)
+            throw new ArgumentException("placement.yawJitterDegrees must be 0..180");
+        var key=$"{settings.YawJitterSeed}:{sourceClip}:{sourceFrame}:{destinationClip}:{destinationFrame}";
+        var bytes=SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key));
+        return ((float)(BitConverter.ToUInt32(bytes,0)/(double)uint.MaxValue)*2-1)*settings.YawJitterDegrees*MathF.PI/180;
+    }
+    static Matrix4x4 Place(Model model,Dictionary<Node,Matrix4x4> a,Dictionary<Node,Matrix4x4> b,Placement settings,float variation)
+    {
+        var root=AnimationSkeletonRoles.ResolveMotionRoot(model);var pivot=b[root].Translation;
+        var destination=pivot;
+        if(settings.MatchPosition) {destination.X=a[root].Translation.X;destination.Z=a[root].Translation.Z;}
+        if(settings.MatchUp) destination.Y=a[root].Translation.Y;
+        if(settings.Translation.Length!=3) throw new ArgumentException("placement.translation must have 3 coordinates");
+        destination+=new Vector3(settings.Translation[0],settings.Translation[1],settings.Translation[2]);
+        var yaw=settings.YawDegrees*MathF.PI/180+variation;
+        if(settings.MatchYaw) yaw+=BodyFacingYaw(model,a)-BodyFacingYaw(model,b);
+        return Matrix4x4.CreateTranslation(-pivot)*Matrix4x4.CreateRotationY(yaw)*Matrix4x4.CreateTranslation(destination);
     }
     static Assembly Fbx => AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(AppContext.BaseDirectory,"GFDLibrary.Conversion.FbxSdk.dll"));
     static void Export(ModelPack model, AnimationPack pack, string file, bool humanoidSkin=true)
@@ -167,6 +209,7 @@ internal static class CascadeurTransition
         var nodes=model.Model.Nodes.ToArray();
         var bind=AnimationPoseEvaluator.Evaluate(model.Model,null,0);
         var manifestFile=Path.Combine(directory,"manifest.json");
+        if (mode == "select-library" || mode == "pack-library" || mode == "render-library" || mode == "export-reuse-clips") return RunLibrary(mode, job, jobDirectory, directory, model);
         if(mode=="select-poses")
         {
             var allClips=job.ClipA.Index == -2;
@@ -189,7 +232,7 @@ internal static class CascadeurTransition
                 var sampledAnimation=animations[sample.clip];
                 var pose=AnimationPoseEvaluator.Evaluate(model.Model,sampledAnimation,frame/30f);
                 var previous=AnimationPoseEvaluator.Evaluate(model.Model,sampledAnimation,Math.Max(0,frame-3)/30f);
-                var invYaw=Matrix4x4.CreateRotationY(-Heading(pose[root]));
+                var invYaw=Matrix4x4.CreateRotationY(-BodyFacingYaw(model.Model,pose));
                 var values=new List<float>{pose[root].Translation.Y/height};
                 foreach(var bone in body)
                 {
@@ -280,6 +323,9 @@ internal static class CascadeurTransition
         if (mode=="prepare")
         {
             if (job.TransitionFrames<1||job.TransitionFrames>600) throw new ArgumentException("transitionFrames must be 1..600");
+            if (!float.IsFinite(job.CollisionMaxCorrectionPercent) || job.CollisionMaxCorrectionPercent<=0 || job.CollisionMaxCorrectionPercent>100 ||
+                !float.IsFinite(job.CollisionMaxAccelerationPercent) || job.CollisionMaxAccelerationPercent<=0 || job.CollisionMaxAccelerationPercent>100)
+                throw new ArgumentException("Collision motion limits must be finite percentages in (0,100]");
             var a=Load(job.ClipA,jobDirectory);var b=Load(job.ClipB,jobDirectory);
             foreach(var clip in new[]{a,b})
             {
@@ -295,13 +341,19 @@ internal static class CascadeurTransition
             var root=AnimationSkeletonRoles.ResolveMotionRoot(model.Model);
             var lastA=AnimationPoseEvaluator.Evaluate(model.Model,a,job.ClipA.EndFrame.Value/30f);
             var firstB=AnimationPoseEvaluator.Evaluate(model.Model,b,job.ClipB.StartFrame/30f);
-            var yaw=job.Placement.YawDegrees*MathF.PI/180;
-            if (job.Placement.MatchYaw) yaw+=Heading(lastA[root])-Heading(firstB[root]);
-            if (job.Placement.Translation.Length!=3) throw new ArgumentException("placement.translation must have 3 coordinates");
-            var destination=(job.Placement.MatchPosition?lastA[root]:firstB[root]).Translation+
-                new Vector3(job.Placement.Translation[0],job.Placement.Translation[1],job.Placement.Translation[2]);
-            var move=Matrix4x4.CreateTranslation(-firstB[root].Translation)*Matrix4x4.CreateRotationY(yaw)*Matrix4x4.CreateTranslation(destination);
-            var manifest=new Manifest{Model=modelFile,Directory=directory,JobHash=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(jobFile))),GapStart=aEnd+1,GapEnd=bStart+1,FrameCount=count+1,Motion=job.Motion};
+            var variation=YawVariation(job.Placement,job.ClipA.Index,job.ClipA.EndFrame.Value,job.ClipB.Index,job.ClipB.StartFrame);
+            var move=Place(model.Model,lastA,firstB,job.Placement,variation);
+            var placedB=firstB.ToDictionary(p=>p.Key,p=>Below(p.Key,root)?p.Value*move:p.Value);
+            Write(Path.Combine(directory,"placement_report.json"),new {
+                matchYaw=job.Placement.MatchYaw,matchUp=job.Placement.MatchUp,
+                sourceFacingDegrees=BodyFacingYaw(model.Model,lastA)*180/MathF.PI,
+                destinationFacingBeforeDegrees=BodyFacingYaw(model.Model,firstB)*180/MathF.PI,
+                destinationFacingAfterDegrees=BodyFacingYaw(model.Model,placedB)*180/MathF.PI,
+                yawVariationDegrees=variation*180/MathF.PI,
+                sourceRootHeight=lastA[root].Translation.Y,
+                destinationRootHeightBefore=firstB[root].Translation.Y,
+                destinationRootHeightAfter=placedB[root].Translation.Y});
+            var manifest=new Manifest{Model=modelFile,Directory=directory,JobHash=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(jobFile))),GapStart=aEnd+1,GapEnd=bStart+1,FrameCount=count+1,Motion=job.Motion,CleanCollisions=job.CleanCollisions,CollisionMuscleStiffness=job.CollisionMuscleStiffness,CollisionPasses=job.CollisionPasses,CollisionMaxPaddingPercent=job.CollisionMaxPaddingPercent,CollisionMaxCorrectionPercent=job.CollisionMaxCorrectionPercent,CollisionMaxAccelerationPercent=job.CollisionMaxAccelerationPercent};
             var mapper=Fbx.GetType("GFDLibrary.Conversion.FbxSdk.FbxSdkBoneNameMapper")!;
             foreach (var node in nodes)
             {

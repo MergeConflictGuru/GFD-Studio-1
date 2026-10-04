@@ -134,6 +134,17 @@ public sealed class GfdAnimationClip : IAnimationClip, IAnimationClipResourceOwn
 
         if (ReferenceEquals(sourceModel, targetModel))
             animation.FixTargetIds(targetModel);
+        else if (DancingKneeCorrection.SupportsTarget(targetModel) &&
+                 !DancingKneeCorrection.SupportsTarget(sourceModel) &&
+                 GfdAnimationClipBaker.TryGetTargetRetargetResources(targetModel,
+                     out var targetModelFile, out var corpusRoot))
+        {
+            // Royal has no Dance knee/boot drivers. Use the same calibrated
+            // corrective pass as the character browser before stitching poses.
+            P5dAnimationRetargeter.Retarget(animation, sourceModel, targetModel,
+                SourcePackPath, SourceClipIndex, targetModelFile, corpusRoot,
+                MainForm.settings.UseLocalBindSpaceRetargeting);
+        }
         else
             animation.Retarget(sourceModel, targetModel, false,
                 MainForm.settings.UseLocalBindSpaceRetargeting);

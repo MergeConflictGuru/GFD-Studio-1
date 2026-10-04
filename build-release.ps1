@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$Run,
+    [switch]$BuildRetargetProbe,
     [ValidateScript({ -not [string]::IsNullOrWhiteSpace($_) })]
     [string]$FinalDirectory = 'GFDStudio-binary'
 )
@@ -14,6 +15,12 @@ $binaryDirectory = if ([System.IO.Path]::IsPathRooted($FinalDirectory)) {
 }
 else {
     [System.IO.Path]::GetFullPath((Join-Path $workspace $FinalDirectory))
+}
+$slideJunction = Join-Path $workspace 'SLIDE'
+if (-not (Test-Path -LiteralPath $slideJunction)) {
+    $slideSource = if ($env:SLIDE_HOME) { $env:SLIDE_HOME } else { Join-Path (Split-Path $workspace -Parent) 'DaYoBuO\SLIDE' }
+    if (-not (Test-Path -LiteralPath (Join-Path $slideSource 'cpp\SlideAi.vcxproj'))) { throw 'Set SLIDE_HOME to the shared SLIDE folder before building AI blend.' }
+    New-Item -ItemType Junction -Path $slideJunction -Target (Resolve-Path $slideSource).Path | Out-Null
 }
 $buildDirectory = Join-Path $workspace 'GFDStudio\bin\x64\Release\net8.0-windows\win-x64'
 
@@ -137,7 +144,8 @@ function Update-BinaryDirectory {
     }
 
     New-Item -ItemType Directory -Force -Path $DestinationDirectory | Out-Null
-    Copy-Item -Path (Join-Path $SourceDirectory '*') -Destination $DestinationDirectory -Recurse -Force
+    # Generated animation jobs and caches are not release files.
+    Get-ChildItem -LiteralPath $SourceDirectory | Where-Object Name -ne 'tmp' | Copy-Item -Destination $DestinationDirectory -Recurse -Force
     return $true
 }
 
@@ -193,6 +201,19 @@ try {
         Write-Host "[release] Built $buildApplication; the final binary directory was left unchanged."
     }
 
+    if ($BuildRetargetProbe) {
+        $probeDirectory = Join-Path $workspace 'tmp\RetargetProbe'
+        New-Item -ItemType Directory -Force -Path $probeDirectory | Out-Null
+        Get-ChildItem -LiteralPath $buildDirectory -File | Copy-Item -Destination $probeDirectory -Force
+        if (-not (Test-Path (Join-Path $probeDirectory 'app_data'))) { New-Item -ItemType Junction -Path (Join-Path $probeDirectory 'app_data') -Target (Join-Path $buildDirectory 'app_data') | Out-Null }
+        elseif (-not ((Get-Item (Join-Path $probeDirectory 'app_data')).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Copy-Item -Path (Join-Path $buildDirectory 'app_data\*') -Destination (Join-Path $probeDirectory 'app_data') -Recurse -Force }
+        Invoke-MSBuild @(
+            (Join-Path $workspace 'tools\RetargetProbe\RetargetProbe.csproj'),
+            '/restore', '/t:Build', '/p:Configuration=Release',
+            '/p:Platform=x64', '/p:RuntimeIdentifier=win-x64', '/p:SelfContained=true',
+            "/p:OutputPath=$probeDirectory", "/p:AppendTargetFrameworkToOutputPath=false", "/p:AppendRuntimeIdentifierToOutputPath=false", '/verbosity:minimal'
+        )
+    }
     $buildSucceeded = $true
 }
 finally {

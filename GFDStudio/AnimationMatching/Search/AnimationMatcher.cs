@@ -37,6 +37,9 @@ public sealed class AnimationMatcher
         int resultCount,
         CancellationToken cancellationToken = default)
     {
+        if (_database.Corpus.Clips.Count == _database.MissingAnimationCount)
+            return Array.Empty<AnimationMatchResult>();
+
         var options = _database.Options;
         resultCount = Math.Max(1, resultCount);
         var start = sourceRangeStart ?? source.FrameCount - 1;
@@ -104,7 +107,8 @@ public sealed class AnimationMatcher
             _database.NormalizeQuery(query);
 
             _database.Projection.Project(query, projected);
-            var neighbors = _database.Tree.FindNearest(projected, neighborCount);
+            var neighbors = _database.Tree.FindNearest(projected, neighborCount,
+                _database.MissingAnimationCount == 0 ? null : _database.IsSampleAvailable);
 
             foreach (var sampleIndex in neighbors)
             {
@@ -180,7 +184,7 @@ public sealed class AnimationMatcher
         var velocity = 0f;
         var orientation = 0f;
         var root = 0f;
-        var bodyLength = a.Length - 4;
+        var bodyLength = a.Length - GFDStudio.AnimationMatching.Features.PoseFeatureExtractor.ExtraFeatureDimensions;
         for (var i = 0; i < bodyLength; i++)
         {
             var d = a[i] - b[i];

@@ -149,17 +149,19 @@ public sealed class AnimationMatchingModeControl : UserControl
     private readonly Button _exportParts = MakeButton("Export parts…");
     private readonly CheckBox _alignPositionAndYaw = new()
     {
-        Text = "Align pos/yaw",
+        Text = "Match X/Z + facing",
         Checked = true,
         AutoSize = true,
         ForeColor = Color.Gainsboro,
         BackColor = Color.Transparent,
         Anchor = AnchorStyles.Left
     };
+    private readonly CheckBox _collisionCorrection = new() {Text="Collision correction",Checked=true,AutoSize=true,ForeColor=Color.Gainsboro};
+    private readonly CheckBox _matchUp = new() {Text="Match height",AutoSize=true,ForeColor=Color.Gainsboro};
+    private readonly NumericUpDown _yawJitter = new() {Minimum=0,Maximum=180,DecimalPlaces=1,Increment=1,Width=55};
     private readonly RadioButton _simpleBlend = new()
     {
         Text = "Simple blend",
-        Checked = true,
         AutoSize = true,
         ForeColor = Color.Gainsboro,
         BackColor = Color.Transparent,
@@ -170,10 +172,10 @@ public sealed class AnimationMatchingModeControl : UserControl
     private readonly TextBox _styleHint = new() { PlaceholderText = "Style hint (optional)", Width = 230, BackColor = Color.FromArgb(45,45,48), ForeColor = Color.Gainsboro };
     private readonly NumericUpDown _blendDurationMs = new()
     {
-        Minimum = 0,
+        Minimum = 10,
         Maximum = 2000,
         Increment = 10,
-        Value = 120,
+        Value = 500,
         Width = 62,
         BackColor = Color.FromArgb(45, 45, 48),
         ForeColor = Color.Gainsboro,
@@ -260,7 +262,7 @@ public sealed class AnimationMatchingModeControl : UserControl
             BackColor = Color.FromArgb(30, 30, 30)
         };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -272,13 +274,14 @@ public sealed class AnimationMatchingModeControl : UserControl
         rootBar.Controls.Add(_root, 0, 0);
         rootBar.Controls.Add(_browse, 1, 0);
 
-        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 3, Margin = Padding.Empty };
+        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 4, Margin = Padding.Empty };
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
 
@@ -320,10 +323,26 @@ public sealed class AnimationMatchingModeControl : UserControl
         stitchOptions.Controls.Add(ms);
         actionBar.Controls.Add(stitchOptions, 0, 1);
         actionBar.SetColumnSpan(stitchOptions, 5);
-        actionBar.Controls.Add(_styleHint, 0, 2);
+        var placementOptions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+        placementOptions.Controls.Add(_matchUp);
+        placementOptions.Controls.Add(new Label {Text="Yaw variation °",AutoSize=true,ForeColor=Color.Gainsboro,Margin=new Padding(5,5,0,0)});
+        placementOptions.Controls.Add(_yawJitter);
+        placementOptions.Controls.Add(_collisionCorrection);
+        actionBar.Controls.Add(placementOptions,0,2);
+        actionBar.SetColumnSpan(placementOptions,5);
+        actionBar.Controls.Add(_styleHint, 0, 3);
         actionBar.SetColumnSpan(_styleHint, 5);
-        _styleHint.Enabled = false;
-        _aiBlend.Enabled = GFDStudio.GUI.Forms.MainForm.FindCascadeurDirectory() != null;
+        _styleHint.Enabled = false; _styleHint.Text = "Acrobatic"; _styleHint.ReadOnly = true;
+        _collisionCorrection.Checked = false; _collisionCorrection.Enabled = false;
+        var aiTip = new ToolTip();
+        aiTip.SetToolTip(_aiBlend, "AI blend uses all 16 generated poses across the chosen duration. Fixed Acrobatic style.");
+        aiTip.SetToolTip(_collisionCorrection, "Collision correction is not included in the AI blend model.");
+        aiTip.SetToolTip(_styleHint, "This converted model supports Acrobatic style. Free-text hints are not available.");
+        Disposed += (_, _) => aiTip.Dispose();
+        _aiBlend.Enabled = SlideAiBlend.Available;
+        _aiBlend.Checked = _aiBlend.Enabled;
+        _simpleBlend.Checked = !_aiBlend.Enabled;
+        aiTip.SetToolTip(_blendDurationMs, "Full transition duration: shorter plays faster, longer plays slower. AI resamples all 16 poses; it does not trim them. 500 ms gives 16 poses at 30 fps.");
 
         var statusBar = new TableLayoutPanel
         {
@@ -354,14 +373,20 @@ public sealed class AnimationMatchingModeControl : UserControl
         _alignPositionAndYaw.CheckedChanged += (_, _) => ReactivateSelected();
         _simpleBlend.CheckedChanged += (_, _) => { if (_simpleBlend.Checked) ReactivateSelected(); };
         _noBlend.CheckedChanged += (_, _) => { if (_noBlend.Checked) ReactivateSelected(); };
-        _aiBlend.CheckedChanged += (_, _) => { _styleHint.Enabled = _aiBlend.Checked; if (_aiBlend.Checked) ReactivateSelected(); };
+        _aiBlend.CheckedChanged += (_, _) => { _styleHint.Enabled = false; if (_aiBlend.Checked) ReactivateSelected(); };
         _styleHint.Leave += (_, _) => { if (_aiBlend.Checked) ReactivateSelected(); };
         _styleHint.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; ReactivateSelected(); } };
         _blendDurationMs.ValueChanged += (_, _) => ReactivateSelected();
+        _matchUp.CheckedChanged += (_, _) => ReactivateSelected();
+        _yawJitter.ValueChanged += (_, _) => ReactivateSelected();
+        _collisionCorrection.CheckedChanged += (_, _) => ReactivateSelected();
     }
 
     public (int start, int end)? Selection => _selection;
     public bool AlignPositionAndYaw => _alignPositionAndYaw.Checked;
+    public bool CollisionCorrectionEnabled => false;
+    public bool MatchUp => _matchUp.Checked;
+    public float YawJitterDegrees => (float)_yawJitter.Value;
     public bool BlendingEnabled => !_noBlend.Checked;
     public bool AiBlendEnabled => _aiBlend.Checked;
     public string StyleHint => _styleHint.Text.Trim();

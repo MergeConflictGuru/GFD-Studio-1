@@ -14,7 +14,7 @@ public sealed class AnimationMatchOptions
     public int QueryStride { get; set; } = 1;
 
     /// <summary>Initial projected-space frame window. The matcher doubles it as more results are requested.</summary>
-    public int ApproximateNeighborCount { get; set; } = 128;
+    public int ApproximateNeighborCount { get; set; } = 512;
 
     public int ResultCount { get; set; } = 32;
 
@@ -38,6 +38,7 @@ public sealed class AnimationMatchOptions
     public float OrientationWeight { get; set; } = 0.35f;
     public float RootSpeedWeight { get; set; } = 0.55f;
     public float RootYawRateWeight { get; set; } = 0.35f;
+    public float FootSupportWeight { get; set; } = 0.8f;
 
     /// <summary>
     /// Optional names for important bones. If empty or unmatched, all non-root bones are sampled.
@@ -68,6 +69,7 @@ public sealed class AnimationMatchOptions
         return string.Join("|", new[]
         {
             "canonical-skeleton-v" + CanonicalSkeleton.Version,
+            "foot-support-v1", F(FootSupportWeight),
             IndexStride.ToString(CultureInfo.InvariantCulture),
             ProjectionDimensions.ToString(CultureInfo.InvariantCulture),
             ProjectionSeed.ToString(CultureInfo.InvariantCulture),

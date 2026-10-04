@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using GFDLibrary;
 using GFDLibrary.Animations;
 using GFDLibrary.Models;
@@ -18,6 +18,15 @@ var stdout = Console.Out;
 try
 {
 Console.SetOut(TextWriter.Null);
+if (args.Length == 2 && args[0] == "--ai-knee-audit") { Environment.ExitCode = AiKneeAudit.Run(args[1]); return; }
+if (args.Length == 2 && args[0] == "--partial-cache-audit") { Environment.ExitCode = AnimationMatchAudit.PartialCache(args[1]); return; }
+if (args.Length == 2 && args[0] == "--knee-match-audit") { Environment.ExitCode = KneeMatchAudit.Run(args[1]); return; }
+if (args.Length == 2 && args[0] == "--slide-audit") { Environment.ExitCode = SlideBlendAudit.Run(args[1]); return; }
+if (args.Length == 2 && args[0] == "--placement-audit")
+{
+    Environment.ExitCode = PlacementAudit.Run(args[1]);
+    return;
+}
 if (args.Length == 2 && args[0] == "--ai-host-audit")
 {
     Environment.ExitCode = BlendAudit.Host(args[1]);
@@ -102,6 +111,7 @@ if (args.Contains("--batch", StringComparer.OrdinalIgnoreCase) ||
     args.Contains("--batch-report", StringComparer.OrdinalIgnoreCase))
 {
     Console.SetOut(TextWriter.Null);
+if (args.Length == 2 && args[0] == "--slide-audit") { Environment.ExitCode = SlideBlendAudit.Run(args[1]); return; }
     try
     {
         Environment.ExitCode = BatchRunner.Run(args);
@@ -433,6 +443,7 @@ Directory.CreateDirectory(outputDirectory);
 Console.WriteLine($"RetargetMode={(useLocalBindSpace ? "local-bind-space" : "legacy-world-space")}");
 if (args.Contains("--assembled")) {
     Console.SetOut(TextWriter.Null);
+if (args.Length == 2 && args[0] == "--slide-audit") { Environment.ExitCode = SlideBlendAudit.Run(args[1]); return; }
     var face = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\face\pc{danceId}_f1.GMD");
     var hair = Resource.Load<ModelPack>($@"M:\_P_backup\p5d modding\game\Image0\data\ps4\dance\player\p5\hair\pc{danceId}_{hairId}.GMD");
     var native = Resource.Load<AnimationPack>($@"M:\_P_backup\p5d modding\game\Image0\data\data\dance\player\p5\{danceId}\pc{danceId}_{nativeAnimationId}_p.GAP");
@@ -479,6 +490,7 @@ if (args.Contains("--assembled")) {
             }
         }
         Console.SetOut(TextWriter.Null);
+if (args.Length == 2 && args[0] == "--slide-audit") { Environment.ExitCode = SlideBlendAudit.Run(args[1]); return; }
     }
     if (args.Contains("--roundtrip")) {
         Console.SetOut(stdout);
@@ -520,6 +532,7 @@ if (args.Contains("--assembled")) {
             }
         }
         Console.SetOut(TextWriter.Null);
+if (args.Length == 2 && args[0] == "--slide-audit") { Environment.ExitCode = SlideBlendAudit.Run(args[1]); return; }
     }
     target = Resource.Load<ModelPack>(Path.Combine(outputDirectory, $"pc{danceId}_26_preview.GMD"));
     port = target.AnimationPack;

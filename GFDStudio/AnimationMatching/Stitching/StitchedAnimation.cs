@@ -24,6 +24,7 @@ public sealed class StitchedAnimation : IAnimationClip
     private readonly int _sourceFrame;
     private readonly int _candidateFrame;
     private readonly int _blendFrames;
+    private readonly float _yawVariation;
     private readonly Quaternion _yawAlignment;
     private readonly Vector3 _translationAlignment;
     private readonly Quaternion _matchYawAlignment;
@@ -41,6 +42,11 @@ public sealed class StitchedAnimation : IAnimationClip
         int candidateFrame,
         float blendSeconds,
         bool alignPositionAndYaw = true)
+        : this(source, sourceFrame, candidate, candidateFrame, blendSeconds, alignPositionAndYaw, false, 0)
+    { }
+
+    public StitchedAnimation(IAnimationClip source, int sourceFrame, IAnimationClip candidate,
+        int candidateFrame, float blendSeconds, bool alignPositionAndYaw, bool matchUp, float yawJitterDegrees)
     {
         if (Math.Abs(source.FramesPerSecond - candidate.FramesPerSecond) > 0.01f)
             throw new ArgumentException("StitchedAnimation expects clips at the same frame rate. Resample in the host adapter first.");
@@ -64,6 +70,12 @@ public sealed class StitchedAnimation : IAnimationClip
             _axisTranslations);
 
         AlignPositionAndYaw = alignPositionAndYaw;
+        MatchUp = matchUp;
+        if(!float.IsFinite(yawJitterDegrees) || yawJitterDegrees<0 || yawJitterDegrees>180)
+            throw new ArgumentOutOfRangeException(nameof(yawJitterDegrees));
+        YawJitterDegrees = yawJitterDegrees;
+        var variation = MathF.Sin(_sourceFrame*12.9898f+_candidateFrame*78.233f)*43758.5453f;
+        _yawVariation = ((variation-MathF.Floor(variation))*2-1)*yawJitterDegrees*MathF.PI/180;
         if (alignPositionAndYaw)
         {
             (_matchYawAlignment, _matchTranslationAlignment) = CalculateAlignment(
@@ -114,6 +126,9 @@ public sealed class StitchedAnimation : IAnimationClip
     public int BlendFrames => _blendFrames;
     public float BlendSeconds => _blendFrames / FramesPerSecond;
     public bool AlignPositionAndYaw { get; }
+    public bool CollisionCorrectionEnabled { get; set; } = true;
+    public bool MatchUp { get; }
+    public float YawJitterDegrees { get; }
     public int FrameCount => _sourceFrame + 1 + Math.Max(0, _candidate.FrameCount - _candidateFrame - 1);
     public IAnimationClip SourceClip => _source;
     public IAnimationClip CandidateClip => _candidate;
@@ -151,35 +166,22 @@ public sealed class StitchedAnimation : IAnimationClip
                 candidateName));
     }
 
-    private static (Quaternion yaw, Vector3 translation) CalculateAlignment(
-        IAnimationClip source,
-        int sourceFrame,
-        IAnimationClip candidate,
-        int candidateFrame)
+    private (Quaternion yaw, Vector3 translation) CalculateAlignment(
+        IAnimationClip source, int sourceFrame, IAnimationClip candidate, int candidateFrame)
     {
         var sourcePose = new BoneTransform[source.Skeleton.BoneCount];
         var candidatePose = new BoneTransform[candidate.Skeleton.BoneCount];
         source.SampleGlobalPose(sourceFrame, sourcePose);
         candidate.SampleGlobalPose(candidateFrame, candidatePose);
-        var sourceRoot = sourcePose[source.Skeleton.RootBoneIndex];
-        var candidateRoot = candidatePose[candidate.Skeleton.RootBoneIndex];
-        var yaw = CalculateYawAlignment(sourceRoot, candidateRoot);
-        var translation = sourceRoot.Position - Vector3.Transform(candidateRoot.Position, yaw);
-        return (yaw, translation);
-    }
-
-    private static Quaternion CalculateYawAlignment(
-        BoneTransform sourceRoot,
-        BoneTransform candidateRoot)
-    {
-        // Align the character's actual facing, not its travel direction. Strafes, backpedals,
-        // pivots, and turn-in-place clips intentionally allow those two directions to differ.
-        // Wrapping the delta selects the shortest yaw and avoids a sign flip at +/- PI during
-        // the optional crossfade.
-        var sourceYaw = PoseFeatureExtractor.YawRadians(sourceRoot.Rotation);
-        var candidateYaw = PoseFeatureExtractor.YawRadians(candidateRoot.Rotation);
-        var delta = PoseFeatureExtractor.WrapAngle(sourceYaw - candidateYaw);
-        return Quaternion.CreateFromAxisAngle(Vector3.UnitY, delta);
+        var sourceRoot=sourcePose[source.Skeleton.RootBoneIndex];
+        var candidateRoot=candidatePose[candidate.Skeleton.RootBoneIndex];
+        float Facing(IAnimationClip clip, BoneTransform[] pose) => AnimationFacing.YawRadians(
+            clip.Skeleton.BoneNames,i=>pose[i].Position,pose[clip.Skeleton.RootBoneIndex].Rotation);
+        var delta=PoseFeatureExtractor.WrapAngle(Facing(source,sourcePose)-Facing(candidate,candidatePose)+_yawVariation);
+        var yaw=Quaternion.CreateFromAxisAngle(Vector3.UnitY,delta);
+        var destination=sourceRoot.Position;
+        if(!MatchUp) destination.Y=candidateRoot.Position.Y;
+        return (yaw,destination-Vector3.Transform(candidateRoot.Position,yaw));
     }
 
     public void SampleGlobalPose(int frameIndex, Span<BoneTransform> destination)

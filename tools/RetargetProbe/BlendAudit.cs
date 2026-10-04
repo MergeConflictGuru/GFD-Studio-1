@@ -70,8 +70,8 @@ internal static class BlendAudit
                 ai.Checked=true;
                 if (no.Checked || simple.Checked) throw new Exception("Blend radio group is not exclusive");
                 var hint=(TextBox)type.GetField("_styleHint",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(control)!;
-                hint.Text="Stumble, then fall to one knee";
-                if (!hint.Enabled) throw new Exception("AI style hint is disabled");
+                
+                if (hint.Enabled || hint.Text != "Acrobatic") throw new Exception("AI fixed style display is wrong");
                 var timer=new System.Windows.Forms.Timer {Interval=700};
                 timer.Tick+=(_,_)=>
                 {

@@ -224,7 +224,11 @@ namespace GFDStudio.GUI.Forms
 
         private ModelPack GetAnimationMatchingTargetModelPack()
         {
-            return mCharacterBrowserCurrentModelPack ?? ModelEditorTreeView?.TopNode?.Data as ModelPack;
+            var pack = mCharacterBrowserCurrentModelPack ?? ModelEditorTreeView?.TopNode?.Data as ModelPack;
+            if (pack?.Model != null && ReferenceEquals(pack, mCharacterBrowserCurrentModelPack))
+                GfdAnimationClipBaker.SetTargetRetargetResources(pack.Model,
+                    GetSelectedCharacterBrowserBodyPath(), mCharacterBrowserRoot);
+            return pack;
         }
 
         private static string GetAnimationMatchCharacterDirectory(string root, string path)

@@ -190,9 +190,15 @@ public sealed class AnimationMatchingModeController : IDisposable
         _shownResultCount = results.Count;
         _view.SetResults(results);
         _view.SetCanLoadMore(results.Count >= _options.ResultCount);
-        _view.SetStatus(results.Count == 0
+        SetSearchStatus(results.Count == 0
             ? "No matches found · no similarity cutoff"
             : $"Showing {results.Count:N0} matches · scroll for deeper search");
+    }
+
+    private void SetSearchStatus(string message)
+    {
+        var notice = _database?.IndexNotice;
+        _view.SetStatus(string.IsNullOrEmpty(notice) ? message : notice + " · " + message);
     }
 
     private async void OnLoadMoreRequested(object? sender, EventArgs e)
@@ -226,7 +232,7 @@ public sealed class AnimationMatchingModeController : IDisposable
 
             var canSearchDeeper = expandedResults.Count >= targetCount && newResults.Length > 0;
             _view.SetCanLoadMore(canSearchDeeper);
-            _view.SetStatus(canSearchDeeper
+            SetSearchStatus(canSearchDeeper
                 ? $"Showing {_shownResultCount:N0} matches · scroll for deeper search"
                 : $"Showing {_shownResultCount:N0} matches · search exhausted");
         }
@@ -301,7 +307,7 @@ public sealed class AnimationMatchingModeController : IDisposable
                 if (_database is not null)
                 {
                     _databaseContextSignature = contextSignature;
-                    _view.SetStatus($"Loaded {_database.SampleCount:N0} indexed poses from cache");
+                    SetSearchStatus($"Loaded {_database.SampleCount:N0} indexed poses from cache");
                     return;
                 }
 
@@ -369,10 +375,11 @@ public sealed class AnimationMatchingModeController : IDisposable
         var seconds = _view.BlendSeconds;
         var stitched = new StitchedAnimation(source, result.SourceFrame, result.Candidate,
             result.CandidateFrame, !ai && _view.BlendingEnabled ? seconds : 0f,
-            _view.AlignPositionAndYaw);
+            _view.AlignPositionAndYaw, _view.MatchUp, _view.YawJitterDegrees);
+        stitched.CollisionCorrectionEnabled = _view.CollisionCorrectionEnabled;
         _stitched = ai ? null : stitched;
         if (!ai) { _host.PreviewAnimation(stitched, result.SourceFrame); return; }
-        _view.SetStatus("Generating AI blend in Cascadeur…");
+        SetSearchStatus("Generating AI blend…");
         try
         {
             var generated = await _host.GenerateAiBlendAsync(stitched, seconds, _view.StyleHint, token);
@@ -380,6 +387,7 @@ public sealed class AnimationMatchingModeController : IDisposable
             _stitched = generated;
             _view.SetCombinedTimeline(generated.FrameCount, result.SourceFrame);
             _host.PreviewAnimation(generated, result.SourceFrame);
+            SetSearchStatus("AI blend ready");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (generation == _blendGeneration) _view.SetStatus("AI blend: " + ex.Message); }

@@ -9,4 +9,5 @@
   <ItemGroup>
     <Reference Include="GFDLibrary"><HintPath>../../GFDLibrary/bin/x64/Release/net8.0/GFDLibrary.dll</HintPath></Reference>
   </ItemGroup>
+<ItemGroup><Compile Include="..\..\SLIDE\gfd_audit\*.cs" Link="Slide\%(Filename)%(Extension)" /></ItemGroup>
 </Project>

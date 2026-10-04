@@ -31,7 +31,7 @@
 
   <ItemGroup>
     <Compile Include="$(IntermediateOutputPath)Generated\CommitNumber.g.cs" />
-    <None Include="..\tools\CascadeurBridge\*.py" Link="app_data\cascadeur\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+
 
     <None Update="app_data\icons\folder.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -134,4 +134,15 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\SLIDE\cpp\SlideAi.vcxproj" ReferenceOutputAssembly="false" />
+    <Compile Include="..\SLIDE\gfd\*.cs" Link="AnimationMatching\Integration\Slide\%(Filename)%(Extension)" />
+    <None Include="..\SLIDE\runtime\pose_inbetweening.onnx" Link="app_data\slide\pose_inbetweening.onnx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\SLIDE\runtime\ONNXRuntime-*.txt" Link="app_data\slide\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\SLIDE\runtime\point_rig.json" Link="app_data\slide\point_rig.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\SLIDE\runtime\onnxruntime.dll" Link="onnxruntime.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopySlideNative" AfterTargets="Build">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\..\tmp\SLIDE\native\$(Configuration)\SlideAi.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

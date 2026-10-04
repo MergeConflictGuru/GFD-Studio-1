@@ -90,6 +90,12 @@ public sealed class AnimationSearchDatabase : IDisposable
     public int DescriptorDimensions { get; }
     public int SampleCount => _mapped?.SampleCount ?? _addresses!.Length;
     public bool IsMemoryMapped => _mapped is not null;
+    public int MissingAnimationCount { get; internal set; }
+    public int NewAnimationCount { get; internal set; }
+    public string IndexNotice => MissingAnimationCount == 0 && NewAnimationCount == 0 ? string.Empty
+        : $"Index incomplete: {MissingAnimationCount:N0} missing and {NewAnimationCount:N0} new animations";
+    public bool IsSampleAvailable(int sampleIndex)
+        => Corpus.Clips[GetAddress(sampleIndex).ClipIndex] is not AnimationIndexCache.MissingIndexedAnimation;
 
     // Kept for legacy cache upgrade code. A v3 memory-mapped database intentionally has no
     // materialized multi-gigabyte float arrays.

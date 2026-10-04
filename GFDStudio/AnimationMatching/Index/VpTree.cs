@@ -97,12 +97,12 @@ public sealed class VpTree
     public int Count => _count;
     internal int Root => _root;
 
-    public int[] FindNearest(ReadOnlySpan<float> query, int count)
+    public int[] FindNearest(ReadOnlySpan<float> query, int count, Func<int, bool>? accept = null)
     {
         if (query.Length != _dimensions) throw new ArgumentException("Query dimensions do not match.");
         count = Math.Clamp(count, 1, Math.Max(1, Count));
         var best = new List<Pair>(count);
-        Search(_root, query, count, best);
+        Search(_root, query, count, best, accept);
         best.Sort(static (a, b) => a.DistanceSquared.CompareTo(b.DistanceSquared));
         var result = new int[best.Count];
         for (var i = 0; i < best.Count; i++) result[i] = best[i].Index;
@@ -219,7 +219,7 @@ public sealed class VpTree
         }
     }
 
-    private void Search(int node, ReadOnlySpan<float> query, int k, List<Pair> best)
+    private void Search(int node, ReadOnlySpan<float> query, int k, List<Pair> best, Func<int, bool>? accept)
     {
         if ((uint)node >= (uint)Count)
             return;
@@ -229,7 +229,7 @@ public sealed class VpTree
             throw new InvalidDataException("AniMatch VP-tree point index is outside the search database.");
 
         var d2 = DistanceSquared(pointIndex, query);
-        InsertBest(best, new Pair(pointIndex, d2), k);
+        if (accept is null || accept(pointIndex)) InsertBest(best, new Pair(pointIndex, d2), k);
         var d = MathF.Sqrt(d2);
         var tau = best.Count < k ? float.PositiveInfinity : MathF.Sqrt(best[^1].DistanceSquared);
 
@@ -241,13 +241,13 @@ public sealed class VpTree
         var threshold = GetNodeThreshold(node);
         if (d < threshold)
         {
-            if (d - tau <= threshold) Search(near, query, k, best);
-            if (d + tau >= threshold) Search(far, query, k, best);
+            if (d - tau <= threshold) Search(near, query, k, best, accept);
+            if (d + tau >= threshold) Search(far, query, k, best, accept);
         }
         else
         {
-            if (d + tau >= threshold) Search(far, query, k, best);
-            if (d - tau <= threshold) Search(near, query, k, best);
+            if (d + tau >= threshold) Search(far, query, k, best, accept);
+            if (d - tau <= threshold) Search(near, query, k, best, accept);
         }
     }
 

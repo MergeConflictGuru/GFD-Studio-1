@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Numerics;
@@ -11,7 +11,7 @@ using GFDLibrary.Models;
 
 // Load the built application so this probe exercises the actual matcher adapter and features,
 // without copying their implementation into a test project or opening the application UI.
-internal static class AnimationMatchAudit
+internal static partial class AnimationMatchAudit
 {
     private delegate void PoseSample<T>(int frame, Span<T> pose);
     private static Type clipType = null!;
