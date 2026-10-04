@@ -884,25 +884,21 @@ namespace GFDStudio.GUI.Controls
         {
             if ( disposing )
             {
-                // Every showroom pane owns a separate GL context.
-                MakeCurrent();
                 components?.Dispose();
-
-                mGuideArrow?.Dispose();
-                mShaderRegistry.mDefaultShader?.Dispose();
-                mShaderRegistry.mGuideArrowShader?.Dispose();
-
                 mUpdateTimer?.Stop();
                 mUpdateTimer?.Dispose();
-
-                if ( mThumbnailFramebuffer != 0 )
+                // A hidden thumbnail control can lose its handle before its parent is disposed.
+                if ( IsHandleCreated )
                 {
                     MakeCurrent();
-                    DisposeThumbnailRenderTarget();
+                    mGuideArrow?.Dispose();
+                    mShaderRegistry.mDefaultShader?.Dispose();
+                    mShaderRegistry.mGuideArrowShader?.Dispose();
+                    if ( mThumbnailFramebuffer != 0 )
+                        DisposeThumbnailRenderTarget();
+                    if ( mIsModelLoaded )
+                        UnloadModel();
                 }
-
-                if ( mIsModelLoaded )
-                    UnloadModel();
             }
 
             base.Dispose( disposing );

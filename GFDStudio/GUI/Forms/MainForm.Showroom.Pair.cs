@@ -6,11 +6,9 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using GFDLibrary;
 using GFDLibrary.Animations;
-using GFDLibrary.Models;
 using GFDStudio.AnimationMatching.Core;
 using GFDStudio.AnimationMatching.Integration;
 using GFDStudio.AnimationMatching.Search;
-using GFDStudio.AnimationMatching.Stitching;
 using GFDStudio.GUI.Controls;
 
 namespace GFDStudio.GUI.Forms;
@@ -22,24 +20,18 @@ public partial class MainForm
     private AnimationViewPane mPairSecondPane;
     private Label mPairFirstCaption;
     private Label mPairStatus;
-    private CheckBox mPairInterpolate;
-    private NumericUpDown mPairBlendSeconds;
-    private Button mPairExport;
-    private Button mPairExportParts;
-    private Button mPairInputs;
     private Animation[] mPairAnimations;
     private GfdAnimationClip[] mPairMatchClips;
     private GfdTargetAnimationClip[] mPairFullClips;
     private CharacterAnimationEntry[] mPairEntries;
     private ModelPack mPairModel;
-    private StitchedAnimation mPairBlend;
     private (int start, int end)? mPairFirstRange;
     private CancellationTokenSource mPairWork;
     private string mPairKey;
     private int mPairSavedSplitter;
     private int mPairSavedPanelMinimum;
-    private bool mPairShowingBlend;
     private bool mPairLoading;
+    private bool mPairResultInAniMatch;
     private bool mPairUpdatingRange;
     private bool IsPairedShowroom => mPairedShowroom?.Visible == true;
 
@@ -138,7 +130,6 @@ public partial class MainForm
             mPairEntries = entries;
             mPairModel = model;
             mPairKey = key;
-            mPairBlend = null;
             mPairFirstRange = null;
             mAnimationMatchTimeline.Enabled = true;
             var animations = mPairAnimations;
@@ -158,9 +149,7 @@ public partial class MainForm
             mPairUpdatingRange = false;
             mPairSecondPane.LoadClip(model, second.Animation, entries[1].DisplayName, mPairMatchClips[1].FrameCount);
             mPairFirstCaption.Text = "1 · " + entries[0].DisplayName;
-            mPairShowingBlend = false;
             mAnimationMatchButton.Enabled = true;
-            SetPairResultAvailable(false);
             mPairStatus.Text = "Highlight ranges, then Match · no highlights: end → start";
             SetCharacterBrowserStatus("Two views: first two selected animations only; Match ignores the library.");
         }
@@ -205,46 +194,20 @@ public partial class MainForm
         mPairedShowroom.Controls.Add(mPairSecondPane, 1, 0);
         var actions = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, ColumnCount = 7, RowCount = 1, Margin = Padding.Empty,
+            Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty,
             Padding = Padding.Empty, Font = SystemFonts.MessageBoxFont, BackColor = Theme.DarkBG, ForeColor = Color.Gainsboro
         };
-        foreach (int width in new[] { 70, 54, 91, 60, 64, 60 })
-            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, width));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        mPairInputs = PairButton("Inputs", (_, _) => ShowPairInputs());
-        mPairInterpolate = new CheckBox { Text = "Blend (s)", Checked = true, Dock = DockStyle.Fill, AutoSize = false, Margin = new Padding(2, 0, 0, 0) };
-        mPairBlendSeconds = new NumericUpDown
-        { DecimalPlaces = 2, Minimum = 0, Maximum = 10, Increment = .05m, Value = .35m, Dock = DockStyle.Fill, Margin = new Padding(2, 3, 2, 3), AccessibleName = "Interpolation seconds" };
-        mPairBlendSeconds.ValueChanged += (_, _) => InvalidatePairBlend();
-        mPairInterpolate.CheckedChanged += (_, _) => InvalidatePairBlend();
-        mPairExport = PairButton("Export…", async (_, _) => await ExportPairBlendAsync(false));
-        mPairExportParts = PairButton("Parts…", async (_, _) => await ExportPairBlendAsync(true));
         mPairStatus = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(5, 0, 0, 0) };
         var tips = new ToolTip(components);
-        tips.SetToolTip(mPairBlendSeconds, "Interpolation duration in seconds");
-        tips.SetToolTip(mPairInterpolate, "Blend the poses across the chosen transition");
-        tips.SetToolTip(mPairInputs, "Return to the two input animations to edit their highlights");
-        tips.SetToolTip(mPairExportParts, "Export the two cut animation parts");
         tips.SetToolTip(mAnimationMatchTimeline, "Drag to highlight eligible frames; right-click to clear");
         tips.SetToolTip(mPairSecondPane.Timeline, "Drag to highlight eligible frames; right-click to clear");
-        actions.Controls.Add(mPairInputs, 1, 0);
-        actions.Controls.Add(mPairInterpolate, 2, 0);
-        actions.Controls.Add(mPairBlendSeconds, 3, 0);
-        actions.Controls.Add(mPairExport, 4, 0);
-        actions.Controls.Add(mPairExportParts, 5, 0);
-        actions.Controls.Add(mPairStatus, 6, 0);
+        actions.Controls.Add(mPairStatus, 1, 0);
         mPairedShowroom.Controls.Add(actions, 0, 1);
         mPairedShowroom.SetColumnSpan(actions, 2);
         splitContainer_Main.Panel1.Controls.Add(mPairedShowroom);
         EnableShowroomGapDrop(mPairedShowroom);
-    }
-
-    private static Button PairButton(string text, EventHandler click)
-    {
-        var button = new Button { Text = text, Dock = DockStyle.Fill, Margin = new Padding(1),
-            FlatStyle = FlatStyle.Flat, Font = SystemFonts.MessageBoxFont, ForeColor = Color.Gainsboro, BackColor = Color.FromArgb(45, 45, 48) };
-        button.Click += click;
-        return button;
     }
 
     private void ShowPairedShowroom()
@@ -275,6 +238,7 @@ public partial class MainForm
     private void HidePairedShowroom()
     {
         CancelPairWork();
+        mPairResultInAniMatch = false;
         mPairLoading = false;
         mAnimationMatchButton.Enabled = true;
         if (!IsPairedShowroom) return;
@@ -293,8 +257,6 @@ public partial class MainForm
         splitContainer_LeftSide.BringToFront();
         mAnimationMatchTimeline.Enabled = true;
         mPairKey = null;
-        mPairBlend = null;
-        mPairShowingBlend = false;
     }
 
     private void CancelPairWork() { mPairWork?.Cancel(); }
@@ -303,21 +265,11 @@ public partial class MainForm
     {
         CancelPairWork();
         mAnimationMatchButton.Enabled = !mPairLoading;
-        if ((mPairBlend != null || mPairShowingBlend) && mPairStatus != null)
-            mPairStatus.Text = "Selections changed · press Match again";
-        mPairBlend = null;
-        if (mPairExport != null) SetPairResultAvailable(false);
-    }
-
-    private void SetPairResultAvailable(bool available)
-    {
-        mPairExport.Enabled = mPairExportParts.Enabled = available;
-        mPairInputs.Enabled = mPairShowingBlend;
     }
 
     private void PairFirstRangeChanged()
     {
-        if (!IsPairedShowroom || mPairUpdatingRange || mPairShowingBlend) return;
+        if (!IsPairedShowroom || mPairUpdatingRange) return;
         mPairFirstRange = mAnimationMatchTimeline.Selection;
         InvalidatePairBlend();
     }
@@ -332,7 +284,6 @@ public partial class MainForm
     private void ShowPairInputs()
     {
         if (!IsPairedShowroom || mPairAnimations == null) return;
-        mPairShowingBlend = false;
         mAnimationMatchTimeline.Enabled = true;
         LoadPairFirstAnimation(mPairAnimations[0]);
         mPairFirstCaption.Text = "1 · " + mPairEntries[0].DisplayName;
@@ -341,7 +292,6 @@ public partial class MainForm
         mAnimationMatchTimeline.TransitionFrame = -1;
         mAnimationMatchTimeline.SetSelection(mPairFirstRange);
         mPairUpdatingRange = false;
-        mPairInputs.Enabled = false;
     }
 
     private async Task MatchPairedShowroomAsync()
@@ -356,35 +306,21 @@ public partial class MainForm
         var secondRange = mPairSecondPane.Timeline.Selection;
         var clips = mPairMatchClips;
         var fullClips = mPairFullClips;
-        var model = mPairModel;
-        float seconds = mPairInterpolate.Checked ? (float)mPairBlendSeconds.Value : 0;
+
         mPairStatus.Text = "Matching only these two ranges…";
         mAnimationMatchButton.Enabled = false;
         try
         {
-            var output = await Task.Run(() =>
-            {
-                var result = AnimationPairMatcher.Match(clips[0], clips[1], firstRange, secondRange, token);
-                var stitched = new StitchedAnimation(fullClips[0], result.SourceFrame, fullClips[1], result.CandidateFrame, seconds);
-                var baked = GfdAnimationClipBaker.Bake(stitched, model.Model, model.Version, token);
-                return (result, stitched, baked);
-            }, token);
+            var result = await Task.Run(() =>
+                AnimationPairMatcher.Match(clips[0], clips[1], firstRange, secondRange, token), token);
             if (IsDisposed || token.IsCancellationRequested || !ReferenceEquals(mPairWork, work) || !IsPairedShowroom) return;
-            mPairBlend = output.stitched;
-            mPairShowingBlend = true;
-            mAnimationMatchTimeline.Enabled = false;
-            LoadPairFirstAnimation(output.baked);
-            mPairUpdatingRange = true;
-            mAnimationMatchTimeline.FrameCount = output.stitched.FrameCount;
-            mAnimationMatchTimeline.TransitionFrame = output.result.SourceFrame;
-            mPairUpdatingRange = false;
-            mPairSecondPane.Viewer.AnimationPlayback = AnimationPlaybackState.Paused;
-            mPairSecondPane.SeekFrame(output.result.CandidateFrame);
-            mPairSecondPane.Timeline.TransitionFrame = output.result.CandidateFrame;
-            mPairFirstCaption.Text = "Blend preview · Inputs returns to animation 1";
-            mPairStatus.Text = $"f{output.result.SourceFrame} → f{output.result.CandidateFrame} · {output.result.Score:0.0}% · {seconds:0.00}s";
-            SetPairResultAvailable(true);
-            SetCharacterBrowserStatus("Two-animation blend ready: " + mPairStatus.Text);
+            var pairResult = result with { Candidate = fullClips[1] };
+            mPairStatus.Text = $"f{result.SourceFrame} → f{result.CandidateFrame} · {result.Score:0.0}%";
+            HidePairedShowroom();
+            mPairResultInAniMatch = true;
+            ShowAnimationMatchingResults();
+            EnsureAnimationMatchingController();
+            mAnimationMatchController.ShowPairResult(fullClips[0], pairResult);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -397,15 +333,4 @@ public partial class MainForm
         }
     }
 
-    private async Task ExportPairBlendAsync(bool parts)
-    {
-        if (mPairBlend == null) return;
-        try
-        {
-            if (parts) await ((IGfdAnimationMatchingHost)this).ExportAnimationPartsAsync(mPairBlend, CancellationToken.None);
-            else await ((IGfdAnimationMatchingHost)this).ExportAnimationAsync(mPairBlend, CancellationToken.None);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { mPairStatus.Text = "Export failed: " + ex.Message; }
-    }
 }

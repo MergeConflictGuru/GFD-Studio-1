@@ -93,7 +93,21 @@ namespace GFDStudio.GUI.Forms
                 splitContainer_LeftSide.SplitterDistance = splitContainer_LeftSide.Height - 58;
 
             mAnimationMatchView = new AnimationMatchingModeControl { Visible = false };
-            mAnimationMatchView.BackRequested += (_, _) => HideAnimationMatchingResults();
+            mAnimationMatchView.BackRequested += (_, _) =>
+            {
+                if (mPairResultInAniMatch)
+                {
+                    ++mAnimationMatchPreviewGeneration;
+                    mAnimationMatchController?.Dispose();
+                    mAnimationMatchController = null;
+                    mAnimationMatchControllerContext = null;
+                    mPairResultInAniMatch = false;
+                    ShowPairedShowroom();
+                    ShowPairInputs();
+                    mAnimationMatchCurrentSource = mPairMatchClips[0];
+                }
+                else HideAnimationMatchingResults();
+            };
             mAnimationMatchView.BrowseRequested += (_, _) =>
             {
                 ChooseCharacterBrowserRoot();
@@ -148,6 +162,7 @@ namespace GFDStudio.GUI.Forms
         private async void AnimationMatchButton_Click(object sender, EventArgs e)
         {
             if (mPairLoading) return;
+            if (mPairResultInAniMatch) { mAnimationMatchView.BeginSearch(); return; }
             if (IsPairedShowroom) { await MatchPairedShowroomAsync(); return; }
             if (!ModelViewControl.Instance.IsAnimationLoaded || mAnimationMatchCurrentSource == null)
             {

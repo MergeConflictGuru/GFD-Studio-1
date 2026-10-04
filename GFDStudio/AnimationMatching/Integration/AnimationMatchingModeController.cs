@@ -24,6 +24,7 @@ public sealed class AnimationMatchingModeController : IDisposable
     private AnimationSearchDatabase? _database;
     private string? _databaseContextSignature;
     private IAnimationClip? _sourceForResults;
+    private AnimationMatchResult? _pairResult;
     private IAnimationClip? _stitched;
     private CancellationTokenSource? _blendWork;
     private int _blendGeneration;
@@ -83,8 +84,21 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.SetStatus("Character Browser is still scanning animations; wait until it is ready before matching.");
     }
 
+    public void ShowPairResult(IAnimationClip source, AnimationMatchResult result)
+    {
+        RestartWork();
+        ResetResultStream();
+        _pairResult = result;
+        _sourceForResults = source;
+        _stitched = null;
+        _view.SetSource(source.DisplayName, source.FrameCount, source.FramesPerSecond);
+        _view.SetResults(new[] { result });
+        _view.ActivatePairResult(result);
+    }
+
     public void SyncSourceFromHost()
     {
+        _pairResult = null;
         var source = CurrentSource;
         if (source is null) return;
         _sourceForResults = source;
@@ -99,6 +113,7 @@ public sealed class AnimationMatchingModeController : IDisposable
     /// </summary>
     public Task PreloadExistingIndexAsync()
     {
+        if (_pairResult is not null) return Task.CompletedTask;
         if (!CorpusReady)
             return Task.CompletedTask;
 
@@ -116,6 +131,7 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async void OnSearchRequested(object? sender, EventArgs e)
     {
+        if (_pairResult is not null) { OnCandidateActivated(sender, _pairResult); return; }
         if (!CorpusReady)
         {
             ReportCorpusNotReady();
@@ -149,6 +165,7 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async void OnReindexRequested(object? sender, EventArgs e)
     {
+        if (_pairResult is not null) { _view.SetStatus("This match uses only the two selected animations."); return; }
         if (!CorpusReady)
         {
             ReportCorpusNotReady();
@@ -395,6 +412,7 @@ public sealed class AnimationMatchingModeController : IDisposable
 
     private async void OnCandidateOpened(object? sender, AnimationMatchResult result)
     {
+        if (_pairResult is not null) { OnCandidateActivated(sender, result); return; }
         var tail = new TailAnimation(result.Candidate, result.CandidateFrame);
         RestartWork();
         var cancellationToken = _work.Token;

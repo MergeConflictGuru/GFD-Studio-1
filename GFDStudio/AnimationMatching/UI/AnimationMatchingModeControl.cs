@@ -609,6 +609,13 @@ public sealed class AnimationMatchingModeControl : UserControl
         LoadMoreRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    public void ActivatePairResult(AnimationMatchResult result)
+    {
+        _filter.Clear();
+        _selectedResult = result;
+        CandidateActivated?.Invoke(this, result);
+    }
+
     private void ReactivateSelected()
     {
         if (_selectedResult is not null)
