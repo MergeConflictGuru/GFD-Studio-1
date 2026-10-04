@@ -31,12 +31,13 @@ internal sealed class AnimationViewPane : UserControl
         ForeColor = Color.Gainsboro;
         Font = SystemFonts.MessageBoxFont;
         var transport = new TableLayoutPanel
-        { Dock = DockStyle.Bottom, Height = 58, ColumnCount = 3, RowCount = 2, Margin = Padding.Empty, Padding = new Padding(2, 6, 2, 2) };
+        { Dock = DockStyle.Bottom, Height = 72, ColumnCount = 3, RowCount = 2, Margin = Padding.Empty, Padding = new Padding(2, 6, 2, 2) };
         transport.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         transport.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
         transport.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
-        transport.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        transport.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         transport.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        Timeline.BindPlayback(mSeek);
         transport.Controls.Add(Timeline, 0, 0);
         transport.SetColumnSpan(Timeline, 3);
         transport.Controls.Add(mSeek, 0, 1);

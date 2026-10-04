@@ -46,7 +46,7 @@ public partial class MainForm
         stack.Dispose();
         table.RowCount = 3;
         table.RowStyles.Clear();
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         table.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         table.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         table.ColumnStyles.Clear();
@@ -65,6 +65,7 @@ public partial class MainForm
         table.Controls.Add(mTimelineMarksControl, 0, 2);
         table.SetColumnSpan(mTimelineMarksControl, 4);
         mAnimationTrackBar.TickStyle = TickStyle.None;
+        mAnimationMatchTimeline.BindPlayback(mAnimationTrackBar);
         table.ResumeLayout();
         foreach (Control button in new Control[] { mAnimationPlaybackButton, mAnimationStopButton })
         {
@@ -84,7 +85,7 @@ public partial class MainForm
 
     private void SetCompactTransportHeight(bool hasMarks)
     {
-        int height = hasMarks ? 78 : 58;
+        int height = hasMarks ? 92 : 72;
         if (splitContainer_LeftSide.Panel2MinSize == height - 4) return;
         splitContainer_LeftSide.Panel2MinSize = height - 4;
         if (splitContainer_LeftSide.Height > height + splitContainer_LeftSide.Panel1MinSize)

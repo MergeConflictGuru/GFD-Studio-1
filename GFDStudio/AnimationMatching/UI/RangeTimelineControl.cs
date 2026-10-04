@@ -1,11 +1,44 @@
 using System;
 using System.Drawing;
+using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace GFDStudio.AnimationMatching.UI;
 
 public sealed class RangeTimelineControl : Control
 {
+    private TrackBar _playback;
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ThumbRectangle { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, ref ThumbRectangle rectangle);
+
+    public void BindPlayback(TrackBar playback)
+    {
+        if (_playback != null)
+        {
+            _playback.ValueChanged -= PlaybackChanged;
+            _playback.SizeChanged -= PlaybackChanged;
+        }
+        _playback = playback;
+        _playback.ValueChanged += PlaybackChanged;
+        _playback.SizeChanged += PlaybackChanged;
+        Invalidate();
+    }
+
+    private void PlaybackChanged(object sender, EventArgs e) => Invalidate();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && _playback != null)
+        {
+            _playback.ValueChanged -= PlaybackChanged;
+            _playback.SizeChanged -= PlaybackChanged;
+        }
+        base.Dispose(disposing);
+    }
+
     private int _frameCount = 1;
     private int _dragStart = -1;
     private int _selectionStart = -1;
@@ -89,7 +122,9 @@ public sealed class RangeTimelineControl : Control
     {
         base.OnPaint(e);
         var g = e.Graphics;
-        var track = new Rectangle(8, Height / 2 - 5, Math.Max(1, Width - 16), 10);
+        int top = _playback == null ? 0 : 17;
+        int stripHeight = Math.Max(10, Height - top);
+        var track = new Rectangle(8, top + stripHeight / 2 - 5, Math.Max(1, Width - 16), 10);
         using var trackBrush = new SolidBrush(Color.FromArgb(70, ForeColor));
         g.FillRectangle(trackBrush, track);
 
@@ -98,21 +133,31 @@ public sealed class RangeTimelineControl : Control
             var x1 = FrameToX(s.start);
             var x2 = FrameToX(s.end);
             using var selectionBrush = new SolidBrush(Color.FromArgb(110, SystemColors.Highlight));
-            g.FillRectangle(selectionBrush, Math.Min(x1, x2), 5, Math.Max(2, Math.Abs(x2 - x1)), Height - 10);
+            g.FillRectangle(selectionBrush, Math.Min(x1, x2), top + 2, Math.Max(2, Math.Abs(x2 - x1)), stripHeight - 4);
         }
         else
         {
             // The first pane defaults to its end; the second pane defaults to its start.
             var x = FrameToX(Math.Clamp(DefaultFrame ?? FrameCount - 1, 0, FrameCount - 1));
             using var implicitPen = new Pen(Color.FromArgb(180, ForeColor), 2f);
-            g.DrawLine(implicitPen, x, 5, x, Height - 5);
+            g.DrawLine(implicitPen, x, top + 2, x, Height - 2);
         }
 
         if (_transitionFrame >= 0)
         {
             var x = FrameToX(Math.Clamp(_transitionFrame, 0, FrameCount - 1));
             using var boundaryPen = new Pen(Color.Gold, 2f);
-            g.DrawLine(boundaryPen, x, 1, x, Height - 1);
+            g.DrawLine(boundaryPen, x, top, x, Height - 1);
+        }
+        if (_playback != null && _playback.IsHandleCreated && IsHandleCreated)
+        {
+            var thumb = new ThumbRectangle();
+            SendMessage(_playback.Handle, 0x419, IntPtr.Zero, ref thumb); // TBM_GETTHUMBRECT
+            int center = PointToClient(_playback.PointToScreen(new Point((thumb.Left + thumb.Right) / 2, 0))).X;
+            string time = (_playback.Value / 1000d).ToString("0.000", CultureInfo.InvariantCulture) + " s";
+            var size = TextRenderer.MeasureText(time, Font, Size.Empty, TextFormatFlags.NoPadding);
+            int left = Math.Clamp(center - size.Width / 2, 0, Math.Max(0, Width - size.Width));
+            TextRenderer.DrawText(g, time, Font, new Point(left, 0), ForeColor, TextFormatFlags.NoPadding);
         }
     }
 
