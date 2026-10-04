@@ -17,7 +17,6 @@ public partial class MainForm
     private readonly ConditionalWeakTable<Animation, List<TimelineMark>> mTimelineMarks = new();
     private readonly Dictionary<string, List<TimelineMark>> mBrowserTimelineMarks = new(StringComparer.OrdinalIgnoreCase);
     private TimelineMarksControl mTimelineMarksControl;
-    private Button mAddTimelineMarkButton;
     private ToolStripMenuItem mAddTimelineMarkMenuItem;
     private ToolStripMenuItem mExportTimelineMarksMenuItem;
 
@@ -46,25 +45,6 @@ public partial class MainForm
         mTimelineMarksControl.MarkEdited += mark => EditTimelineMark(mark, mark.Milliseconds);
         mTimelineMarksControl.MarkRemoved += mark => { GetTimelineMarks()?.Remove(mark); RefreshTimelineMarks(); };
 
-        mAddTimelineMarkButton = new Button
-        {
-            Text = "+ Mark", Name = "AddTimelineMark", Dock = DockStyle.Fill,
-            Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 9f),
-            Margin = Padding.Empty, FlatStyle = FlatStyle.Flat, TabStop = false
-        };
-        mAddTimelineMarkButton.Click += (_, _) => AddTimelineMarkAtPlayhead();
-        // Keep marks the same width as the seek bar; put the button beneath transport controls.
-        tableLayoutPanel_AnimationControls.RowCount = 2;
-        tableLayoutPanel_AnimationControls.RowStyles.Clear();
-        tableLayoutPanel_AnimationControls.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        tableLayoutPanel_AnimationControls.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        tableLayoutPanel_AnimationControls.Controls.Add(mTimelineMarksControl, 0, 1);
-        tableLayoutPanel_AnimationControls.Controls.Add(mAddTimelineMarkButton, 1, 1);
-        tableLayoutPanel_AnimationControls.SetColumnSpan(mAddTimelineMarkButton, 3);
-        splitContainer_LeftSide.Panel2MinSize = 80;
-        if (splitContainer_LeftSide.Height > 90)
-            splitContainer_LeftSide.SplitterDistance = splitContainer_LeftSide.Height - 86;
-
         mAddTimelineMarkMenuItem = new ToolStripMenuItem("Add timeline mark…", null, (_, _) => AddTimelineMarkAtPlayhead())
         { ShortcutKeys = Keys.Control | Keys.Shift | Keys.M };
         mExportTimelineMarksMenuItem = new ToolStripMenuItem("Export timeline marks…", null, (_, _) => ExportTimelineMarks());
@@ -86,7 +66,12 @@ public partial class MainForm
         mTimelineMarksControl.Marks = marks;
         mTimelineMarksControl.DurationMilliseconds = mAnimationTrackBar.Maximum;
         mTimelineMarksControl.Enabled = marks != null;
-        mAddTimelineMarkButton.Enabled = mAddTimelineMarkMenuItem.Enabled = marks != null;
+        mAddTimelineMarkMenuItem.Enabled = marks != null;
+        bool hasMarks = marks?.Count > 0;
+        mTimelineMarksControl.Visible = hasMarks;
+        if (tableLayoutPanel_AnimationControls.RowCount >= 3)
+            tableLayoutPanel_AnimationControls.RowStyles[2].Height = hasMarks ? 20 : 0;
+        SetCompactTransportHeight(hasMarks);
         mExportTimelineMarksMenuItem.Enabled = marks?.Count > 0;
         mTimelineMarksControl.Invalidate();
     }

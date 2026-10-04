@@ -145,8 +145,10 @@ namespace GFDStudio.GUI.Forms
             }
         }
 
-        private void AnimationMatchButton_Click(object sender, EventArgs e)
+        private async void AnimationMatchButton_Click(object sender, EventArgs e)
         {
+            if (mPairLoading) return;
+            if (IsPairedShowroom) { await MatchPairedShowroomAsync(); return; }
             if (!ModelViewControl.Instance.IsAnimationLoaded || mAnimationMatchCurrentSource == null)
             {
                 SetCharacterBrowserStatus("Load an animation before matching");
@@ -361,6 +363,7 @@ namespace GFDStudio.GUI.Forms
 
         private void HandleAnimationMatchTimelineSelectionChanged(object sender, EventArgs e)
         {
+            PairFirstRangeChanged();
             var selection = mAnimationMatchTimeline?.Selection;
             if (selection is not { } range)
             {

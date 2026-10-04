@@ -330,8 +330,8 @@ namespace GFDStudio.GUI.Forms
             mCharacterAnimationListBox.DrawMode = DrawMode.OwnerDrawFixed;
             mCharacterAnimationListBox.DrawItem += CharacterAnimationListBox_DrawItem;
             mCharacterAnimationListBox.SelectionMode = SelectionMode.MultiExtended;
-            // A blend slot is applied as one overlay at a time. Normal animations
-            // remain multi-selectable for repacking.
+            // A blend slot is applied as one overlay at a time. The first two selected
+            // normal animations open paired views; all selected entries can be repacked.
             mCharacterBlendAnimationListBox.SelectionMode = SelectionMode.One;
 
             // Keep keyboard browsing completely frictionless: normal Up/Down selection changes
@@ -2207,9 +2207,13 @@ namespace GFDStudio.GUI.Forms
             RefreshCharacterBlendAnimationList();
             ModelViewControl.Instance.LoadModel(modelPack);
 
-            var animationEntry = mCharacterAnimationListBox.SelectedItem as CharacterAnimationEntry;
-            if (animationEntry != null)
-                _ = LoadSelectedCharacterBrowserAnimationAsync(animationEntry, applyBlend: true);
+            if (!TryLoadPairedShowroomSelection())
+            {
+                HidePairedShowroom();
+                var animationEntry = mCharacterAnimationListBox.SelectedItem as CharacterAnimationEntry;
+                if (animationEntry != null)
+                    _ = LoadSelectedCharacterBrowserAnimationAsync(animationEntry, applyBlend: true);
+            }
 
             var selectedNames = string.Join(" + ", selectedParts.Select(part => part.Part.ToString().ToLowerInvariant()));
             SetCharacterBrowserStatus($"Character: {selectedNames}");
@@ -2274,6 +2278,7 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             SaveCharacterBrowserSelectionSettings();
+            if (IsPairedShowroom) return;
             _ = ApplySelectedCharacterBrowserBlendAsync();
         }
 
@@ -2329,6 +2334,8 @@ namespace GFDStudio.GUI.Forms
                 return;
 
             SaveCharacterBrowserSelectionSettings();
+            if (TryLoadPairedShowroomSelection()) return;
+            HidePairedShowroom();
             if (mCharacterAnimationListBox.SelectedItem is not CharacterAnimationEntry entry)
             {
                 BeginCharacterBrowserAnimationLoad();
@@ -2345,6 +2352,8 @@ namespace GFDStudio.GUI.Forms
                 mCharacterBrowserCurrentModelPack?.Model == null)
                 return;
 
+            if (TryLoadPairedShowroomSelection()) return;
+            HidePairedShowroom();
             _ = LoadSelectedCharacterBrowserAnimationAsync(entry, applyBlend: true);
         }
 

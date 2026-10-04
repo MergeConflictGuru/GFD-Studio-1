@@ -763,11 +763,11 @@ namespace GFDStudio.GUI.Forms
             {
                 case AnimationPlaybackState.Stopped:
                 case AnimationPlaybackState.Paused:
-                    mAnimationPlaybackButton.Text = "Play";
+                    mAnimationPlaybackButton.Text = "▶";
                     break;
             
                 case AnimationPlaybackState.Playing:
-                    mAnimationPlaybackButton.Text = "Pause";
+                    mAnimationPlaybackButton.Text = "Ⅱ";
                     break;
             }
         }

@@ -21,6 +21,7 @@ public sealed class RangeTimelineControl : Control
         ForeColor = SystemColors.ControlLightLight;
     }
 
+    public int? DefaultFrame { get; set; }
     public int FrameCount { get => _frameCount; set { _frameCount = Math.Max(1, value); ClearSelection(); Invalidate(); } }
     public (int start, int end)? Selection => _selectionStart < 0 ? null : (Math.Min(_selectionStart, _selectionEnd), Math.Max(_selectionStart, _selectionEnd));
     public int TransitionFrame { get => _transitionFrame; set { _transitionFrame = value; Invalidate(); } }
@@ -101,8 +102,8 @@ public sealed class RangeTimelineControl : Control
         }
         else
         {
-            // Implicit selection: last frame.
-            var x = FrameToX(FrameCount - 1);
+            // The first pane defaults to its end; the second pane defaults to its start.
+            var x = FrameToX(Math.Clamp(DefaultFrame ?? FrameCount - 1, 0, FrameCount - 1));
             using var implicitPen = new Pen(Color.FromArgb(180, ForeColor), 2f);
             g.DrawLine(implicitPen, x, 5, x, Height - 5);
         }

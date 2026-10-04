@@ -884,6 +884,8 @@ namespace GFDStudio.GUI.Controls
         {
             if ( disposing )
             {
+                // Every showroom pane owns a separate GL context.
+                MakeCurrent();
                 components?.Dispose();
 
                 mGuideArrow?.Dispose();

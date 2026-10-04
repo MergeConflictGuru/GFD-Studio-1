@@ -363,7 +363,7 @@ public sealed class AnimationSearchDatabase : IDisposable
             descriptor[d] = (descriptor[d] - Mean[d]) * InvStd[d] * DimensionWeights[d];
     }
 
-    private static void ComputeNormalization(float[] packed, int count, int dimensions, float[] mean, float[] invStd)
+    internal static void ComputeNormalization(float[] packed, int count, int dimensions, float[] mean, float[] invStd)
     {
         if (count == 0) return;
         for (var sample = 0; sample < count; sample++)
@@ -390,7 +390,7 @@ public sealed class AnimationSearchDatabase : IDisposable
         }
     }
 
-    private static void NormalizeInPlace(float[] packed, int count, int dimensions, float[] mean, float[] invStd, float[] dimensionWeights)
+    internal static void NormalizeInPlace(float[] packed, int count, int dimensions, float[] mean, float[] invStd, float[] dimensionWeights)
     {
         for (var sample = 0; sample < count; sample++)
         {

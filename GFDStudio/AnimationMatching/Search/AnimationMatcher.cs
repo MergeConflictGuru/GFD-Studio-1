@@ -178,7 +178,7 @@ public sealed class AnimationMatcher
         return true;
     }
 
-    private static (float total, float pose, float velocity, float orientation) ExactDistance(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
+    internal static (float total, float pose, float velocity, float orientation) ExactDistance(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
     {
         var pose = 0f;
         var velocity = 0f;
@@ -203,6 +203,6 @@ public sealed class AnimationMatcher
         return ((pose + velocity + orientation + root) * inv, pose * inv, velocity * inv, orientation * inv);
     }
 
-    private static float DistanceToScore(float distance)
+    internal static float DistanceToScore(float distance)
         => 100f * MathF.Exp(-MathF.Max(0f, distance));
 }

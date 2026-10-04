@@ -60,6 +60,10 @@ public partial class MainForm
             return;
         }
 
+        HidePairedShowroom();
+        mCharacterBrowserRestoringSelection = true;
+        try { mCharacterAnimationListBox.ClearSelected(); }
+        finally { mCharacterBrowserRestoringSelection = false; }
         var (generation, token) = BeginCharacterBrowserAnimationLoad();
         ++mAnimationMatchPreviewGeneration;
         // Cancel searches/previews for the previous source before changing the query.
