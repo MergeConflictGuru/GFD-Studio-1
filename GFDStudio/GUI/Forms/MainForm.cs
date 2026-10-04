@@ -62,6 +62,7 @@ namespace GFDStudio.GUI.Forms
             InitializeState();
             InitializeEvents();
             InitializeAnimationMatching();
+            InitializeTimelineMarks();
 
             Theme.Apply( this );
             retainColorValuesToolStripMenuItem.Checked = settings.RetainMaterialColors;

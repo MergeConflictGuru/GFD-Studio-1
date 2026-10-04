@@ -2433,6 +2433,7 @@ namespace GFDStudio.GUI.Forms
 
                 SetCharacterBrowserAnimationAutoLoaded(entry, prepared.AutoLoadedPackPaths);
                 // LoadAnimation(reset: true) starts playback automatically in ModelViewControl.
+                RememberBrowserTimelineMarks(prepared.Animation, entry);
                 ModelViewControl.Instance.LoadAnimation(prepared.Animation, true);
                 SetCharacterBrowserStatus(
                     string.IsNullOrWhiteSpace(prepared.RetargetNote)
