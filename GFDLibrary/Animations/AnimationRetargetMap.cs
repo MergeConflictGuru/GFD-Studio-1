@@ -166,10 +166,23 @@ namespace GFDLibrary.Animations
         private static Dictionary<string, Node> CreateNodeLookup( IEnumerable<Node> nodes )
         {
             var lookup = new Dictionary<string, Node>( StringComparer.OrdinalIgnoreCase );
-            foreach ( var node in nodes )
+            var nodeArray = nodes.ToArray();
+            foreach (var node in nodeArray)
+                lookup.TryAdd(node.Name, node);
+            // Haru omits the separator after L/R in Royal twist-bone names.
+            // Keep real names first; aliases only fill absent spellings.
+            foreach (var node in nodeArray)
             {
-                if ( !lookup.ContainsKey( node.Name ) )
-                    lookup.Add( node.Name, node );
+                foreach (var side in new[] { "L", "R" })
+                foreach (var limb in new[] { "ThighTwist", "ForeTwist" })
+                {
+                    var compact = "Bip01 " + side + limb;
+                    var spaced = "Bip01 " + side + " " + limb;
+                    if (node.Name.StartsWith(compact, StringComparison.OrdinalIgnoreCase))
+                        lookup.TryAdd(spaced + node.Name.Substring(compact.Length), node);
+                    else if (node.Name.StartsWith(spaced, StringComparison.OrdinalIgnoreCase))
+                        lookup.TryAdd(compact + node.Name.Substring(spaced.Length), node);
+                }
             }
 
             return lookup;
