@@ -50,6 +50,7 @@ namespace GFDStudio.GUI.Forms
             public int Index { get; init; }
             public string DisplayName { get; init; }
             public string DefinitionHash { get; init; }
+            public bool IsDroppedForSession { get; init; }
             public IReadOnlyCollection<string> BodyTargetNames { get; init; }
             public bool IsAutoLoaded { get; set; }
             public override string ToString() => IsAutoLoaded
@@ -863,9 +864,17 @@ namespace GFDStudio.GUI.Forms
                     // Scan paths are already ordered. Appending keeps each UI callback cheap;
                     // the complete lists are sorted and refreshed once at the end of the scan.
                     destination.Add(entry);
-                    if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
+                    if (!mDroppedAnimationPacks.ContainsKey(Path.GetFullPath(entry.PackPath)) &&
+                        IsCharacterBrowserAnimationForSelectedBody(entry) &&
                         (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
-                        destinationListBox.Items.Add(entry);
+                    {
+                        int firstDropped = destinationListBox.Items.Count;
+                        if (mDroppedAnimationPacks.Count > 0)
+                            while (firstDropped > 0 &&
+                                   destinationListBox.Items[firstDropped - 1] is CharacterAnimationEntry item && item.IsDroppedForSession)
+                                firstDropped--;
+                        destinationListBox.Items.Insert(firstDropped, entry);
+                    }
                 }
             }
             finally
@@ -1577,6 +1586,11 @@ namespace GFDStudio.GUI.Forms
                 mCharacterAnimationListBox.EndUpdate();
                 mCharacterBlendAnimationListBox.EndUpdate();
             }
+            if (mDroppedAnimationPacks.Count > 0)
+            {
+                RefreshCharacterAnimationList();
+                RefreshCharacterBlendAnimationList();
+            }
         }
 
         private static int FindCharacterBrowserAnimationInsertIndex(
@@ -1662,10 +1676,14 @@ namespace GFDStudio.GUI.Forms
                 mCharacterAnimationListBox.Items.Clear();
                 foreach (var entry in mCharacterAnimations)
                 {
-                    if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
+                    if (!mDroppedAnimationPacks.ContainsKey(Path.GetFullPath(entry.PackPath)) &&
+                        IsCharacterBrowserAnimationForSelectedBody(entry) &&
                         CharacterBrowserMatches(entry.DisplayName, filter))
                         mCharacterAnimationListBox.Items.Add(entry);
                 }
+                foreach (var entry in mDroppedAnimationPacks.Values.SelectMany(entries => entries))
+                    if (entry.Kind != CharacterAnimationListKind.BlendAnimation)
+                        mCharacterAnimationListBox.Items.Add(entry);
 
                 foreach (var selectedEntry in selectedEntries)
                 {
@@ -1779,10 +1797,14 @@ namespace GFDStudio.GUI.Forms
                 mCharacterBlendAnimationListBox.Items.Clear();
                 foreach (var entry in mCharacterBlendAnimations)
                 {
-                    if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
+                    if (!mDroppedAnimationPacks.ContainsKey(Path.GetFullPath(entry.PackPath)) &&
+                        IsCharacterBrowserAnimationForSelectedBody(entry) &&
                         CharacterBrowserMatches(entry.DisplayName, filter))
                         mCharacterBlendAnimationListBox.Items.Add(entry);
                 }
+                foreach (var entry in mDroppedAnimationPacks.Values.SelectMany(entries => entries))
+                    if (entry.Kind == CharacterAnimationListKind.BlendAnimation)
+                        mCharacterBlendAnimationListBox.Items.Add(entry);
 
                 foreach (var selectedEntry in selectedEntries)
                 {
@@ -2376,6 +2398,7 @@ namespace GFDStudio.GUI.Forms
         private CharacterBrowserAnimationPreparationContext
             CaptureCharacterBrowserAnimationPreparationContext(CharacterAnimationEntry entry, bool loadAllGapCompanions = false)
         {
+            loadAllGapCompanions |= entry.IsDroppedForSession && entry.Kind == CharacterAnimationListKind.Animation;
             var modelEntries = mCharacterModels.ToArray();
             var targetModelPack = mCharacterBrowserCurrentModelPack ??
                                   ModelEditorTreeView?.TopNode?.Data as ModelPack;
@@ -3353,6 +3376,7 @@ namespace GFDStudio.GUI.Forms
                 var hairSelection = mCharacterHairListBox?.SelectedItem as CharacterModelEntry;
                 var animationSelections = mCharacterAnimationListBox?.SelectedItems
                     .Cast<CharacterAnimationEntry>()
+                    .Where(entry => !entry.IsDroppedForSession)
                     .Select(SerializeCharacterBrowserAnimationSelection) ??
                     Enumerable.Empty<string>();
                 var blendSelection = mCharacterBlendAnimationListBox?.SelectedItem as CharacterAnimationEntry;
@@ -3364,7 +3388,7 @@ namespace GFDStudio.GUI.Forms
                     SerializeCharacterBrowserModelSelection(faceSelection),
                     SerializeCharacterBrowserModelSelection(hairSelection),
                     string.Join(",", animationSelections),
-                    blendSelection == null
+                    blendSelection == null || blendSelection.IsDroppedForSession
                         ? string.Empty
                         : SerializeCharacterBrowserAnimationSelection(blendSelection)
                 };

@@ -17,6 +17,61 @@ namespace GFDStudio.GUI.Forms;
 public partial class MainForm
 {
     private readonly ConditionalWeakTable<Control, object> mShowroomDropControls = new();
+    private readonly Dictionary<string, CharacterAnimationEntry[]> mDroppedAnimationPacks = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task RegisterDroppedAnimationPackAsync(string file, CancellationToken token)
+    {
+        string fullName = Path.GetFullPath(file);
+        if (!mDroppedAnimationPacks.ContainsKey(fullName))
+        {
+            var entries = await Task.Run(() =>
+            {
+                var pack = Resource.Load<AnimationPack>(fullName);
+                var result = new List<CharacterAnimationEntry>();
+                void Add(IReadOnlyList<Animation> animations, CharacterAnimationListKind kind, string label)
+                {
+                    if (animations == null) return;
+                    for (int i = 0; i < animations.Count; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (animations[i] == null) continue;
+                        result.Add(new CharacterAnimationEntry {
+                            PackPath = fullName, Kind = kind, Index = i, IsDroppedForSession = true,
+                            DisplayName = Path.GetFileName(fullName) + label + $" #{i + 1} (dropped)"
+                        });
+                    }
+                }
+                Add(pack.Animations, CharacterAnimationListKind.Animation, "");
+                Add(pack.BlendAnimations, CharacterAnimationListKind.BlendAnimation, " [blend]");
+                Add(pack.METAPHOR_AnimArray3, CharacterAnimationListKind.ExtraAnimation, " [extra]");
+                return result.ToArray();
+            }, token);
+            token.ThrowIfCancellationRequested();
+            if (IsDisposed) return;
+            mDroppedAnimationPacks.TryAdd(fullName, entries);
+        }
+        RefreshCharacterAnimationList();
+        RefreshCharacterBlendAnimationList();
+    }
+
+    private void SelectDroppedAnimationPack(string file)
+    {
+        var entries = mDroppedAnimationPacks[Path.GetFullPath(file)];
+        var entry = entries.FirstOrDefault(item => item.Kind == CharacterAnimationListKind.Animation);
+        if (entry == null || mCharacterAnimationListBox == null) return;
+        bool restoring = mCharacterBrowserRestoringSelection;
+        mCharacterBrowserRestoringSelection = true;
+        try
+        {
+            int index = mCharacterAnimationListBox.Items.IndexOf(entry);
+            if (index >= 0)
+            {
+                mCharacterAnimationListBox.SetSelected(index, true);
+                mCharacterAnimationListBox.TopIndex = index;
+            }
+        }
+        finally { mCharacterBrowserRestoringSelection = restoring; }
+    }
 
     private void EnableShowroomGapDrop(Control control)
     {
@@ -85,6 +140,9 @@ public partial class MainForm
             if (IsDisposed || !IsCurrentCharacterBrowserAnimationLoad(generation, token)) return;
             if (prepared.Animation == null) throw new InvalidDataException("The GAP has no normal animations.");
 
+            await RegisterDroppedAnimationPackAsync(file, token);
+            if (IsDisposed || !IsCurrentCharacterBrowserAnimationLoad(generation, token)) return;
+            SelectDroppedAnimationPack(file);
             RememberBrowserTimelineMarks(prepared.Animation, entry);
             mAnimationMatchPreviewLoad = true;
             try { ModelViewControl.Instance.LoadAnimation(prepared.Animation, true); }
