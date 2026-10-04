@@ -103,6 +103,8 @@ public partial class MainForm
     {
         var entries = mCharacterAnimationListBox.SelectedItems.Cast<CharacterAnimationEntry>().Take(2).ToArray();
         if (entries.Length < 2) return false;
+        if (mCharacterBrowserApplyingSavedSelection && !mCharacterBrowserModelDiscoveryComplete)
+            return true;
         var model = GetAnimationMatchingTargetModelPack();
         if (model?.Model == null) return false;
         var key = string.Join("|", entries.Select(GetCorrectedAnimationMatchClipId));

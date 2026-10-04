@@ -192,6 +192,7 @@ namespace GFDStudio.GUI.Forms
         private bool mCharacterBrowserScanComplete;
         private bool mCharacterBrowserRestoringSelection;
         private bool mCharacterBrowserApplyingSavedSelection;
+        private bool mCharacterBrowserModelDiscoveryComplete = true;
         private bool mCharacterBrowserRefreshingModelParts;
         private bool mCharacterBrowserSelectionRestoredForScan;
         private string[] mCharacterBrowserSavedSelection;
@@ -572,6 +573,7 @@ namespace GFDStudio.GUI.Forms
         {
             BeginCharacterBrowserAnimationLoad();
             mCharacterBrowserScanComplete = false;
+            mCharacterBrowserModelDiscoveryComplete = false;
             mCharacterBrowserScanCancellation?.Cancel();
             mCharacterBrowserScanCancellation?.Dispose();
             mCharacterBrowserScanCancellation = new CancellationTokenSource();
@@ -677,6 +679,10 @@ namespace GFDStudio.GUI.Forms
                     mCharacterBrowserRestoringSelection = false;
                 }
 
+                // Saved clips may use a different character than the selected preview model.
+                // Wait until that source rig is discoverable before considering them loaded.
+                mCharacterBrowserModelDiscoveryComplete = true;
+                mCharacterBrowserSelectionRestoredForScan = false;
                 if (IsPathBasedCharacterBrowserSelection())
                     RestoreCharacterBrowserSelection();
 
@@ -2459,6 +2465,8 @@ namespace GFDStudio.GUI.Forms
             CharacterAnimationEntry entry,
             bool applyBlend)
         {
+            if (mCharacterBrowserApplyingSavedSelection && !mCharacterBrowserModelDiscoveryComplete)
+                return;
             var (generation, token) = BeginCharacterBrowserAnimationLoad();
             SetCharacterBrowserStatus("Loading animation…");
             try
