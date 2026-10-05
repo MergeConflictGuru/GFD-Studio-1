@@ -136,7 +136,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SLIDE\cpp\SlideAi.vcxproj" ReferenceOutputAssembly="false" />
-    <Compile Include="..\SLIDE\gfd\*.cs" Link="AnimationMatching\Integration\Slide\%(Filename)%(Extension)" />
+    <Compile Include="..\SLIDE\gfd\*.cs" Exclude="..\SLIDE\gfd\SlideAiBlend.cs" Link="AnimationMatching\Integration\Slide\%(Filename)%(Extension)" />
     <None Include="..\SLIDE\runtime\pose_inbetweening.onnx" Link="app_data\slide\pose_inbetweening.onnx" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\SLIDE\runtime\ONNXRuntime-*.txt" Link="app_data\slide\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\SLIDE\runtime\point_rig.json" Link="app_data\slide\point_rig.json" CopyToOutputDirectory="PreserveNewest" />

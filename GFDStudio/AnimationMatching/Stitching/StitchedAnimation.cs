@@ -14,7 +14,7 @@ namespace GFDStudio.AnimationMatching.Stitching;
 /// Semantic/file roots above the motion root remain in the target model's axis space; unlabelled
 /// intermediate axis helpers are anchored to the source handoff so they cannot reintroduce a
 /// world-space offset at the cut.
-/// Optional crossfade blends global transforms, then the candidate owns the rest of the clip. A
+/// Optional crossfade blends parent-space transforms, then the candidate owns the rest of the clip. A
 /// short motion-subtree continuity guard also prevents a hard aligned cut from visibly popping.
 /// </summary>
 public sealed class StitchedAnimation : IAnimationClip
@@ -24,6 +24,7 @@ public sealed class StitchedAnimation : IAnimationClip
     private readonly int _sourceFrame;
     private readonly int _candidateFrame;
     private readonly int _blendFrames;
+    private readonly int[] _blendOrder;
     private readonly float _yawVariation;
     private readonly Quaternion _yawAlignment;
     private readonly Vector3 _translationAlignment;
@@ -58,6 +59,7 @@ public sealed class StitchedAnimation : IAnimationClip
         _sourceFrame = Math.Clamp(sourceFrame, 0, source.FrameCount - 1);
         _candidateFrame = Math.Clamp(candidateFrame, 0, candidate.FrameCount - 1);
         _blendFrames = Math.Max(0, (int)MathF.Round(blendSeconds * source.FramesPerSecond));
+        _blendOrder = HierarchyPoseBlend.BuildOrder(Skeleton);
         _motionSubtree = StitchAlignment.BuildMotionSubtree(Skeleton);
         _axisAncestors = StitchAlignment.BuildAxisAncestors(Skeleton);
         _axisAnchors = new BoneTransform[Skeleton.BoneCount];
@@ -213,8 +215,7 @@ public sealed class StitchedAnimation : IAnimationClip
                     var sourceIndex = Math.Min(_source.FrameCount - 1, frameIndex);
                     _source.SampleGlobalPose(sourceIndex, sourcePose);
                     var t = SmoothStep(blendOffset / (float)_blendFrames);
-                    for (var i = 0; i < Skeleton.BoneCount; i++)
-                        destination[i] = BoneTransform.Lerp(sourcePose[i], candidatePose[i], t);
+                    HierarchyPoseBlend.Blend(Skeleton, _blendOrder, sourcePose, candidatePose, t, destination);
                 }
                 finally { pool.Return(sourceBuffer, clearArray: false); }
             }
