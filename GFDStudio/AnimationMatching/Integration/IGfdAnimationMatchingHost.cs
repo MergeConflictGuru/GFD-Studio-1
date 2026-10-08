@@ -15,7 +15,7 @@ public interface IGfdAnimationMatchingHost
     IReadOnlyList<IAnimationClip> SearchableAnimations { get; }
 
     /// <summary>Displays a clip in the existing left model viewer and seeks to frame zero.</summary>
-    void PreviewAnimation(IAnimationClip clip, int transitionFrame = -1);
+    void PreviewAnimation(IAnimationClip clip, int transitionFrame = -1, int blendFrames = 0);
 
     /// <summary>Loads a clip as the new main animation without stitching it to the previous source.</summary>
     Task OpenAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken);

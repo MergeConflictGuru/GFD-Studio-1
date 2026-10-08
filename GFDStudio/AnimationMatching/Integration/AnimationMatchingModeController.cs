@@ -30,7 +30,7 @@ public sealed class AnimationMatchingModeController : IDisposable
     private int _blendGeneration;
     private CancellationTokenSource? _work;
     private Task? _cachePreload;
-    private readonly SemaphoreSlim _thumbnailGate = new(1, 1);
+    private readonly SemaphoreSlim _thumbnailGate = new(4, 4);
     private AnimationMatcher? _matcher;
     private IAnimationClip? _searchSource;
     private int? _searchRangeStart;
@@ -388,14 +388,15 @@ public sealed class AnimationMatchingModeController : IDisposable
         _blendWork?.Cancel();
         _blendWork = new CancellationTokenSource();
         var token = _blendWork.Token;
-        var ai = _view.AiBlendEnabled;
         var seconds = _view.BlendSeconds;
+        var ai = _view.AiBlendEnabled && seconds > 0;
         var stitched = new StitchedAnimation(source, result.SourceFrame, result.Candidate,
             result.CandidateFrame, !ai && _view.BlendingEnabled ? seconds : 0f,
             _view.AlignPositionAndYaw, _view.MatchUp, _view.YawJitterDegrees);
         stitched.CollisionCorrectionEnabled = _view.CollisionCorrectionEnabled;
+        stitched.TrajectoryPersistence = _view.TrajectoryPersistence;
         _stitched = ai ? null : stitched;
-        if (!ai) { _host.PreviewAnimation(stitched, result.SourceFrame); return; }
+        if (!ai) { _host.PreviewAnimation(stitched, result.SourceFrame, stitched.BlendFrames); return; }
         SetSearchStatus("Generating AI blend…");
         try
         {
@@ -403,7 +404,7 @@ public sealed class AnimationMatchingModeController : IDisposable
             if (generation != _blendGeneration || token.IsCancellationRequested) return;
             _stitched = generated;
             _view.SetCombinedTimeline(generated.FrameCount, result.SourceFrame);
-            _host.PreviewAnimation(generated, result.SourceFrame);
+            _host.PreviewAnimation(generated, result.SourceFrame, (int)MathF.Round(seconds * source.FramesPerSecond));
             SetSearchStatus("AI blend ready");
         }
         catch (OperationCanceledException) { }
@@ -480,14 +481,14 @@ public sealed class AnimationMatchingModeController : IDisposable
         var entered = false;
         try
         {
-            await _thumbnailGate.WaitAsync();
+            await _thumbnailGate.WaitAsync(request.CancellationToken);
             entered = true;
             var scene = await _host.RenderCandidateThumbnailAsync(
                 request.Result.Candidate,
                 request.Result.CandidateFrame,
                 request.Width,
                 request.Height,
-                CancellationToken.None);
+                request.CancellationToken);
             request.Complete(scene);
         }
         catch { request.Complete(null); }
@@ -520,3 +521,4 @@ public sealed class AnimationMatchingModeController : IDisposable
         _view.ThumbnailRequested -= OnThumbnailRequested;
     }
 }
+

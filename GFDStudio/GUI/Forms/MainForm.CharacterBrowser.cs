@@ -342,6 +342,8 @@ namespace GFDStudio.GUI.Forms
             mCharacterFaceListBox.KeyDown += CharacterBrowserList_KeyDown;
             mCharacterHairListBox.KeyDown += CharacterBrowserList_KeyDown;
             mCharacterAnimationListBox.KeyDown += CharacterBrowserList_KeyDown;
+            mCharacterAnimationListBox.MouseDoubleClick += PinCharacterAnimation;
+            mCharacterBlendAnimationListBox.MouseDoubleClick += PinCharacterAnimation;
             mCharacterBlendAnimationListBox.KeyDown += CharacterBrowserList_KeyDown;
 
             splitContainer_Main.Panel2.Controls.Add(mCharacterBrowserPanel);
@@ -533,6 +535,23 @@ namespace GFDStudio.GUI.Forms
 
         private void CharacterBrowserList_KeyDown(object sender, KeyEventArgs e)
         {
+            if (sender is ListBox list && (list == mCharacterAnimationListBox || list == mCharacterBlendAnimationListBox))
+            {
+                if (e.Control && e.KeyCode == Keys.A && list.SelectionMode != SelectionMode.One)
+                {
+                    var restoring = mCharacterBrowserRestoringSelection;
+                    mCharacterBrowserRestoringSelection = true;
+                    try { for (int i=0;i<list.Items.Count;i++) list.SetSelected(i,true); }
+                    finally { mCharacterBrowserRestoringSelection = restoring; }
+                    CharacterAnimationListBox_SelectedIndexChanged(list,EventArgs.Empty);
+                    e.Handled=true; e.SuppressKeyPress=true; return;
+                }
+                if (e.KeyCode == Keys.Delete)
+                {
+                    RemoveSelectedDroppedAnimations(list);
+                    e.Handled=true; e.SuppressKeyPress=true; return;
+                }
+            }
             // Ctrl+B toggles the browser even while one of the lists owns focus.
             if (e.Control && e.KeyCode == Keys.B)
             {
@@ -872,7 +891,7 @@ namespace GFDStudio.GUI.Forms
                     destination.Add(entry);
                     if (!mDroppedAnimationPacks.ContainsKey(Path.GetFullPath(entry.PackPath)) &&
                         IsCharacterBrowserAnimationForSelectedBody(entry) &&
-                        (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
+                        (IsPinnedAnimation(entry) || destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
                     {
                         int firstDropped = destinationListBox.Items.Count;
                         if (mDroppedAnimationPacks.Count > 0)
@@ -1577,7 +1596,7 @@ namespace GFDStudio.GUI.Forms
                         comparer);
                     destination.Insert(destinationIndex, entry);
                     if (IsCharacterBrowserAnimationForSelectedBody(entry) &&
-                        (destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
+                        (IsPinnedAnimation(entry) || destinationAddDirectly || CharacterBrowserMatches(entry.DisplayName, destinationFilter)))
                     {
                         var listBoxIndex = FindCharacterBrowserAnimationInsertIndex(
                             destinationListBox,
@@ -1684,11 +1703,12 @@ namespace GFDStudio.GUI.Forms
                 {
                     if (!mDroppedAnimationPacks.ContainsKey(Path.GetFullPath(entry.PackPath)) &&
                         IsCharacterBrowserAnimationForSelectedBody(entry) &&
-                        CharacterBrowserMatches(entry.DisplayName, filter))
+                        (IsPinnedAnimation(entry) || CharacterBrowserMatches(entry.DisplayName, filter)))
                         mCharacterAnimationListBox.Items.Add(entry);
                 }
                 foreach (var entry in mDroppedAnimationPacks.Values.SelectMany(entries => entries))
-                    if (entry.Kind != CharacterAnimationListKind.BlendAnimation)
+                    if (entry.Kind != CharacterAnimationListKind.BlendAnimation &&
+                        (IsPinnedAnimation(entry) || CharacterBrowserMatches(entry.DisplayName, filter)))
                         mCharacterAnimationListBox.Items.Add(entry);
 
                 foreach (var selectedEntry in selectedEntries)
@@ -1805,11 +1825,12 @@ namespace GFDStudio.GUI.Forms
                 {
                     if (!mDroppedAnimationPacks.ContainsKey(Path.GetFullPath(entry.PackPath)) &&
                         IsCharacterBrowserAnimationForSelectedBody(entry) &&
-                        CharacterBrowserMatches(entry.DisplayName, filter))
+                        (IsPinnedAnimation(entry) || CharacterBrowserMatches(entry.DisplayName, filter)))
                         mCharacterBlendAnimationListBox.Items.Add(entry);
                 }
                 foreach (var entry in mDroppedAnimationPacks.Values.SelectMany(entries => entries))
-                    if (entry.Kind == CharacterAnimationListKind.BlendAnimation)
+                    if (entry.Kind == CharacterAnimationListKind.BlendAnimation &&
+                        (IsPinnedAnimation(entry) || CharacterBrowserMatches(entry.DisplayName, filter)))
                         mCharacterBlendAnimationListBox.Items.Add(entry);
 
                 foreach (var selectedEntry in selectedEntries)
@@ -2414,6 +2435,14 @@ namespace GFDStudio.GUI.Forms
             var selectedHairPath = GetSelectedCharacterBrowserHairPath();
             var sourceModelEntry = FindCharacterModelForAnimation(
                 entry.PackPath, modelEntries, targetModelPath);
+            // Exported GAPs can carry their source skeleton beside the files.
+            // A selected model is not evidence of the skeleton a dropped GAP uses.
+            var declaredRig = Path.Combine(Path.GetDirectoryName(entry.PackPath), "animation-rig.GMD");
+            var hasDeclaredRig = File.Exists(declaredRig);
+            if (hasDeclaredRig)
+                sourceModelEntry = new CharacterModelEntry {
+                    Path = declaredRig, DisplayName = "Animation source rig", Part = CharacterModelPart.Body
+                };
             if (loadAllGapCompanions && sourceModelEntry == null)
             {
                 var characterId = ExtractCharacterId(entry.PackPath);
@@ -2435,11 +2464,11 @@ namespace GFDStudio.GUI.Forms
                 SelectedHairPath = selectedHairPath,
                 BrowserRoot = mCharacterBrowserRoot,
                 UseLocalBindSpace = settings.UseLocalBindSpaceRetargeting,
-                CanUseWithoutRetarget = sourceModelEntry != null &&
+                CanUseWithoutRetarget = (hasDeclaredRig ? AreSamePath(declaredRig, targetModelPath) : sourceModelEntry != null &&
                     targetModelPack?.Model != null &&
                     CanUseCharacterBrowserAnimationWithoutRetarget(
                         entry.PackPath, sourceModelEntry, selectedFacePath, selectedHairPath,
-                        modelEntries, targetModelPath),
+                        modelEntries, targetModelPath)),
                 SourceModelEntry = sourceModelEntry,
                 ModelEntries = modelEntries
             };
@@ -3469,3 +3498,4 @@ namespace GFDStudio.GUI.Forms
         }
     }
 }
+

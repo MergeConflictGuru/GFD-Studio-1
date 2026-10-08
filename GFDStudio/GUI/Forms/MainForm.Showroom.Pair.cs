@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Threading;
@@ -28,12 +29,24 @@ public partial class MainForm
     private (int start, int end)? mPairFirstRange;
     private CancellationTokenSource mPairWork;
     private string mPairKey;
-    private int mPairSavedSplitter;
-    private int mPairSavedPanelMinimum;
     private bool mPairLoading;
     private bool mPairResultInAniMatch;
     private bool mPairUpdatingRange;
     private bool IsPairedShowroom => mPairedShowroom?.Visible == true;
+    private readonly List<string> mAnimationPickOrder = new();
+
+    private CharacterAnimationEntry[] GetAnimationsInPickOrder()
+    {
+        var selected=mCharacterAnimationListBox.SelectedItems.Cast<CharacterAnimationEntry>().ToArray();
+        var byId=selected.ToDictionary(GetCorrectedAnimationMatchClipId);
+        mAnimationPickOrder.RemoveAll(id=>!byId.ContainsKey(id));
+        foreach(var entry in selected)
+        {
+            var id=GetCorrectedAnimationMatchClipId(entry);
+            if(!mAnimationPickOrder.Contains(id)) mAnimationPickOrder.Add(id);
+        }
+        return mAnimationPickOrder.Select(id=>byId[id]).ToArray();
+    }
 
     private void InitializeCompactShowroomTransport()
     {
@@ -94,7 +107,7 @@ public partial class MainForm
 
     private bool TryLoadPairedShowroomSelection()
     {
-        var entries = mCharacterAnimationListBox.SelectedItems.Cast<CharacterAnimationEntry>().Take(2).ToArray();
+        var entries = GetAnimationsInPickOrder().Take(2).ToArray();
         if (entries.Length < 2) return false;
         if (mCharacterBrowserApplyingSavedSelection && !mCharacterBrowserModelDiscoveryComplete)
             return true;
@@ -185,7 +198,7 @@ public partial class MainForm
         mPairFirstPane = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 3, 0) };
         mPairFirstCaption = new Label
         {
-            Dock = DockStyle.Top, Height = 23, AutoEllipsis = true, Font = SystemFonts.MessageBoxFont,
+            Dock = DockStyle.Top, Height = 44, AutoEllipsis = false, Font = SystemFonts.MessageBoxFont,
             ForeColor = Color.Gainsboro, BackColor = Theme.DarkBG, TextAlign = ContentAlignment.MiddleLeft
         };
         mPairFirstPane.Controls.Add(mPairFirstCaption);
@@ -214,16 +227,14 @@ public partial class MainForm
     private void ShowPairedShowroom()
     {
         EnsurePairedShowroomControls();
-        if (!IsPairedShowroom)
-        {
-            mPairSavedSplitter = splitContainer_Main.SplitterDistance;
-            mPairSavedPanelMinimum = splitContainer_Main.Panel1MinSize;
-            int maximum = splitContainer_Main.Width - splitContainer_Main.Panel2MinSize - splitContainer_Main.SplitterWidth;
-            splitContainer_Main.Panel1MinSize = Math.Min(600, maximum);
-            splitContainer_Main.SplitterDistance = Math.Clamp(
-                Math.Max(mPairSavedSplitter, splitContainer_Main.Width - 320), splitContainer_Main.Panel1MinSize, maximum);
-        }
         HideAnimationMatchingResults();
+        // Lay out the destination while it is visible before moving the viewer.
+        // A hidden table initially gives its first cell a tiny default height,
+        // below the viewer split's minimum, and reparenting then throws.
+        mPairedShowroom.Visible = true;
+        mPairedShowroom.Bounds = splitContainer_Main.Panel1.ClientRectangle;
+        mPairedShowroom.PerformLayout();
+        mPairFirstPane.PerformLayout();
         splitContainer_LeftSide.Parent?.Controls.Remove(splitContainer_LeftSide);
         mPairFirstPane.Controls.Add(splitContainer_LeftSide);
         splitContainer_LeftSide.Dock = DockStyle.Fill;
@@ -252,9 +263,6 @@ public partial class MainForm
         mAnimationMatchButton.Enabled = true;
         tableLayoutPanel_AnimationControls.ColumnStyles[3].Width = 68;
         mPairedShowroom.Visible = false;
-        splitContainer_Main.Panel1MinSize = mPairSavedPanelMinimum;
-        splitContainer_Main.SplitterDistance = Math.Clamp(mPairSavedSplitter,
-            splitContainer_Main.Panel1MinSize, splitContainer_Main.Width - splitContainer_Main.Panel2MinSize - splitContainer_Main.SplitterWidth);
         splitContainer_LeftSide.BringToFront();
         mAnimationMatchTimeline.Enabled = true;
         mPairKey = null;

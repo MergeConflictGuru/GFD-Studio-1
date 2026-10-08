@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
+using System.Globalization;
 using System.Threading.Tasks;
+using System.Threading;
+using Timer = System.Windows.Forms.Timer;
 using System.Windows.Forms;
 using GFDLibrary;
 using GFDStudio.AnimationMatching.Core;
@@ -17,6 +20,7 @@ public delegate void AnimationMatchResultEventHandler(object? sender, AnimationM
 public sealed class ThumbnailRequest : EventArgs
 {
     private readonly Action<AnimationThumbnailScene?> _complete;
+    public CancellationToken CancellationToken { get; init; }
 
     public ThumbnailRequest(
         AnimationMatchResult result,
@@ -146,44 +150,62 @@ public sealed class AnimationMatchingModeControl : UserControl
     private readonly Button _back = MakeButton("Back");
     private readonly Button _reindex = MakeButton("Reindex");
     private readonly Button _export = MakeButton("Export…");
-    private readonly Button _exportParts = MakeButton("Export parts…");
+    private readonly Button _exportSelection = MakeButton("Export sel.");
+    
     private readonly CheckBox _alignPositionAndYaw = new()
     {
-        Text = "Match X/Z + facing",
+        Text = "X/Z + facing",
         Checked = true,
         AutoSize = true,
         ForeColor = Color.Gainsboro,
         BackColor = Color.Transparent,
         Anchor = AnchorStyles.Left
     };
-    private readonly CheckBox _collisionCorrection = new() {Text="Collision correction",Checked=true,AutoSize=true,ForeColor=Color.Gainsboro};
-    private readonly CheckBox _matchUp = new() {Text="Match height",AutoSize=true,ForeColor=Color.Gainsboro};
+    private readonly CheckBox _matchUp = new() {Text="Y (height)",AutoSize=true,ForeColor=Color.Gainsboro};
     private readonly NumericUpDown _yawJitter = new() {Minimum=0,Maximum=180,DecimalPlaces=1,Increment=1,Width=55};
     private readonly RadioButton _simpleBlend = new()
     {
-        Text = "Simple blend",
+        Text = "Simple",
         AutoSize = true,
         ForeColor = Color.Gainsboro,
         BackColor = Color.Transparent,
         Anchor = AnchorStyles.Left
     };
-    private readonly RadioButton _noBlend = new() { Text = "No blend", AutoSize = true, ForeColor = Color.Gainsboro };
-    private readonly RadioButton _aiBlend = new() { Text = "AI blend", AutoSize = true, ForeColor = Color.Gainsboro };
-    private readonly TextBox _styleHint = new() { PlaceholderText = "Style hint (optional)", Width = 230, BackColor = Color.FromArgb(45,45,48), ForeColor = Color.Gainsboro };
-    private readonly NumericUpDown _blendDurationMs = new()
+    private readonly RadioButton _noBlend = new() { Text = "None", AutoSize = true, ForeColor = Color.Gainsboro };
+    private readonly RadioButton _aiBlend = new() { Text = "AI", AutoSize = true, ForeColor = Color.Gainsboro };
+    private readonly ComboBox _styleHint = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90, BackColor = Color.FromArgb(45,45,48), ForeColor = Color.Gainsboro };
+    private readonly TrackBar _blendDurationSlider = new()
     {
-        Minimum = 10,
-        Maximum = 2000,
-        Increment = 10,
-        Value = 500,
-        Width = 62,
-        BackColor = Color.FromArgb(45, 45, 48),
-        ForeColor = Color.Gainsboro,
-        BorderStyle = BorderStyle.FixedSingle
+        Minimum = 0, Maximum = 1000, SmallChange = 26, LargeChange = 130,
+        TickStyle = TickStyle.None, AutoSize = false, Width = 90, Height = 28,
+        Margin = new Padding(2, 1, 2, 1), AccessibleName = "Blend duration"
     };
+    private readonly TextBox _blendDurationMs = new()
+    {
+        Text = "500", Width = 48, TextAlign = HorizontalAlignment.Right,
+        BackColor = Color.FromArgb(45, 45, 48), ForeColor = Color.Gainsboro,
+        BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Blend milliseconds"
+    };
+    private readonly Timer _durationEditTimer = new() { Interval = 250 };
+    private float _blendMilliseconds = 500;
+    private readonly TrackBar _trajectoryBlend = new()
+    {
+        Minimum=0, Maximum=100, Value=50, TickStyle=TickStyle.None,
+        AutoSize=false, Width=90, Height=28, Margin=new Padding(2,1,2,1),
+        AccessibleName="Trajectory blend: B immediately to A persists"
+    };
+    private readonly Label _trajectoryValue = new() {Text="50% A",AutoSize=true,ForeColor=Color.Gainsboro,Margin=new Padding(2,5,0,0)};
+    private bool _updatingDuration;
+
+    internal static float SliderMilliseconds(int position)
+        => (float)(3000 * (Math.Pow(10, Math.Clamp(position, 0, 1000) / 1000d) - 1) / 9);
+    internal static int DurationSliderPosition(float milliseconds)
+        => (int)Math.Round(1000 * Math.Log10(1 + 9 * Math.Clamp(milliseconds, 0, 3000) / 3000d));
+
     private readonly Label _source = new()
     {
-        AutoEllipsis = true,
+        AutoEllipsis = false,
+        Height = 42,
         ForeColor = Color.Gainsboro,
         TextAlign = ContentAlignment.MiddleLeft,
         Dock = DockStyle.Fill,
@@ -224,9 +246,56 @@ public sealed class AnimationMatchingModeControl : UserControl
     private bool _loadMoreCheckPending;
     private readonly AnimationThumbnailPlayback _thumbnailPlayback = new();
     private readonly List<ThumbnailRenderEntry> _thumbnailRenderEntries = new();
-    private readonly ModelViewControl _thumbnailRenderer;
-    private readonly Timer _thumbnailRefreshTimer;
-    private ModelPack _thumbnailRendererModelPack;
+    private readonly AnimationThumbnailRenderWorker _thumbnailRenderer = new();
+    private CancellationTokenSource _thumbnailLoads = new();
+    private readonly List<(AnimationMatchResult Result, AnimationThumbnailControl Image)> _thumbnailCards = new();
+    private readonly Dictionary<AnimationThumbnailControl,CancellationTokenSource> _thumbnailRequests = new();
+    private readonly HashSet<AnimationThumbnailControl> _thumbnailFailed = new();
+    private readonly RenderFrameClock _thumbnailRefreshTimer;
+
+    internal long ThumbnailFrameCount {get;private set;}
+    private int _surfaceLayoutGeneration;
+    private Rectangle[] _surfaceRectangles=Array.Empty<Rectangle>();
+    private bool _surfaceLayoutDirty=true;
+    internal bool GpuSurfaceEnabled {get;set;}=true;
+    private void MarkSurfaceLayoutDirty()
+    {
+        _surfaceLayoutDirty=true;
+    }
+    private Rectangle ThumbnailSurfaceRectangle(Control image)
+        => new(_thumbnailRenderer.Surface.PointToClient(image.PointToScreen(Point.Empty)),image.Size);
+    private void UpdateSurfaceLayout()
+    {
+        if(!GpuSurfaceEnabled)return;
+        var surface=_thumbnailRenderer.Surface;
+        var bounds=RectangleToClient(_results.RectangleToScreen(_results.ClientRectangle));
+        bool resized=surface.Bounds!=bounds;
+        if(resized){surface.Bounds=bounds;}
+
+        var region=new Region();region.MakeEmpty();
+        var rectangles=new List<Rectangle>();
+        foreach(var (_,image) in _thumbnailCards)
+            if(IsThumbnailVisible(image))
+            {
+                var rectangle=ThumbnailSurfaceRectangle(image);
+                rectangle.Intersect(new Rectangle(Point.Empty,surface.ClientSize));
+                if(rectangle.Width>0 && rectangle.Height>0){region.Union(rectangle);rectangles.Add(rectangle);}
+            }
+        var updated=rectangles.ToArray();
+        if(!resized && updated.SequenceEqual(_surfaceRectangles)){_surfaceLayoutDirty=false;region.Dispose();return;}
+        _surfaceLayoutDirty=false;Interlocked.Increment(ref _surfaceLayoutGeneration);surface.Visible=false;
+        var previous=surface.Region;surface.Region=region;previous?.Dispose();
+        _surfaceRectangles=updated;surface.BringToFront();
+    }
+    private void SurfaceClick(object sender,MouseEventArgs e)
+    {
+        var point=_results.PointToClient(_thumbnailRenderer.Surface.PointToScreen(e.Location));
+        var card=_resultCards.FirstOrDefault(item=>item.Card.Visible && item.Card.Bounds.Contains(point));
+        if(card.Card==null)return;
+        _selectedResult=card.Result;
+        foreach(var item in _resultCards)item.Card.BackColor=ReferenceEquals(item.Card,card.Card)?Color.FromArgb(55,72,84):Color.FromArgb(37,37,38);
+        if(e.Clicks>1)CandidateOpened?.Invoke(this,card.Result);else CandidateActivated?.Invoke(this,card.Result);
+    }
     private Bitmap _thumbnailAtlasFrame;
     private Task<AnimationThumbnailRenderBatch> _thumbnailRenderTask;
     private int _thumbnailRenderGeneration;
@@ -239,18 +308,7 @@ public sealed class AnimationMatchingModeControl : UserControl
         // All cards are ordinary WinForms controls. One hidden ModelViewControl owns the only
         // thumbnail GL context/model and renders the current pose of every card into one reusable
         // off-screen target per tick.
-        _thumbnailRenderer = new ModelViewControl( true )
-        {
-            Dock = DockStyle.None,
-            Location = new Point( -1000, -1000 ),
-            Size = new Size( 154, 88 ),
-            Visible = false,
-            TabStop = false
-        };
-        Controls.Add( _thumbnailRenderer );
-        _thumbnailRefreshTimer = new Timer { Interval = 33 };
-        _thumbnailRefreshTimer.Tick += ( sender, args ) => RefreshThumbnailFrames();
-        _thumbnailRefreshTimer.Start();
+        _thumbnailRefreshTimer=new RenderFrameClock(this,RefreshThumbnailFrames);
 
         var layout = new TableLayoutPanel
         {
@@ -262,87 +320,121 @@ public sealed class AnimationMatchingModeControl : UserControl
             BackColor = Color.FromArgb(30, 30, 30)
         };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 200));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var rootBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        var rootBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1, Margin = Padding.Empty };
+        rootBar.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         rootBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        rootBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i=0;i<3;i++) rootBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _root.Margin = new Padding(0, 4, 4, 4);
-        _browse.Margin = new Padding(2, 3, 0, 3);
         rootBar.Controls.Add(_root, 0, 0);
         rootBar.Controls.Add(_browse, 1, 0);
+        rootBar.Controls.Add(_reindex, 2, 0);
+        rootBar.Controls.Add(_back,3,0);
 
-        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 4, Margin = Padding.Empty };
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        actionBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
 
-        var stitchOptions = new FlowLayoutPanel
+        var actionBar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize=false, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        for(int i=0;i<3;i++) actionBar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _source.Dock=DockStyle.Top;
+        _source.Margin=new Padding(0,3,0,5);
+        void SizeSource()
         {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            Margin = Padding.Empty,
-            Padding = Padding.Empty
-        };
-
-        var ms = new Label
-        {
-            Text = "ms",
-            AutoSize = true,
-            ForeColor = Color.Silver,
-            Anchor = AnchorStyles.Left
-        };
-        _back.Margin = new Padding(0, 3, 2, 3);
-        _source.Margin = new Padding(5, 0, 4, 0);
-        _alignPositionAndYaw.Margin = new Padding(2, 0, 0, 0);
-        _simpleBlend.Margin = new Padding(2, 0, 0, 0);
-        _blendDurationMs.Margin = new Padding(2, 5, 1, 3);
-        _reindex.Margin = new Padding(2, 3, 2, 3);
-        _export.Margin = new Padding(2, 3, 0, 3);
-        _exportParts.Margin = new Padding(2, 3, 0, 3);
-
-        actionBar.Controls.Add(_back, 0, 0);
-        actionBar.Controls.Add(_source, 1, 0);
-        actionBar.Controls.Add(_reindex, 2, 0);
-        actionBar.Controls.Add(_export, 3, 0);
-        actionBar.Controls.Add(_exportParts, 4, 0);
-        stitchOptions.Controls.Add(_alignPositionAndYaw);
+            if (_source.Width<20) return;
+            _source.Height=Math.Max(28,TextRenderer.MeasureText(_source.Text,_source.Font,new Size(_source.Width,1000),TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl).Height+8);
+        }
+        _source.SizeChanged+=(_,_)=>SizeSource();
+        _source.TextChanged+=(_,_)=>SizeSource();
+        var sourceBar=new TableLayoutPanel {Dock=DockStyle.Top,AutoSize=true,ColumnCount=3,RowCount=1,Margin=Padding.Empty};
+        sourceBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        sourceBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        sourceBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        sourceBar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sourceBar.Controls.Add(_source,0,0);
+        sourceBar.Controls.Add(_export,1,0);
+        sourceBar.Controls.Add(_exportSelection,2,0);
+        actionBar.Controls.Add(sourceBar,0,0);
+        FlowLayoutPanel Options()=>new() {Dock=DockStyle.Top,AutoSize=true,WrapContents=true,Margin=Padding.Empty,Padding=Padding.Empty};
+        Label Caption(string text)=>new() {Text=text,AutoSize=true,ForeColor=Color.Gainsboro,Margin=new Padding(0,5,4,3)};
+        var matchOptions=Options();
+        matchOptions.Controls.Add(Caption("Match:"));
+        matchOptions.Controls.Add(_alignPositionAndYaw);
+        matchOptions.Controls.Add(_matchUp);
+        matchOptions.Controls.Add(Caption("Yaw variation °"));
+        matchOptions.Controls.Add(_yawJitter);
+        actionBar.Controls.Add(matchOptions,0,1);
+        var stitchOptions=Options();
+        stitchOptions.Font=new Font(Font.FontFamily,9f);
+        stitchOptions.Controls.Add(Caption("Blend:"));
         stitchOptions.Controls.Add(_noBlend);
         stitchOptions.Controls.Add(_simpleBlend);
         stitchOptions.Controls.Add(_aiBlend);
+
+
+
+        stitchOptions.Controls.Add(_styleHint);
+        actionBar.Controls.Add(stitchOptions,0,2);
+        stitchOptions.Controls.Add(_blendDurationSlider);
         stitchOptions.Controls.Add(_blendDurationMs);
-        stitchOptions.Controls.Add(ms);
-        actionBar.Controls.Add(stitchOptions, 0, 1);
-        actionBar.SetColumnSpan(stitchOptions, 5);
-        var placementOptions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
-        placementOptions.Controls.Add(_matchUp);
-        placementOptions.Controls.Add(new Label {Text="Yaw variation °",AutoSize=true,ForeColor=Color.Gainsboro,Margin=new Padding(5,5,0,0)});
-        placementOptions.Controls.Add(_yawJitter);
-        placementOptions.Controls.Add(_collisionCorrection);
-        actionBar.Controls.Add(placementOptions,0,2);
-        actionBar.SetColumnSpan(placementOptions,5);
-        actionBar.Controls.Add(_styleHint, 0, 3);
-        actionBar.SetColumnSpan(_styleHint, 5);
-        _styleHint.Enabled = false; _styleHint.Text = "Acrobatic"; _styleHint.ReadOnly = true;
-        _collisionCorrection.Checked = false; _collisionCorrection.Enabled = false;
+        stitchOptions.Controls.Add(Caption("ms"));
+        stitchOptions.Controls.Add(Caption("Trajectory B"));
+        stitchOptions.Controls.Add(_trajectoryBlend);
+        stitchOptions.Controls.Add(_trajectoryValue);
+        bool sizingHeader=false;
+        void SizeHeader()
+        {
+            if(sizingHeader || actionBar.Width<40)return;
+            sizingHeader=true;
+            try
+            {
+                var rows=new Control[]{sourceBar,matchOptions,stitchOptions};
+                int total=0;
+                for(int i=0;i<rows.Length;i++)
+                {
+                    int height;
+                    if(i==0)height=Math.Max(_source.Height+_source.Margin.Vertical,_export.GetPreferredSize(Size.Empty).Height+_export.Margin.Vertical);
+                    else
+                    {
+                        int lineWidth=0,lineHeight=0; height=0;
+                        foreach(Control child in rows[i].Controls)
+                        {
+                            var size=child.AutoSize?child.GetPreferredSize(Size.Empty):child.Size;
+                            int width=size.Width+child.Margin.Horizontal;
+                            if(lineWidth>0 && lineWidth+width>actionBar.Width){height+=lineHeight;lineWidth=0;lineHeight=0;}
+                            lineWidth+=width;lineHeight=Math.Max(lineHeight,size.Height+child.Margin.Vertical);
+                        }
+                        height+=lineHeight;
+                    }
+                    actionBar.RowStyles[i].SizeType=SizeType.Absolute;
+                    actionBar.RowStyles[i].Height=height;
+                    total+=height;
+                }
+                layout.RowStyles[1].Height=total+2;
+            }
+            finally{sizingHeader=false;}
+        }
+        actionBar.SizeChanged+=(_,_)=>SizeHeader();
+        actionBar.Layout+=(_,_)=>SizeHeader();
+        _source.TextChanged+=(_,_)=>SizeHeader();
+        FontChanged+=(_,_)=>SizeHeader();
+        HandleCreated+=(_,_)=>SizeHeader();        if (SlideAiBlend.Available)
+        {
+            _styleHint.Items.AddRange(SlideAiBlend.StyleNames);
+            _styleHint.SelectedItem = "Acrobatic";
+        }
+        _styleHint.Enabled = _aiBlend.Checked && _styleHint.Items.Count > 0;
         var aiTip = new ToolTip();
-        aiTip.SetToolTip(_aiBlend, "AI blend uses all 16 generated poses across the chosen duration. Fixed Acrobatic style.");
-        aiTip.SetToolTip(_collisionCorrection, "Collision correction is not included in the AI blend model.");
-        aiTip.SetToolTip(_styleHint, "This converted model supports Acrobatic style. Free-text hints are not available.");
+        aiTip.SetToolTip(_aiBlend, "AI blend generates one sample per animation frame across the slider duration, using the selected motion style.");
+        aiTip.SetToolTip(_styleHint, "Motion style guides generation; the boundary poses still determine the motion.");
+        aiTip.SetToolTip(_trajectoryBlend, "Final horizontal position: left follows B's motion immediately; right carries A's motion through the blend. Between them mixes both displacements.");
         Disposed += (_, _) => aiTip.Dispose();
         _aiBlend.Enabled = SlideAiBlend.Available;
         _aiBlend.Checked = _aiBlend.Enabled;
+        _styleHint.Enabled = _aiBlend.Checked && _styleHint.Items.Count > 0;
         _simpleBlend.Checked = !_aiBlend.Enabled;
-        aiTip.SetToolTip(_blendDurationMs, "Full transition duration: shorter plays faster, longer plays slower. AI resamples all 16 poses; it does not trim them. 500 ms gives 16 poses at 30 fps.");
+        aiTip.SetToolTip(_blendDurationMs, "Type any nonnegative duration in milliseconds. The slider covers 0–3000 ms with finer adjustment near zero.");
 
         var statusBar = new TableLayoutPanel
         {
@@ -362,24 +454,67 @@ public sealed class AnimationMatchingModeControl : UserControl
         layout.Controls.Add(statusBar, 0, 2);
         layout.Controls.Add(_results, 0, 3);
         Controls.Add(layout);
+        var surface=_thumbnailRenderer.Surface;surface.PreviewSurface=true;surface.Dock=DockStyle.None;surface.TabStop=false;
+        Controls.Add(surface);surface.Visible=false;
+        surface.MouseClick+=SurfaceClick;surface.MouseDoubleClick+=SurfaceClick;
+        surface.MouseWheel+=(_,e)=>
+        {
+            int y=-_results.AutoScrollPosition.Y-e.Delta/120*SystemInformation.MouseWheelScrollLines*20;
+            _results.AutoScrollPosition=new Point(0,Math.Max(0,y));MarkSurfaceLayoutDirty();MaybeRequestMoreResults();
+        };
+        _results.Layout+=(_,_)=>MarkSurfaceLayoutDirty();
+        _results.SizeChanged+=(_,_)=>MarkSurfaceLayoutDirty();
+        VisibleChanged+=(_,_)=>MarkSurfaceLayoutDirty();
 
         _browse.Click += (_, _) => BrowseRequested?.Invoke(this, EventArgs.Empty);
         _back.Click += (_, _) => BackRequested?.Invoke(this, EventArgs.Empty);
         _reindex.Click += (_, _) => ReindexRequested?.Invoke(this, EventArgs.Empty);
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
-        _exportParts.Click += (_, _) => ExportPartsRequested?.Invoke(this, EventArgs.Empty);
-        _results.Scroll += (_, _) => MaybeRequestMoreResults();
+        _exportSelection.Enabled=false;
+        _exportSelection.Click += (_,_) => ExportSelectionRequested?.Invoke(this,EventArgs.Empty);
+        _results.Scroll += (_, _) => {MarkSurfaceLayoutDirty();MaybeRequestMoreResults();};
         _filter.TextChanged += (_, _) => ApplyResultFilter();
         _alignPositionAndYaw.CheckedChanged += (_, _) => ReactivateSelected();
         _simpleBlend.CheckedChanged += (_, _) => { if (_simpleBlend.Checked) ReactivateSelected(); };
         _noBlend.CheckedChanged += (_, _) => { if (_noBlend.Checked) ReactivateSelected(); };
-        _aiBlend.CheckedChanged += (_, _) => { _styleHint.Enabled = false; if (_aiBlend.Checked) ReactivateSelected(); };
-        _styleHint.Leave += (_, _) => { if (_aiBlend.Checked) ReactivateSelected(); };
-        _styleHint.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; ReactivateSelected(); } };
-        _blendDurationMs.ValueChanged += (_, _) => ReactivateSelected();
+        _aiBlend.CheckedChanged += (_, _) => { _styleHint.Enabled = _aiBlend.Checked && _styleHint.Items.Count > 0; if (_aiBlend.Checked) ReactivateSelected(); };
+        _styleHint.SelectedIndexChanged += (_, _) => { if (_aiBlend.Checked) ReactivateSelected(); };
+        _blendDurationSlider.Value = DurationSliderPosition(_blendMilliseconds);
+        _durationEditTimer.Tick += (_, _) => { _durationEditTimer.Stop(); ReactivateSelected(); };
+        _trajectoryBlend.ValueChanged += (_, _) =>
+        {
+            _trajectoryValue.Text = $"{_trajectoryBlend.Value}% A";
+            _durationEditTimer.Stop(); _durationEditTimer.Start();
+        };
+        _blendDurationSlider.ValueChanged += (_, _) =>
+        {
+            if (_updatingDuration) return;
+            _blendMilliseconds = MathF.Round(SliderMilliseconds(_blendDurationSlider.Value));
+            _updatingDuration = true;
+            _blendDurationMs.Text = _blendMilliseconds.ToString("0.###", CultureInfo.InvariantCulture);
+            _updatingDuration = false;
+            QueueDurationPreview();
+        };
+        _blendDurationMs.TextChanged += (_, _) =>
+        {
+            if (_updatingDuration) return;
+            if (!float.TryParse(_blendDurationMs.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var value) &&
+                !float.TryParse(_blendDurationMs.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)) return;
+            if (!float.IsFinite(value) || value < 0) return;
+            _blendMilliseconds = value;
+            _updatingDuration = true;
+            _blendDurationSlider.Value = DurationSliderPosition(value);
+            _updatingDuration = false;
+            QueueDurationPreview();
+        };
+        _blendDurationMs.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter) return;
+            e.SuppressKeyPress = true;
+            _durationEditTimer.Stop(); ReactivateSelected();
+        };
         _matchUp.CheckedChanged += (_, _) => ReactivateSelected();
         _yawJitter.ValueChanged += (_, _) => ReactivateSelected();
-        _collisionCorrection.CheckedChanged += (_, _) => ReactivateSelected();
     }
 
     public (int start, int end)? Selection => _selection;
@@ -390,7 +525,8 @@ public sealed class AnimationMatchingModeControl : UserControl
     public bool BlendingEnabled => !_noBlend.Checked;
     public bool AiBlendEnabled => _aiBlend.Checked;
     public string StyleHint => _styleHint.Text.Trim();
-    public float BlendSeconds => (float)_blendDurationMs.Value / 1000f;
+    public float BlendSeconds => _blendMilliseconds / 1000f;
+    public float TrajectoryPersistence => _trajectoryBlend.Value / 100f;
 
     public event EventHandler? BrowseRequested;
     public event EventHandler? BackRequested;
@@ -398,6 +534,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     public event EventHandler? SearchRequested;
     public event EventHandler? ExportRequested;
     public event EventHandler? ExportPartsRequested;
+    public event EventHandler? ExportSelectionRequested;
     public event EventHandler? LoadMoreRequested;
     public event AnimationMatchResultEventHandler? CandidateActivated;
     public event AnimationMatchResultEventHandler? CandidateOpened;
@@ -405,7 +542,7 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     public void SetRootPath(string? path) => _root.Text = path ?? string.Empty;
 
-    public void SetSelection((int start, int end)? selection) => _selection = selection;
+    public void SetSelection((int start, int end)? selection) { _selection = selection; _exportSelection.Enabled=selection.HasValue; }
 
     /// <summary>Called by the Match button beside the normal transport controls.</summary>
     public void BeginSearch() => SearchRequested?.Invoke(this, EventArgs.Empty);
@@ -426,7 +563,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     {
         _reindex.Enabled = !busy;
         _export.Enabled = !busy;
-        _exportParts.Enabled = !busy;
+        _exportSelection.Enabled = !busy && _selection.HasValue;
         _browse.Enabled = !busy;
         if (status is not null)
             _status.Text = status;
@@ -435,9 +572,16 @@ public sealed class AnimationMatchingModeControl : UserControl
     public void SetResults(IReadOnlyList<AnimationMatchResult> results)
     {
         _selectedResult = null;
+        MarkSurfaceLayoutDirty();
         _loadMoreArmed = true;
         _thumbnailPlayback.Reset();
         ClearThumbnailAtlas();
+        _thumbnailLoads.Cancel();
+        _thumbnailLoads.Dispose();
+        _thumbnailLoads = new CancellationTokenSource();
+        _thumbnailCards.Clear();
+        _thumbnailFailed.Clear();
+        _thumbnailRequests.Clear();
         _thumbnailRenderEntries.Clear();
         _resultCards.Clear();
         _results.SuspendLayout();
@@ -478,8 +622,10 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     private async void RefreshThumbnailFrames()
     {
-        if ( IsDisposed || !Visible || !_results.Visible || _thumbnailRenderEntries.Count == 0 )
-            return;
+        if ( IsDisposed || !Visible || !_results.Visible ) return;
+        UpdateSurfaceLayout();
+        RequestVisibleThumbnails();
+        if (_thumbnailRenderEntries.Count == 0) return;
 
         if ( _thumbnailRenderTask is { IsCompleted: false } )
             return;
@@ -512,18 +658,10 @@ public sealed class AnimationMatchingModeControl : UserControl
         }
 
         var modelPack = firstScene.ModelPack;
-        var renderTask = Task.Run( () =>
-        {
-            // Keep one persistent renderer/model for the whole grid, but move its
-            // OpenGL work off the WinForms thread so the main viewer remains live.
-            if ( !ReferenceEquals( _thumbnailRendererModelPack, modelPack ) )
-            {
-                _thumbnailRenderer.LoadModel( modelPack );
-                _thumbnailRendererModelPack = modelPack;
-            }
-
-            return _thumbnailRenderer.RenderAnimationThumbnailBatch( requests );
-        } );
+        int layoutGeneration=Volatile.Read(ref _surfaceLayoutGeneration);
+        var destinations=GpuSurfaceEnabled?visibleEntries.Select(entry=>ThumbnailSurfaceRectangle(entry.Control)).ToArray():null;
+        var renderTask = _thumbnailRenderer.RenderAsync(modelPack,requests,destinations,_thumbnailRenderer.Surface.ClientSize,
+            ()=>layoutGeneration==Volatile.Read(ref _surfaceLayoutGeneration));
         _thumbnailRenderTask = renderTask;
 
         try
@@ -531,14 +669,24 @@ public sealed class AnimationMatchingModeControl : UserControl
             var batch = await renderTask;
             if ( renderGeneration != _thumbnailRenderGeneration || IsDisposed )
             {
-                batch.Atlas.Dispose();
+                batch.Atlas?.Dispose();
                 return;
             }
 
+            if(GpuSurfaceEnabled)
+            {
+                                if(layoutGeneration==Volatile.Read(ref _surfaceLayoutGeneration))
+                {
+                    ThumbnailFrameCount++;
+                    _thumbnailRenderer.Surface.Visible=Visible && _surfaceRectangles.Length>0;
+                }
+                return;
+            }
             var atlas = batch.Atlas;
             var sourceRectangles = batch.SourceRectangles;
             ClearThumbnailAtlas();
             _thumbnailAtlasFrame = atlas;
+            ThumbnailFrameCount++;
             for ( var index = 0; index < visibleEntries.Count; index++ )
             {
                 visibleEntries[index].Control.SetAtlasFrame(
@@ -557,9 +705,37 @@ public sealed class AnimationMatchingModeControl : UserControl
         }
     }
 
+    private void RequestVisibleThumbnails()
+    {
+        foreach(var request in _thumbnailRequests.ToArray())
+            if(!IsThumbnailVisible(request.Key))request.Value.Cancel();
+        foreach(var (result,image) in _thumbnailCards)
+        {
+            if(_thumbnailRequests.Count>=4)break;
+            if(image.Scene!=null || _thumbnailFailed.Contains(image) || _thumbnailRequests.ContainsKey(image) || !IsThumbnailVisible(image))continue;
+            var cancellation=CancellationTokenSource.CreateLinkedTokenSource(_thumbnailLoads.Token);
+            _thumbnailRequests.Add(image,cancellation);
+            ThumbnailRequested?.Invoke(this,new ThumbnailRequest(result,image.Width,image.Height,scene=>
+            {
+                void Finish()
+                {
+                    if(_thumbnailRequests.TryGetValue(image,out var pending) && ReferenceEquals(pending,cancellation))_thumbnailRequests.Remove(image);
+                    bool usable=!cancellation.IsCancellationRequested && !IsDisposed && !image.IsDisposed;
+                    cancellation.Dispose();
+                    if(!usable)return;
+                    image.SetScene(scene);
+                    if(scene==null)_thumbnailFailed.Add(image);
+                    if(scene!=null)_thumbnailRenderEntries.Add(new ThumbnailRenderEntry {Control=image,Scene=scene});
+                }
+                if(IsDisposed){cancellation.Dispose();return;}
+                if(InvokeRequired)BeginInvoke((Action)Finish);else Finish();
+            }) {CancellationToken=cancellation.Token});
+        }
+    }
+
     private bool IsThumbnailVisible( AnimationThumbnailControl control )
     {
-        if ( !control.IsHandleCreated || !_results.IsHandleCreated )
+        if ( control.IsDisposed || !control.Visible || !control.IsHandleCreated || !_results.IsHandleCreated )
             return false;
 
         var viewport = _results.RectangleToScreen( _results.ClientRectangle );
@@ -616,6 +792,12 @@ public sealed class AnimationMatchingModeControl : UserControl
         CandidateActivated?.Invoke(this, result);
     }
 
+    private void QueueDurationPreview()
+    {
+        _durationEditTimer.Stop();
+        _durationEditTimer.Start();
+    }
+
     private void ReactivateSelected()
     {
         if (_selectedResult is not null)
@@ -631,6 +813,7 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     private void ApplyResultFilter()
     {
+        MarkSurfaceLayoutDirty();
         var filter = _filter.Text?.Trim();
         _results.SuspendLayout();
         try
@@ -652,8 +835,8 @@ public sealed class AnimationMatchingModeControl : UserControl
 
     private Control CreateResultCard(AnimationMatchResult result)
     {
-        const int cardWidth = 164;
-        const int cardHeight = 166;
+        const int cardWidth = 132;
+        const int cardHeight = 216;
         var card = new Panel
         {
             Width = cardWidth,
@@ -669,26 +852,26 @@ public sealed class AnimationMatchingModeControl : UserControl
             Left = 4,
             Top = 4,
             Width = cardWidth - 10,
-            Height = 88,
+            Height = 72,
             BackColor = Color.FromArgb(24, 24, 24)
         };
         var title = new Label
         {
             Left = 5,
-            Top = 95,
+            Top = 78,
             Width = cardWidth - 12,
-            Height = 34,
+            Height = 42,
             AutoEllipsis = false,
             AutoSize = false,
             UseCompatibleTextRendering = true,
             ForeColor = Color.Gainsboro,
             Text = AddTitleBreakPoints(result.Candidate.DisplayName),
-            Font = new Font(Font, FontStyle.Regular)
+            Font = new Font(Font.FontFamily, 8f, FontStyle.Regular)
         };
         var detail = new Label
         {
             Left = 5,
-            Top = 132,
+            Top = 194,
             Width = cardWidth - 12,
             Height = 29,
             AutoEllipsis = false,
@@ -697,6 +880,11 @@ public sealed class AnimationMatchingModeControl : UserControl
             ForeColor = Color.Silver,
             Text = $"{result.Score:0.0}% · f{result.SourceFrame} → f{result.CandidateFrame}"
         };
+        title.Height = title.GetPreferredSize(new Size(title.Width, 0)).Height;
+        detail.Top = title.Bottom;
+        detail.Font = new Font(Font.FontFamily, 8f);
+        detail.Height=detail.GetPreferredSize(new Size(detail.Width,0)).Height;
+        card.Height = detail.Bottom + 4;
         var titleToolTip = new ToolTip();
         titleToolTip.SetToolTip(title, result.Candidate.DisplayName);
         titleToolTip.SetToolTip(detail, $"{result.Score:0.0}% · f{result.SourceFrame} → f{result.CandidateFrame}");
@@ -732,40 +920,21 @@ public sealed class AnimationMatchingModeControl : UserControl
         title.DoubleClick += Open;
         detail.DoubleClick += Open;
 
-        ThumbnailRequested?.Invoke(this, new ThumbnailRequest(result, image.Width, image.Height, scene =>
-        {
-            if (IsDisposed || image.IsDisposed)
-                return;
-
-            void Apply()
-            {
-                image.SetScene(scene);
-                if ( scene != null )
-                {
-                    _thumbnailRenderEntries.Add( new ThumbnailRenderEntry
-                    {
-                        Control = image,
-                        Scene = scene
-                    } );
-                }
-                else
-                    image.ClearAtlasFrame();
-            }
-
-            if (InvokeRequired)
-                BeginInvoke((Action)Apply);
-            else
-                Apply();
-        }));
+        _thumbnailCards.Add((result,image));
         return card;
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !IsDisposed)
         {
             _thumbnailRefreshTimer?.Stop();
             _thumbnailRefreshTimer?.Dispose();
+            _durationEditTimer.Dispose();
+            _thumbnailLoads.Cancel();
+            _thumbnailLoads.Dispose();
+            Controls.Remove(_thumbnailRenderer.Surface);
+            _thumbnailRenderer.Dispose();
             ClearThumbnailAtlas();
             _thumbnailRenderEntries.Clear();
         }
@@ -779,7 +948,7 @@ public sealed class AnimationMatchingModeControl : UserControl
     private static Button MakeButton(string text) => new()
     {
         Text = text,
-        Dock = DockStyle.Fill,
+        Dock = DockStyle.None,
         AutoSize = true,
         FlatStyle = FlatStyle.Flat,
         BackColor = Color.FromArgb(50, 50, 54),
@@ -787,3 +956,19 @@ public sealed class AnimationMatchingModeControl : UserControl
         TabStop = false
     };
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

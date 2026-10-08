@@ -17,7 +17,8 @@ public static class AnimationMatchingPreviewTiming
     public static (int startFrame, int endFrame) GetLoopFrames(
         int frameCount,
         int seamFrame,
-        float framesPerSecond)
+        float framesPerSecond,
+        int blendFrames = 0)
     {
         if (frameCount <= 0)
             return (0, 0);
@@ -27,7 +28,7 @@ public static class AnimationMatchingPreviewTiming
         var beforeFrames = Math.Max(1, (int)MathF.Ceiling(BeforeSeamSeconds * fps));
         var afterFrames = Math.Max(1, (int)MathF.Ceiling(AfterSeamSeconds * fps));
         var startFrame = Math.Max(0, clampedSeam - beforeFrames + 1);
-        var endFrame = Math.Min(frameCount - 1, clampedSeam + afterFrames);
+        var endFrame = Math.Min(frameCount - 1, clampedSeam + Math.Max(0, blendFrames) + afterFrames);
         return (startFrame, endFrame);
     }
 

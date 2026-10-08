@@ -9,31 +9,31 @@ using GFDLibrary.Models;
 
 static class PoseRender
 {
-    public static void Draw(Model source, Dictionary<Node, Matrix4x4> sourcePose, Model target, Dictionary<Node, Matrix4x4> targetPose, string path, string caption, Model[]? parts = null, bool centerEachPose = false)
+    public static void Draw(Model source, Dictionary<Node, Matrix4x4> sourcePose, Model target, Dictionary<Node, Matrix4x4> targetPose, string path, string caption, Model[]? parts = null, bool centerEachPose = false, bool followPelvis = false, float renderScale = 2.9f)
     {
         using var bitmap = new Bitmap(1200, 700);
         using var g = Graphics.FromImage(bitmap);
         g.Clear(Color.FromArgb(38, 42, 46));
         using var font = new Font("Arial", 14);
         g.DrawString(caption, font, Brushes.White, 20, 15);
-        var sourceFocus = GetFocusPosition(source, sourcePose);
-        var targetFocus = GetFocusPosition(target, targetPose);
+        var sourceFocus = GetFocusPosition(source, sourcePose, followPelvis);
+        var targetFocus = GetFocusPosition(target, targetPose, followPelvis);
         var focus = (sourceFocus + targetFocus) * .5f - new Vector3(0, 95, 0);
-        DrawModel(g, source, sourcePose, 300, centerEachPose ? new Vector3(sourceFocus.X, 0, sourceFocus.Z) : focus, parts);
-        DrawModel(g, target, targetPose, 900, centerEachPose ? new Vector3(targetFocus.X, 0, targetFocus.Z) : focus, parts);
+        DrawModel(g, source, sourcePose, 300, centerEachPose ? new Vector3(sourceFocus.X, 0, sourceFocus.Z) : focus, parts, renderScale);
+        DrawModel(g, target, targetPose, 900, centerEachPose ? new Vector3(targetFocus.X, 0, targetFocus.Z) : focus, parts, renderScale);
         bitmap.Save(path, ImageFormat.Png);
     }
 
-    private static Vector3 GetFocusPosition(Model model, Dictionary<Node, Matrix4x4> pose)
+    private static Vector3 GetFocusPosition(Model model, Dictionary<Node, Matrix4x4> pose, bool followPelvis)
     {
         var nodes = model.Nodes.ToArray();
-        var focusNode = AnimationSkeletonRoles.ResolveMotionRoot(model) ??
+        var focusNode = (followPelvis ? nodes.FirstOrDefault(n => AnimationSkeletonRoles.GetRole(n.Name) == "hips") : null) ?? AnimationSkeletonRoles.ResolveMotionRoot(model) ??
                         nodes.FirstOrDefault(n => n.Name == "head" || n.Name == "neck") ??
                         nodes[0];
         return pose[focusNode].Translation;
     }
 
-    private static void DrawModel(Graphics g, Model model, Dictionary<Node, Matrix4x4> pose, float center, Vector3 focus, Model[]? parts)
+    private static void DrawModel(Graphics g, Model model, Dictionary<Node, Matrix4x4> pose, float center, Vector3 focus, Model[]? parts, float renderScale)
     {
         var models = new List<(Model model, Dictionary<Node, Matrix4x4> pose)> {(model,pose)};
         var named = pose.GroupBy(p=>p.Key.Name).ToDictionary(g=>g.Key,g=>g.First().Value);
@@ -76,7 +76,7 @@ static class PoseRender
         Vector3 Camera(Vector3 world)=>Vector3.TransformNormal(world-focus,camera);
         PointF Project(Vector3 world) {
             var p = Camera(world);
-            return new(center + (p.X * .94f - p.Z * .34f) * 2.9f, 630 - (p.Y + p.X * .07f + p.Z * .18f) * 2.9f);
+            return new(center + (p.X * .94f - p.Z * .34f) * renderScale, 630 - (p.Y + p.X * .07f + p.Z * .18f) * renderScale);
         }
         float Depth(Vector3 world) {var p=Camera(world);return p.Z * .94f + p.X * .34f;}
         g.DrawLine(Pens.Gray, center - 280, 630, center + 280, 630);

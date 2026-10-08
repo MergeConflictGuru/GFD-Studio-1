@@ -93,6 +93,7 @@ namespace GFDStudio.GUI.Forms
                 splitContainer_LeftSide.SplitterDistance = splitContainer_LeftSide.Height - 58;
 
             mAnimationMatchView = new AnimationMatchingModeControl { Visible = false };
+            mAnimationMatchView.ExportSelectionRequested += async (_,_) => await ExportHighlightedAnimationAsync();
             mAnimationMatchView.BackRequested += (_, _) =>
             {
                 if (mPairResultInAniMatch)
@@ -282,7 +283,7 @@ namespace GFDStudio.GUI.Forms
         string IAnimationMatchingCacheHost.AnimationMatchingCorpusSignature =>
             GetCorrectedAnimationMatchingContextKey();
 
-        void IGfdAnimationMatchingHost.PreviewAnimation(IAnimationClip clip, int transitionFrame)
+        void IGfdAnimationMatchingHost.PreviewAnimation(IAnimationClip clip, int transitionFrame, int blendFrames)
         {
             var targetPack = GetAnimationMatchingTargetModelPack();
             if (targetPack?.Model == null)
@@ -290,7 +291,7 @@ namespace GFDStudio.GUI.Forms
 
             var generation = ++mAnimationMatchPreviewGeneration;
             mAnimationMatchView.SetStatus("Preparing stitched preview…");
-            _ = PreviewAnimationMatchingClipAsync(clip, transitionFrame, targetPack, generation);
+            _ = PreviewAnimationMatchingClipAsync(clip, transitionFrame, blendFrames, targetPack, generation);
         }
 
         async Task IGfdAnimationMatchingHost.OpenAnimationAsync(
@@ -341,6 +342,7 @@ namespace GFDStudio.GUI.Forms
         private async Task PreviewAnimationMatchingClipAsync(
             IAnimationClip clip,
             int transitionFrame,
+            int blendFrames,
             ModelPack targetPack,
             int generation)
         {
@@ -366,7 +368,8 @@ namespace GFDStudio.GUI.Forms
 
                 mAnimationMatchTimeline.FrameCount = clip.FrameCount;
                 mAnimationMatchTimeline.TransitionFrame = transitionFrame;
-                ConfigureAnimationMatchPreviewLoop(clip, transitionFrame);
+                mAnimationMatchTimeline.BlendEndFrame = blendFrames > 0 ? Math.Min(clip.FrameCount - 1, transitionFrame + blendFrames) : -1;
+                ConfigureAnimationMatchPreviewLoop(clip, transitionFrame, blendFrames);
                 mAnimationMatchView.SetStatus("Stitched preview");
             }
             catch (Exception ex)
@@ -380,6 +383,7 @@ namespace GFDStudio.GUI.Forms
         {
             PairFirstRangeChanged();
             var selection = mAnimationMatchTimeline?.Selection;
+            mAnimationMatchView?.SetSelection(selection);
             if (selection is not { } range)
             {
                 ModelViewControl.Instance.ClearAnimationLoop();
@@ -393,13 +397,13 @@ namespace GFDStudio.GUI.Forms
             ModelViewControl.Instance.SetAnimationLoop(loopStart, loopEnd);
         }
 
-        private void ConfigureAnimationMatchPreviewLoop(IAnimationClip clip, int transitionFrame)
+        private void ConfigureAnimationMatchPreviewLoop(IAnimationClip clip, int transitionFrame, int blendFrames)
         {
             if (clip == null || clip.FrameCount <= 0)
                 return;
 
             var (startFrame, endFrame) = AnimationMatchingPreviewTiming.GetLoopFrames(
-                clip.FrameCount, transitionFrame, clip.FramesPerSecond);
+                clip.FrameCount, transitionFrame, clip.FramesPerSecond, blendFrames);
 
             mAnimationMatchTimeline.SetSelection((startFrame, endFrame));
         }
@@ -415,22 +419,41 @@ namespace GFDStudio.GUI.Forms
             if (targetPack?.Model == null)
                 return null;
 
-            var (firstFrame, lastFrame) = AnimationMatchingPreviewTiming.GetLoopFrames(
-                clip.FrameCount, frame, clip.FramesPerSecond);
-            var frameCount = lastFrame - firstFrame + 1;
-            var seamTimeSeconds = AnimationMatchingPreviewTiming.GetSeamTimeSeconds(
-                firstFrame,
-                Math.Clamp(frame, 0, Math.Max(0, clip.FrameCount - 1)),
-                clip.FramesPerSecond);
-            var baked = await Task.Run(() =>
+            return await Task.Run(() =>
             {
-                var previewClip = GfdAnimationClipBaker.CreateTargetPreviewClip(clip, targetPack.Model);
-                return GfdAnimationClipBaker.BakeRange(
-                    previewClip, targetPack.Model, targetPack.Version, firstFrame, frameCount, cancellationToken);
-            }, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
+                var previewClip=GfdAnimationClipBaker.CreateTargetPreviewClip(clip,targetPack.Model);
+                var (firstFrame,lastFrame)=AnimationMatchingPreviewTiming.GetLoopFrames(previewClip.FrameCount,frame,previewClip.FramesPerSecond);
+                var seamTimeSeconds=AnimationMatchingPreviewTiming.GetSeamTimeSeconds(firstFrame,Math.Clamp(frame,0,Math.Max(0,previewClip.FrameCount-1)),previewClip.FramesPerSecond);
+                cancellationToken.ThrowIfCancellationRequested();
+                var baked=previewClip is GfdTargetAnimationClip authored
+                    ? GfdAnimationRangeExporter.CopyAuthoredRange(authored.PreviewAnimation,targetPack.Version,firstFrame,lastFrame,previewClip.FramesPerSecond)
+                    : GfdAnimationClipBaker.BakeRange(previewClip,targetPack.Model,targetPack.Version,firstFrame,lastFrame-firstFrame+1,cancellationToken);
+                return new AnimationThumbnailScene(targetPack,baked,seamTimeSeconds);
+            },cancellationToken);
+        }
 
-            return new AnimationThumbnailScene(targetPack, baked, seamTimeSeconds);
+        private async Task ExportHighlightedAnimationAsync()
+        {
+            var selection=mAnimationMatchTimeline?.Selection;
+            var model=GetAnimationMatchingTargetModelPack();
+            var animation=ModelViewControl.Instance?.Animation;
+            if(selection==null || model?.Model==null || animation==null)return;
+            using var dialog=new AnimationExportDialog(false);
+            if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+            try
+            {
+                var clip=new GfdTargetAnimationClip("selection","selection",model.Model,animation,AnimationMatchingFramesPerSecond);
+                int first=Math.Clamp(Math.Min(selection.Value.start,selection.Value.end),0,clip.FrameCount-1);
+                int last=Math.Clamp(Math.Max(selection.Value.start,selection.Value.end),first,clip.FrameCount-1);
+                await Task.Run(()=>
+                {
+                    var trimmed=GfdAnimationRangeExporter.Extract(animation,model.Model,model.Version,first,last,AnimationMatchingFramesPerSecond);
+                    var pack=new AnimationPack(model.Version);pack.Animations.Add(trimmed);pack.Save(dialog.FileName);
+                });
+                mAnimationMatchView.SetStatus($"Exported frames {first}–{last}");
+            }
+            catch(Exception ex){mAnimationMatchView.SetStatus("Export failed: "+ex.Message);}
         }
 
         async Task IGfdAnimationMatchingHost.ExportAnimationAsync(IAnimationClip clip, CancellationToken cancellationToken)
@@ -439,18 +462,14 @@ namespace GFDStudio.GUI.Forms
             if (targetPack?.Model == null)
                 throw new InvalidOperationException("No target model is loaded.");
 
-            using var dialog = new SaveFileDialog
-            {
-                Filter = "Animation pack (*.GAP)|*.GAP|All files (*.*)|*.*",
-                DefaultExt = "GAP",
-                AddExtension = true,
-                OverwritePrompt = true,
-                FileName = "animation_match_stitched.GAP",
-                Title = "Export stitched animation"
-            };
+            using var dialog = new AnimationExportDialog();
             if (dialog.ShowDialog(this) != DialogResult.OK)
                 throw new OperationCanceledException(cancellationToken);
-
+            if(dialog.SeparateParts)
+            {
+                await ExportAnimationPartsToFileAsync(clip, dialog.FileName, cancellationToken);
+                return;
+            }
             var path = dialog.FileName;
             await Task.Run(() =>
             {
@@ -467,23 +486,15 @@ namespace GFDStudio.GUI.Forms
             IAnimationClip clip,
             CancellationToken cancellationToken)
         {
-            var targetPack = GetAnimationMatchingTargetModelPack();
-            if (targetPack?.Model == null)
-                throw new InvalidOperationException("No target model is loaded.");
+            using var dialog=new AnimationExportDialog();
+            if(dialog.ShowDialog(this)!=DialogResult.OK)throw new OperationCanceledException(cancellationToken);
+            await ExportAnimationPartsToFileAsync(clip,dialog.FileName,cancellationToken);
+        }
 
-            using var dialog = new SaveFileDialog
-            {
-                Filter = "Animation pack (*.GAP)|*.GAP|All files (*.*)|*.*",
-                DefaultExt = "GAP",
-                AddExtension = true,
-                OverwritePrompt = true,
-                FileName = "animation_match_parts.GAP",
-                Title = "Export stitched animation parts"
-            };
-            if (dialog.ShowDialog(this) != DialogResult.OK)
-                throw new OperationCanceledException(cancellationToken);
-
-            var selectedPath = dialog.FileName;
+        private async Task ExportAnimationPartsToFileAsync(IAnimationClip clip,string selectedPath,CancellationToken cancellationToken)
+        {
+            var targetPack=GetAnimationMatchingTargetModelPack();
+            if(targetPack?.Model==null)throw new InvalidOperationException("No model is loaded.");
             var directory = Path.GetDirectoryName(selectedPath) ?? string.Empty;
             var stem = Path.GetFileNameWithoutExtension(selectedPath);
             var extension = Path.GetExtension(selectedPath);
@@ -532,3 +543,5 @@ namespace GFDStudio.GUI.Forms
         }
     }
 }
+
+

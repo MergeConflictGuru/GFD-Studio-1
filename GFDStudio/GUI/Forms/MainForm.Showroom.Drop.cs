@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -18,6 +18,39 @@ public partial class MainForm
 {
     private readonly ConditionalWeakTable<Control, object> mShowroomDropControls = new();
     private readonly Dictionary<string, CharacterAnimationEntry[]> mDroppedAnimationPacks = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly HashSet<string> mPinnedAnimations = new(StringComparer.OrdinalIgnoreCase);
+    private static string AnimationPinKey(CharacterAnimationEntry entry)
+        => Path.GetFullPath(entry.PackPath) + "|" + entry.Kind + "|" + entry.Index;
+    private bool IsPinnedAnimation(CharacterAnimationEntry entry) => mPinnedAnimations.Contains(AnimationPinKey(entry));
+
+    private void PinCharacterAnimation(object sender, MouseEventArgs e)
+    {
+        if (sender is not ListBox list) return;
+        int index=list.IndexFromPoint(e.Location);
+        if (index<0 || list.Items[index] is not CharacterAnimationEntry entry) return;
+        mPinnedAnimations.Add(AnimationPinKey(entry));
+    }
+
+    private void RemoveSelectedDroppedAnimations(ListBox list)
+    {
+        var selected=list.SelectedItems.Cast<object>().OfType<CharacterAnimationEntry>()
+            .Where(entry=>entry.IsDroppedForSession).ToArray();
+        if(selected.Length==0)return;
+        foreach(var entry in selected)
+        {
+            var file=Path.GetFullPath(entry.PackPath);
+            if(!mDroppedAnimationPacks.TryGetValue(file,out var entries))continue;
+            var kept=entries.Where(item=>AnimationPinKey(item)!=AnimationPinKey(entry)).ToArray();
+            if(kept.Length==0)mDroppedAnimationPacks.Remove(file);
+            else mDroppedAnimationPacks[file]=kept;
+            mPinnedAnimations.Remove(AnimationPinKey(entry));
+            mAnimationPickOrder.Remove(GetCorrectedAnimationMatchClipId(entry));
+        }
+        if(IsPairedShowroom)HidePairedShowroom();
+        RefreshCharacterAnimationList();
+        RefreshCharacterBlendAnimationList();
+    }
 
     private async Task RegisterDroppedAnimationPackAsync(string file, CancellationToken token)
     {

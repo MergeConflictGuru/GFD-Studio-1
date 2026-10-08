@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -13,6 +14,8 @@ public sealed class RangeTimelineControl : Control
     private struct ThumbRectangle { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, ref ThumbRectangle rectangle);
+    private const int TrackBarGetChannelRect = 0x41A; // TBM_GETCHANNELRECT
+    private const int TrackBarGetThumbRect = 0x419;   // TBM_GETTHUMBRECT
 
     public void BindPlayback(TrackBar playback)
     {
@@ -44,6 +47,7 @@ public sealed class RangeTimelineControl : Control
     private int _selectionStart = -1;
     private int _selectionEnd = -1;
     private int _transitionFrame = -1;
+    private int _blendEndFrame = -1;
 
     public RangeTimelineControl()
     {
@@ -55,9 +59,10 @@ public sealed class RangeTimelineControl : Control
     }
 
     public int? DefaultFrame { get; set; }
-    public int FrameCount { get => _frameCount; set { _frameCount = Math.Max(1, value); ClearSelection(); Invalidate(); } }
+    public int FrameCount { get => _frameCount; set { _frameCount = Math.Max(1, value); _blendEndFrame = -1; ClearSelection(); Invalidate(); } }
     public (int start, int end)? Selection => _selectionStart < 0 ? null : (Math.Min(_selectionStart, _selectionEnd), Math.Max(_selectionStart, _selectionEnd));
     public int TransitionFrame { get => _transitionFrame; set { _transitionFrame = value; Invalidate(); } }
+    public int BlendEndFrame { get => _blendEndFrame; set { _blendEndFrame = value; Invalidate(); } }
     public event EventHandler SelectionChanged;
 
     public void ClearSelection()
@@ -124,7 +129,9 @@ public sealed class RangeTimelineControl : Control
         var g = e.Graphics;
         int top = _playback == null ? 0 : 17;
         int stripHeight = Math.Max(10, Height - top);
-        var track = new Rectangle(8, top + stripHeight / 2 - 5, Math.Max(1, Width - 16), 10);
+        var (trackLeft, trackRight) = PlaybackEndpoints();
+        var track = new Rectangle(trackLeft, top + stripHeight / 2 - 5,
+            Math.Max(1, trackRight - trackLeft), 10);
         using var trackBrush = new SolidBrush(Color.FromArgb(70, ForeColor));
         g.FillRectangle(trackBrush, track);
 
@@ -146,13 +153,22 @@ public sealed class RangeTimelineControl : Control
         if (_transitionFrame >= 0)
         {
             var x = FrameToX(Math.Clamp(_transitionFrame, 0, FrameCount - 1));
-            using var boundaryPen = new Pen(Color.Gold, 2f);
+            if (_blendEndFrame > _transitionFrame)
+            {
+                int end = FrameToX(Math.Clamp(_blendEndFrame, 0, FrameCount - 1));
+                var area = new Rectangle(x, track.Top, Math.Max(2, end - x), track.Height);
+                using var blendBrush = new LinearGradientBrush(area, Color.Orange, Color.Yellow, LinearGradientMode.Horizontal);
+                g.FillRectangle(blendBrush, area);
+            }
+            using var boundaryPen = new Pen(Color.DarkOrange, 2f);
+            using var markerBrush = new SolidBrush(Color.DarkOrange);
             g.DrawLine(boundaryPen, x, top, x, Height - 1);
+            g.FillPolygon(markerBrush, new[] { new Point(x - 4, top), new Point(x + 4, top), new Point(x, top + 5) });
         }
         if (_playback != null && _playback.IsHandleCreated && IsHandleCreated)
         {
             var thumb = new ThumbRectangle();
-            SendMessage(_playback.Handle, 0x419, IntPtr.Zero, ref thumb); // TBM_GETTHUMBRECT
+            SendMessage(_playback.Handle, TrackBarGetThumbRect, IntPtr.Zero, ref thumb);
             int center = PointToClient(_playback.PointToScreen(new Point((thumb.Left + thumb.Right) / 2, 0))).X;
             string time = (_playback.Value / 1000d).ToString("0.000", CultureInfo.InvariantCulture) + " s";
             var size = TextRenderer.MeasureText(time, Font, Size.Empty, TextFormatFlags.NoPadding);
@@ -163,10 +179,34 @@ public sealed class RangeTimelineControl : Control
 
     private int XToFrame(int x)
     {
-        var t = Math.Clamp((x - 8f) / Math.Max(1f, Width - 16f), 0f, 1f);
+        var (left, right) = PlaybackEndpoints();
+        var t = Math.Clamp((x - left) / Math.Max(1f, right - left), 0f, 1f);
         return (int)MathF.Round(t * (FrameCount - 1));
     }
 
     private int FrameToX(int frame)
-        => 8 + (int)MathF.Round(frame / (float)Math.Max(1, FrameCount - 1) * Math.Max(1, Width - 16));
+    {
+        var (left, right) = PlaybackEndpoints();
+        return left + (int)MathF.Round(frame / (float)Math.Max(1, FrameCount - 1) * Math.Max(1, right - left));
+    }
+
+    private (int left, int right) PlaybackEndpoints()
+    {
+        int left = 8, right = Math.Max(left + 1, Width - 8);
+        if (_playback == null || !_playback.IsHandleCreated || !IsHandleCreated)
+            return (left, right);
+
+        var channel = new ThumbRectangle();
+        var thumb = new ThumbRectangle();
+        SendMessage(_playback.Handle, TrackBarGetChannelRect, IntPtr.Zero, ref channel);
+        SendMessage(_playback.Handle, TrackBarGetThumbRect, IntPtr.Zero, ref thumb);
+        int halfThumb = Math.Max(1, (thumb.Right - thumb.Left) / 2);
+        int nativeLeft = channel.Left + halfThumb;
+        int nativeRight = channel.Right - halfThumb;
+        if (nativeRight > nativeLeft)
+            (left, right) = (
+                PointToClient(_playback.PointToScreen(new Point(nativeLeft, 0))).X,
+                PointToClient(_playback.PointToScreen(new Point(nativeRight, 0))).X);
+        return (left, right);
+    }
 }

@@ -15,7 +15,7 @@ internal sealed class AnimationViewPane : UserControl
     public ModelViewControl Viewer { get; } = new(false);
     public RangeTimelineControl Timeline { get; } = new() { Dock = DockStyle.Fill, Margin = Padding.Empty, DefaultFrame = 0,
         BackColor = Color.FromArgb(30, 30, 30), ForeColor = Color.FromArgb(220, 220, 220) };
-    private readonly Label mCaption = new() { Dock = DockStyle.Top, Height = 23, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Label mCaption = new() { Dock = DockStyle.Top, Height = 44, AutoEllipsis = false, TextAlign = ContentAlignment.MiddleLeft };
     private readonly TrackBar mSeek = new() { Dock = DockStyle.Fill, Minimum = 0, TickStyle = TickStyle.None, Margin = Padding.Empty };
     private readonly MetroSetButton mPlay = SquareButton("▶", "Play or pause");
     private readonly MetroSetButton mStop = SquareButton("■", "Stop");
