@@ -78,10 +78,9 @@ namespace GFDStudio.GUI.Forms
 
         protected override bool ProcessCmdKey( ref Message msg, Keys keyData )
         {
-            if (keyData == Keys.Escape)
+            if ((keyData & Keys.KeyCode) == Keys.Escape)
             {
-                ModelViewControl.Instance?.ResetCamera();
-                if (IsPairedShowroom) mPairSecondPane.Viewer.ResetCamera();
+                ResetKeyboardCamera((keyData & Keys.Shift) != 0);
                 return true;
             }
             if ( ( keyData & Keys.KeyCode ) == Keys.Space && !IsTextBoxFocused() )

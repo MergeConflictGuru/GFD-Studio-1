@@ -206,8 +206,9 @@ public partial class MainForm
         mPairSecondPane.Timeline.Font = mAnimationMatchTimeline.Font;
         mAnimationMatchTimeline.FontChanged += (_, _) => mPairSecondPane.Timeline.Font = mAnimationMatchTimeline.Font;
         mPairSecondPane.RangeChanged += (_, _) => InvalidatePairBlend();
-        mPairSecondPane.UserSeeked += (_, seconds) => SyncPairSeek(mPairSecondPane.Viewer, seconds);
-        mAnimationTrackBar.Scroll += (_, _) => SyncPairSeek(ModelViewControl.Instance, mAnimationTrackBar.Value / 1000d);
+        mPairSecondPane.UserSeeked += (_, seconds) => HandleUserTimelineSeek(mPairSecondPane.Viewer, seconds);
+        mPairSecondPane.UserPlaybackChanged += (_, playback) => SyncPairPlayback(mPairSecondPane.Viewer, playback);
+        mAnimationTrackBar.Scroll += (_, _) => HandleUserTimelineSeek(ModelViewControl.Instance, mAnimationTrackBar.Value / 1000d);
         mAnimationMatchTimeline.UserSelectionChanged += (_, _) => SyncPairSelection(true);
         mPairSecondPane.Timeline.UserSelectionChanged += (_, _) => SyncPairSelection(false);
         ModelViewControl.Instance.MouseCameraChanged += (sender, shift) => SyncPairCamera((ModelViewControl)sender, shift);
@@ -232,11 +233,50 @@ public partial class MainForm
         EnableShowroomGapDrop(mPairedShowroom);
     }
 
+    private ModelViewControl KeyboardAnimationViewer =>
+        IsPairedShowroom && mPairSecondPane.ContainsFocus ? mPairSecondPane.Viewer : ModelViewControl.Instance;
+
+    private void ResetKeyboardCamera(bool shift)
+    {
+        var source = KeyboardAnimationViewer;
+        source?.ResetCamera();
+        if (IsPairedShowroom && shift)
+        {
+            var other = ReferenceEquals(source, ModelViewControl.Instance) ? mPairSecondPane.Viewer : ModelViewControl.Instance;
+            other.CopyCameraFrom(source);
+        }
+    }
+
+    private void SyncPairPlayback(ModelViewControl source, AnimationPlaybackState playback)
+    {
+        if (!IsPairedShowroom || (ModifierKeys & Keys.Shift) == 0) return;
+        var other = ReferenceEquals(source, ModelViewControl.Instance) ? mPairSecondPane.Viewer : ModelViewControl.Instance;
+        other.AnimationPlayback = playback;
+        other.Invalidate();
+    }
+
+    private void HandleUserTimelineSeek(ModelViewControl source, double seconds)
+    {
+        if (source.AnimationLoopStart is double start && source.AnimationLoopEnd is double end &&
+            (seconds < start || seconds > end))
+        {
+            var timeline = ReferenceEquals(source, ModelViewControl.Instance) ? mAnimationMatchTimeline : mPairSecondPane.Timeline;
+            timeline?.ClearSelectionFromUser();
+        }
+        SyncPairSeek(source, seconds);
+    }
+
     private void SyncPairSeek(ModelViewControl source, double seconds)
     {
         if (!IsPairedShowroom || (ModifierKeys & Keys.Shift) == 0) return;
         var other = ReferenceEquals(source, ModelViewControl.Instance) ? mPairSecondPane.Viewer : ModelViewControl.Instance;
         if (!other.IsAnimationLoaded) return;
+        if (other.AnimationLoopStart is double start && other.AnimationLoopEnd is double end &&
+            (seconds < start || seconds > end))
+        {
+            var timeline = ReferenceEquals(other, ModelViewControl.Instance) ? mAnimationMatchTimeline : mPairSecondPane.Timeline;
+            timeline.ClearSelectionFromUser();
+        }
         if (ReferenceEquals(other, mPairSecondPane.Viewer))
         {
             mPairSecondPane.SeekSeconds(seconds);

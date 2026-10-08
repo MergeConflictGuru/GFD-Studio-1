@@ -799,25 +799,27 @@ namespace GFDStudio.GUI.Forms
 
         private void HandleAnimationPlaybackButtonClick( object sender, EventArgs e )
         {
-            ToggleAnimationPlayback();
+            ToggleAnimationPlayback(ModelViewControl.Instance);
         }
 
-        private void ToggleAnimationPlayback()
+        private void ToggleAnimationPlayback(ModelViewControl requestedViewer = null)
         {
-            if ( !ModelViewControl.Instance.IsAnimationLoaded )
+            var viewer = requestedViewer ?? KeyboardAnimationViewer;
+            if ( !viewer.IsAnimationLoaded )
                 return;
 
-            switch ( ModelViewControl.Instance.AnimationPlayback )
+            switch ( viewer.AnimationPlayback )
             {
                 case AnimationPlaybackState.Stopped:
                 case AnimationPlaybackState.Paused:
-                    ModelViewControl.Instance.AnimationPlayback = AnimationPlaybackState.Playing;
+                    viewer.AnimationPlayback = AnimationPlaybackState.Playing;
                     break;
 
                 case AnimationPlaybackState.Playing:
-                    ModelViewControl.Instance.AnimationPlayback = AnimationPlaybackState.Paused;
+                    viewer.AnimationPlayback = AnimationPlaybackState.Paused;
                     break;
             }
+            SyncPairPlayback(viewer, viewer.AnimationPlayback);
         }
 
         private void HandleTrackbarValueChanged( object sender, EventArgs e )
@@ -851,13 +853,13 @@ namespace GFDStudio.GUI.Forms
                  ModelViewControl.Instance.AnimationLoopEnd is double loopEnd )
             {
                 if ( targetTime < loopStart || targetTime > loopEnd )
-                    mAnimationMatchTimeline?.ClearSelection();
+                    mAnimationMatchTimeline?.ClearSelectionFromUser();
             }
 
             // A click on the channel should jump directly to that point in the animation.
             mIgnoreNextTrackBarChange = false;
             trackBar.Value = targetValue;
-            SyncPairSeek(ModelViewControl.Instance, targetTime);
+            HandleUserTimelineSeek(ModelViewControl.Instance, targetTime);
         }
 
         private void HandleAnimationTreeViewAfterSelect( object sender, TreeViewEventArgs e )
@@ -876,6 +878,7 @@ namespace GFDStudio.GUI.Forms
 
             ModelViewControl.Instance.AnimationPlayback = AnimationPlaybackState.Stopped;
             ModelViewControl.Instance.Invalidate();
+            SyncPairPlayback(ModelViewControl.Instance, AnimationPlaybackState.Stopped);
         }
 
 

@@ -73,6 +73,12 @@ public sealed class RangeTimelineControl : Control
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    public void ClearSelectionFromUser()
+    {
+        ClearSelection();
+        UserSelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public void SetSelection((int start, int end)? selection)
     {
         if (selection is { } value)
@@ -126,8 +132,7 @@ public sealed class RangeTimelineControl : Control
         base.OnMouseClick(e);
         if (e.Button == MouseButtons.Right)
         {
-            ClearSelection();
-            UserSelectionChanged?.Invoke(this, EventArgs.Empty);
+            ClearSelectionFromUser();
         }
     }
 

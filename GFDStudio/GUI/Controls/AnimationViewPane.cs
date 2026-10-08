@@ -23,6 +23,7 @@ internal sealed class AnimationViewPane : UserControl
     private const float FramesPerSecond = 30f;
     public event EventHandler RangeChanged;
     public event EventHandler<double> UserSeeked;
+    public event EventHandler<AnimationPlaybackState> UserPlaybackChanged;
 
     public AnimationViewPane()
     {
@@ -49,9 +50,8 @@ internal sealed class AnimationViewPane : UserControl
         Controls.Add(viewport);
         Controls.Add(mCaption);
         Controls.Add(transport);
-        mPlay.Click += (_, _) => Viewer.AnimationPlayback = Viewer.AnimationPlayback == AnimationPlaybackState.Playing
-            ? AnimationPlaybackState.Paused : AnimationPlaybackState.Playing;
-        mStop.Click += (_, _) => Viewer.AnimationPlayback = AnimationPlaybackState.Stopped;
+        mPlay.Click += (_, _) => TogglePlayback();
+        mStop.Click += (_, _) => StopPlayback();
         Viewer.AnimationPlaybackStateChanged += (_, playback) => mPlay.Text = playback == AnimationPlaybackState.Playing ? "Ⅱ" : "▶";
         Viewer.AnimationLoaded += (_, animation) => mSeek.Maximum = Math.Max(0, (int)Math.Round(animation.Duration * 1000));
         Viewer.AnimationTimeChanged += (_, seconds) =>
@@ -66,12 +66,12 @@ internal sealed class AnimationViewPane : UserControl
             Viewer.AnimationTime = mSeek.Value / 1000d;
             Viewer.Invalidate();
         };
-        mSeek.Scroll += (_, _) => UserSeeked?.Invoke(this, mSeek.Value / 1000d);
+        mSeek.Scroll += (_, _) => NotifyUserSeek();
         mSeek.MouseDown += (_, e) =>
         {
             if (e.Button != MouseButtons.Left) return;
             mSeek.Value = (int)Math.Round(Math.Clamp(e.X / (double)Math.Max(1, mSeek.Width - 1), 0, 1) * mSeek.Maximum);
-            UserSeeked?.Invoke(this, mSeek.Value / 1000d);
+            NotifyUserSeek();
         };
         Timeline.SelectionChanged += (_, _) =>
         {
@@ -89,6 +89,29 @@ internal sealed class AnimationViewPane : UserControl
         mCaption.Text = "2 · " + caption;
         Timeline.FrameCount = frameCount;
         Timeline.TransitionFrame = -1;
+    }
+
+    public void TogglePlayback()
+    {
+        Viewer.AnimationPlayback = Viewer.AnimationPlayback == AnimationPlaybackState.Playing
+            ? AnimationPlaybackState.Paused : AnimationPlaybackState.Playing;
+        UserPlaybackChanged?.Invoke(this, Viewer.AnimationPlayback);
+    }
+
+    public void StopPlayback()
+    {
+        Viewer.AnimationPlayback = AnimationPlaybackState.Stopped;
+        Viewer.Invalidate();
+        UserPlaybackChanged?.Invoke(this, Viewer.AnimationPlayback);
+    }
+
+    private void NotifyUserSeek()
+    {
+        double seconds = mSeek.Value / 1000d;
+        if (Viewer.AnimationLoopStart is double start && Viewer.AnimationLoopEnd is double end &&
+            (seconds < start || seconds > end))
+            Timeline.ClearSelectionFromUser();
+        UserSeeked?.Invoke(this, seconds);
     }
 
     public void SeekSeconds(double seconds)

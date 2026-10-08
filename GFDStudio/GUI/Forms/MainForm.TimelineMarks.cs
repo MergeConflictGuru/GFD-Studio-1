@@ -41,6 +41,8 @@ public partial class MainForm
         {
             ModelViewControl.Instance.AnimationPlayback = AnimationPlaybackState.Paused;
             ModelViewControl.Instance.AnimationTime = mark.Milliseconds / 1000d;
+            SyncPairPlayback(ModelViewControl.Instance, AnimationPlaybackState.Paused);
+            HandleUserTimelineSeek(ModelViewControl.Instance, mark.Milliseconds / 1000d);
         };
         mTimelineMarksControl.MarkEdited += mark => EditTimelineMark(mark, mark.Milliseconds);
         mTimelineMarksControl.MarkRemoved += mark => { GetTimelineMarks()?.Remove(mark); RefreshTimelineMarks(); };
@@ -84,6 +86,7 @@ public partial class MainForm
         var marks = GetTimelineMarks();
         if (marks == null) return;
         ModelViewControl.Instance.AnimationPlayback = AnimationPlaybackState.Paused;
+        SyncPairPlayback(ModelViewControl.Instance, AnimationPlaybackState.Paused);
         using var dialog = new Form
         {
             Text = mark == null ? "Add timeline mark" : "Edit timeline mark",

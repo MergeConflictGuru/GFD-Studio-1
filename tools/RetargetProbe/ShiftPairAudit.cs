@@ -70,6 +70,57 @@ internal static class ShiftPairAudit
             {Mouse(second,"OnMouseDown",button,60,60);Mouse(second,"OnMouseMove",button,75,72);if(Camera(first)!=Camera(second))throw new Exception("Shift camera drag differed: "+button);Mouse(second,"OnMouseUp",button,75,72);}
             checks.Add("Shift orbit, pan and depth drag copied from right");
             Shift(false);string rightCamera=Camera(second);Mouse(first,"OnMouseWheel",MouseButtons.None,20,20,-120);if(Camera(second)!=rightCamera)throw new Exception("No-Shift camera linked");checks.Add("Camera stays independent without Shift");
+            // Transport buttons and keyboard commands use the same Shift rules.
+            void PlaybackEqual(string expected)
+            {
+                if(Get(first,"AnimationPlayback")!.ToString()!=expected || Get(second,"AnimationPlayback")!.ToString()!=expected)
+                    throw new Exception("Transport differs: "+expected);
+            }
+            void Key(Keys keys)
+            {
+                Call(form,"ProcessCmdKey",default(Message),keys);
+            }
+            Shift(true);
+            Set(first,"AnimationPlayback",Enum.Parse(playback,"Paused"));Set(second,"AnimationPlayback",Enum.Parse(playback,"Paused"));
+            Call(form,"HandleAnimationPlaybackButtonClick",null,EventArgs.Empty);PlaybackEqual("Playing");
+            Call(Field(pane,"mPlay"),"OnClick",EventArgs.Empty);PlaybackEqual("Paused");
+            Call(form,"HandleAnimationStopButtonClick",null,EventArgs.Empty);PlaybackEqual("Stopped");
+            Call(Field(pane,"mPlay"),"OnClick",EventArgs.Empty);PlaybackEqual("Playing");
+            Call(Field(pane,"mStop"),"OnClick",EventArgs.Empty);PlaybackEqual("Stopped");
+            checks.Add("Shift play, pause and stop buttons work from either pane");
+            Shift(false);Call(form,"HandleAnimationPlaybackButtonClick",null,EventArgs.Empty);
+            if(Get(first,"AnimationPlayback")!.ToString()!="Playing" || Get(second,"AnimationPlayback")!.ToString()!="Stopped")throw new Exception("Left button linked without Shift");
+            Call(Field(pane,"mPlay"),"OnClick",EventArgs.Empty);Call(Field(pane,"mStop"),"OnClick",EventArgs.Empty);
+            if(Get(first,"AnimationPlayback")!.ToString()!="Playing")throw new Exception("Right stop linked without Shift");
+            checks.Add("Buttons stay independent without Shift");
+            Set(first,"AnimationPlayback",Enum.Parse(playback,"Paused"));Set(second,"AnimationPlayback",Enum.Parse(playback,"Paused"));
+            second.Focus();Shift(false);Key(Keys.Space);
+            if(Get(second,"AnimationPlayback")!.ToString()!="Playing" || Get(first,"AnimationPlayback")!.ToString()!="Paused")throw new Exception("Space did not use focused right pane");
+            Shift(true);Key(Keys.Shift|Keys.Space);PlaybackEqual("Paused");
+            first.Focus();Shift(true);Key(Keys.Shift|Keys.Space);PlaybackEqual("Playing");
+            checks.Add("Space uses focused pane; Shift+Space affects both from either pane");
+            Set(first,"AnimationPlayback",Enum.Parse(playback,"Paused"));Set(second,"AnimationPlayback",Enum.Parse(playback,"Paused"));
+            Shift(false);Mouse(first,"OnMouseWheel",MouseButtons.None,20,20,240);string leftBeforeEscape=Camera(first);
+            second.Focus();Key(Keys.Escape);
+            if(Camera(first)!=leftBeforeEscape)throw new Exception("Escape changed unfocused camera without Shift");
+            Shift(true);Key(Keys.Shift|Keys.Escape);
+            if(Camera(first)!=Camera(second))throw new Exception("Shift+Escape cameras differ");
+            checks.Add("Escape resets focused camera; Shift+Escape resets both");
+            Call(a,"SetSelection",((int start,int end)?)(30,45));Call(form,"SyncPairSelection",true);
+            Shift(true);Seek(mainSeek,3000);
+            if(Get(a,"Selection")!=null || Get(b,"Selection")!=null)throw new Exception("Left outside-range seek failed to clear both highlights");
+            Call(b,"SetSelection",((int start,int end)?)(30,45));Call(form,"SyncPairSelection",false);
+            Shift(true);Seek(secondSeek,3200);
+            if(Get(a,"Selection")!=null || Get(b,"Selection")!=null)throw new Exception("Right outside-range seek failed to clear both highlights");
+            checks.Add("Shift seeking outside highlighted range clears both highlights");
+            Shift(false);Call(a,"SetSelection",((int start,int end)?)(30,45));Call(b,"SetSelection",((int start,int end)?)(30,45));
+            Seek(secondSeek,3400);
+            if(Get(a,"Selection")==null || Get(b,"Selection")!=null)throw new Exception("No-Shift outside seek changed wrong highlight");
+            Call(a,"ClearSelection");checks.Add("Clearing by seeking stays independent without Shift");
+            Call(a,"SetSelection",((int start,int end)?)(30,60));Call(b,"SetSelection",((int start,int end)?)(90,120));
+            Shift(true);Seek(mainSeek,1500);
+            if(Get(a,"Selection")!=null || Get(b,"Selection")!=null)throw new Exception("Shift seek left the other pane trapped in a different loop");
+            checks.Add("Shift seek clears both when only the other pane's loop excludes the new time");
             // Different clip lengths clamp seconds and highlighted frames.
             var shortClip=new Animation(model.Version){Duration=1};
             Call(pane,"LoadClip",model,shortClip,"One-second clip",31);
