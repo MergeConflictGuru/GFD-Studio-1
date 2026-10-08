@@ -31,12 +31,26 @@ internal static class HierarchyPoseBlend
                 int parent = skeleton.Parents[i];
                 var localA = parent < 0 ? Matrix(a[i]) : Matrix(a[i]) * Inverse(Matrix(a[parent]));
                 var localB = parent < 0 ? Matrix(b[i]) : Matrix(b[i]) * Inverse(Matrix(b[parent]));
-                var local = Matrix(BoneTransform.Lerp(Transform(localA), Transform(localB), amount));
+                var poseA = Transform(localA);
+                var poseB = MatchScaleSigns(poseA, Transform(localB));
+                var local = Matrix(BoneTransform.Lerp(poseA, poseB, amount));
                 buffer[i] = parent < 0 ? local : local * buffer[parent];
                 result[i] = Transform(buffer[i]);
             }
         }
         finally { ArrayPool<Matrix4x4>.Shared.Return(buffer); }
+    }
+
+    private static BoneTransform MatchScaleSigns(BoneTransform a, BoneTransform b)
+    {
+        // Matrix decomposition may put the reflection on different axes in A
+        // and B. Match equivalent representations before interpolating, or two
+        // opposite scale signs collapse the bone at the halfway frame.
+        var signs = new Vector3(MathF.Sign(a.Scale.X) * MathF.Sign(b.Scale.X),
+            MathF.Sign(a.Scale.Y) * MathF.Sign(b.Scale.Y), MathF.Sign(a.Scale.Z) * MathF.Sign(b.Scale.Z));
+        if (signs.X * signs.Y * signs.Z <= 0 || signs == Vector3.One) return b;
+        var rotation = Matrix4x4.CreateFromQuaternion(b.Rotation) * Matrix4x4.CreateScale(signs);
+        return new BoneTransform(b.Position, Quaternion.CreateFromRotationMatrix(rotation), b.Scale * signs);
     }
 
     private static Matrix4x4 Matrix(BoneTransform p)

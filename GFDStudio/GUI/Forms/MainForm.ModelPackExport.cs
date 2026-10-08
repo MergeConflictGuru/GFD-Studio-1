@@ -19,7 +19,6 @@ namespace GFDStudio.GUI.Forms
         private const uint IncludeAnimationsControlId = 0x4701;
         private const uint UnrealBoneNamesControlId = 0x4702;
         private const uint ExportAllAnimationsControlId = 0x4703;
-        private const uint CascadeurSkinControlId = 0x4704;
         private const int HResultCancelled = unchecked( (int)0x800704C7 );
 
         private const uint FileOpenOptionsOverwritePrompt = 0x00000002;
@@ -74,7 +73,7 @@ namespace GFDStudio.GUI.Forms
                         path,
                         selection.IncludeAnimations && animationPack != null,
                         animationPack,
-                        selection.UseUnrealBoneNames, selection.BindDanceSkinToHumanoid );
+                        selection.ConvertToUnrealRig, selection.BindDanceSkinToHumanoid );
 
                 case DaeSaveFilterIndex:
                 case ObjSaveFilterIndex:
@@ -139,12 +138,7 @@ namespace GFDStudio.GUI.Forms
 
                 customize.AddCheckButton(
                     UnrealBoneNamesControlId,
-                    "Export Unreal bone names (FBX)",
-                    false );
-
-                customize.AddCheckButton(
-                    CascadeurSkinControlId,
-                    "Bind Dance skin to humanoid bones (Cascadeur FBX)",
+                    "Convert to Unreal mannequin rig (FBX)",
                     false );
 
                 var showResult = dialog.Show( Handle );
@@ -157,7 +151,7 @@ namespace GFDStudio.GUI.Forms
                 customize.GetCheckButtonState( IncludeAnimationsControlId, out var includeAnimations );
                 customize.GetCheckButtonState( ExportAllAnimationsControlId, out var exportAllAnimations );
                 customize.GetCheckButtonState( UnrealBoneNamesControlId, out var useUnrealBoneNames );
-                customize.GetCheckButtonState( CascadeurSkinControlId, out var bindDanceSkinToHumanoid );
+                const bool bindDanceSkinToHumanoid = false;
                 dialog.GetResult( out resultItem );
                 resultItem.GetDisplayName( ShellItemDisplayNameFileSystemPath, out resultPathPointer );
                 var path = Marshal.PtrToStringUni( resultPathPointer );
@@ -389,7 +383,7 @@ namespace GFDStudio.GUI.Forms
                 Path = path;
                 FilterIndex = filterIndex;
                 IncludeAnimations = includeAnimations;
-                UseUnrealBoneNames = useUnrealBoneNames;
+                ConvertToUnrealRig = useUnrealBoneNames;
                 ExportAllAnimations = exportAllAnimations;
                 BindDanceSkinToHumanoid = bindDanceSkinToHumanoid;
             }
@@ -397,7 +391,7 @@ namespace GFDStudio.GUI.Forms
             public string Path { get; }
             public uint FilterIndex { get; }
             public bool IncludeAnimations { get; }
-            public bool UseUnrealBoneNames { get; }
+            public bool ConvertToUnrealRig { get; }
             public bool ExportAllAnimations { get; }
             public bool BindDanceSkinToHumanoid { get; }
         }

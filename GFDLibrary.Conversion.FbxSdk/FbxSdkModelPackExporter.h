@@ -19,11 +19,16 @@ namespace GFDLibrary::Conversion::FbxSdk
 	public:
 		inline FbxSdkModelPackExporterConfig()
 		{
-			UseUnrealBoneNames = false;
+			ConvertToUnrealRig = false;
 			BindDanceSkinToHumanoid = false;
 		}
 
-		property bool UseUnrealBoneNames;
+		property bool ConvertToUnrealRig;
+        // Compatibility for callers compiled against the earlier name-only option.
+        property bool UseUnrealBoneNames {
+            bool get() { return ConvertToUnrealRig; }
+            void set(bool value) { ConvertToUnrealRig = value; }
+        }
 		property bool BindDanceSkinToHumanoid;
 	};
 

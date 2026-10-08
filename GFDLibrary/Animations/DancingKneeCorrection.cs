@@ -34,7 +34,7 @@ namespace GFDLibrary.Animations
                 throw new ArgumentException("A nonempty native Dance base animation is required.", nameof(reference));
             var nodes = target.Nodes.ToArray();
             var byName = nodes.ToDictionary(n => n.Name);
-            var curves = new List<(Node leg, Node[] helpers, (float angle, Matrix4x4[] locals)[] samples)>();
+            var curves = new List<(Node leg, Node[] helpers, (float angle, Quaternion calfRotation, Matrix4x4[] locals)[] samples)>();
             foreach (var (side, prefix) in new[] { ("Left", "L_"), ("Right", "R_") })
             {
                 if (!byName.TryGetValue(side + "Leg", out var leg)) continue;
@@ -43,7 +43,7 @@ namespace GFDLibrary.Animations
                 var helpers = names.Select(n => byName[n]).ToArray();
                 if (names.Append(leg.Name).Any(n => !reference.Controllers.Any(c => c.TargetKind == TargetKind.Node && c.TargetName == n)))
                     throw new ArgumentException("Reference lacks the Dance calf/knee corrective tracks. Select the base GAP.", nameof(reference));
-                var samples = new Dictionary<int, (float angle, Matrix4x4[] locals)>();
+                var samples = new Dictionary<int, (float angle, Quaternion calfRotation, Matrix4x4[] locals)>();
                 // Restrict evaluation to the required node controllers. Node
                 // transforms still include every ancestor in the target model.
                 var relevant = new Animation(reference.Version) {
@@ -52,10 +52,12 @@ namespace GFDLibrary.Animations
                 for (var frame = 0; frame / 30f <= reference.Duration; frame++)
                 {
                     var pose = AnimationPoseEvaluator.Evaluate(target, relevant, frame / 30f);
-                    var angle = Flexion(Local(leg, pose));
+                    var calfLocal = Local(leg, pose);
+                    var angle = Flexion(calfLocal);
+                    Matrix4x4.Decompose(calfLocal, out _, out var calfRotation, out _);
                     var bin = (int)Math.Round(angle * 200); // 0.005 radians
                     if (!samples.ContainsKey(bin))
-                        samples.Add(bin, (angle, helpers.Select(n => Local(n, pose)).ToArray()));
+                        samples.Add(bin, (angle, calfRotation, helpers.Select(n => Local(n, pose)).ToArray()));
                 }
                 if (samples.Count < 2)
                     throw new ArgumentException("Reference does not contain enough knee flexion to calibrate correctives.", nameof(reference));
@@ -78,7 +80,9 @@ namespace GFDLibrary.Animations
                         .SelectMany(l => l.Keys).Select(k => k.Time).Distinct().OrderBy(t => t);
                     foreach (var time in times)
                     {
-                        var angle = Flexion(Local(leg, AnimationPoseEvaluator.Evaluate(target, animation, time)));
+                        var calfLocal = Local(leg, AnimationPoseEvaluator.Evaluate(target, animation, time));
+                        var angle = Flexion(calfLocal);
+                        Matrix4x4.Decompose(calfLocal, out _, out var actualCalfRotation, out _);
                         var upper = Array.FindIndex(samples, s => s.angle >= angle);
                         var lower = Math.Max(0, upper - 1);
                         if (upper < 0)
@@ -98,13 +102,25 @@ namespace GFDLibrary.Animations
                         // instead of freezing boot helpers at the last sample.
                         var span = samples[upper].angle - samples[lower].angle;
                         var amount = span > 0 ? (Math.Clamp(angle,-MathF.PI,MathF.PI)-samples[lower].angle)/span : 0;
+                        var referenceCalf = Quaternion.Normalize(Quaternion.Slerp(
+                            samples[lower].calfRotation, samples[upper].calfRotation, amount));
+                        var inverseReference = Matrix4x4.Transpose(Matrix4x4.CreateFromQuaternion(referenceCalf));
+                        var calfResidual = inverseReference * Matrix4x4.CreateFromQuaternion(actualCalfRotation);
                         for (var i = 0; i < helpers.Length; i++)
                         {
                             Matrix4x4.Decompose(samples[lower].locals[i], out var s0, out var r0, out var p0);
                             Matrix4x4.Decompose(samples[upper].locals[i], out var s1, out var r1, out var p1);
+                            var helperRotation = Quaternion.Normalize(Quaternion.Slerp(r0, r1, amount));
+                            // The first knee helper is a sibling of the calf.
+                            // Its child helpers inherit this correction. Carry
+                            // calf twist and sideways swing as well as the
+                            // calibrated hinge bend, so shin skin follows the leg.
+                            if (helpers[i].Parent == leg.Parent)
+                                helperRotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(
+                                    Matrix4x4.CreateFromQuaternion(helperRotation) * calfResidual));
                             output[i].Layers[0].Keys.Add(new PRSKey(KeyType.NodePRS) {
                                 Time = time, Position = Vector3.Lerp(p0, p1, amount),
-                                Rotation = Quaternion.Normalize(Quaternion.Slerp(r0, r1, amount)), Scale = Vector3.Lerp(s0, s1, amount)
+                                Rotation = helperRotation, Scale = Vector3.Lerp(s0, s1, amount)
                             });
                         }
                     }

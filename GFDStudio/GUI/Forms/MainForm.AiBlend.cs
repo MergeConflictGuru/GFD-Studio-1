@@ -20,6 +20,6 @@ public partial class MainForm
     {
         var pack = GetAnimationMatchingTargetModelPack();
         if (pack?.Model == null) throw new InvalidOperationException("Load a model first.");
-        return SlideAiBlend.GenerateAsync(clip, pack.Model, pack.Version, seconds, token);
+        return SlideAiBlend.GenerateAsync(clip, pack.Model, pack.Version, seconds, token, styleHint);
     }
 }

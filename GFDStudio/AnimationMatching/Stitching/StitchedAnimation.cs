@@ -19,6 +19,8 @@ namespace GFDStudio.AnimationMatching.Stitching;
 /// </summary>
 public sealed class StitchedAnimation : IAnimationClip
 {
+    /// <summary>0 follows B immediately; 1 carries A's travel through the AI gap.</summary>
+    public float TrajectoryPersistence { get; set; } = .5f;
     private readonly IAnimationClip _source;
     private readonly IAnimationClip _candidate;
     private readonly int _sourceFrame;
@@ -131,6 +133,7 @@ public sealed class StitchedAnimation : IAnimationClip
     public bool CollisionCorrectionEnabled { get; set; } = true;
     public bool MatchUp { get; }
     public float YawJitterDegrees { get; }
+    internal float YawVariationRadians => _yawVariation;
     public int FrameCount => _sourceFrame + 1 + Math.Max(0, _candidate.FrameCount - _candidateFrame - 1);
     public IAnimationClip SourceClip => _source;
     public IAnimationClip CandidateClip => _candidate;
@@ -177,12 +180,25 @@ public sealed class StitchedAnimation : IAnimationClip
         candidate.SampleGlobalPose(candidateFrame, candidatePose);
         var sourceRoot=sourcePose[source.Skeleton.RootBoneIndex];
         var candidateRoot=candidatePose[candidate.Skeleton.RootBoneIndex];
-        float Facing(IAnimationClip clip, BoneTransform[] pose) => AnimationFacing.YawRadians(
-            clip.Skeleton.BoneNames,i=>pose[i].Position,pose[clip.Skeleton.RootBoneIndex].Rotation);
-        var delta=PoseFeatureExtractor.WrapAngle(Facing(source,sourcePose)-Facing(candidate,candidatePose)+_yawVariation);
+        int aSpan=Math.Min(4,sourceFrame),bSpan=Math.Min(4,candidate.FrameCount-1-candidateFrame);
+        var before=new BoneTransform[sourcePose.Length];var after=new BoneTransform[candidatePose.Length];
+        source.SampleGlobalPose(sourceFrame-aSpan,before);
+        candidate.SampleGlobalPose(candidateFrame+bSpan,after);
+        var delta=PoseFeatureExtractor.WrapAngle(Integration.SlideAiBlend.MatchMomentumYaw(source.Skeleton,
+            sourcePose,before,aSpan/source.FramesPerSecond,candidatePose,after,bSpan/candidate.FramesPerSecond,
+            BlendSeconds)+_yawVariation);
         var yaw=Quaternion.CreateFromAxisAngle(Vector3.UnitY,delta);
         var destination=sourceRoot.Position;
-        if(!MatchUp) destination.Y=candidateRoot.Position.Y;
+        // Matching a standing pelvis to a lying pelvis hoists the entire body.
+        // Height follows grounded body contact, never the root/pelvis pivot.
+        destination.Y=candidateRoot.Position.Y;
+        if(MatchUp)
+        {
+            var beforePose=new BoneTransform[source.Skeleton.BoneCount];
+            source.SampleGlobalPose(Math.Max(0,sourceFrame-1),beforePose);
+            destination.Y+=Integration.SlideAiBlend.MatchGroundHeight(source.Skeleton,sourcePose,beforePose,
+                candidatePose,1/source.FramesPerSecond);
+        }
         return (yaw,destination-Vector3.Transform(candidateRoot.Position,yaw));
     }
 

@@ -766,9 +766,21 @@ namespace GFDLibrary::Conversion::FbxSdk
 		// Create Skeleton node attribute for this node
 		auto fbxSkeleton = FbxSkeleton::Create(mFbxScene, "");
 
-		// 3ds Max always sets the skeleton type to limb node
-		fbxSkeleton->SetSkeletonType(FbxSkeleton::EType::eLimbNode);
-		fbxNode->SetNodeAttribute(fbxSkeleton);
+        bool unreal = mConfig != nullptr && mConfig->ConvertToUnrealRig;
+        bool bone = !unreal || AnimationSkeletonRoles::GetRole(node->Name) != nullptr ||
+            node->Name->Contains("_twist_") || node->Name->StartsWith("ik_");
+        if (unreal && !bone && mModel->Bones != nullptr)
+            for each (auto paletteBone in mModel->Bones)
+                if (mModelNodes[paletteBone->NodeIndex] == node) { bone = true; break; }
+        if (bone) {
+            // FBX Root attributes import as armature objects, not joints. The
+            // hierarchy identifies the root joint; all joints are LimbNodes.
+            fbxSkeleton->SetSkeletonType(FbxSkeleton::eLimbNode);
+            fbxNode->SetNodeAttribute(fbxSkeleton);
+        } else {
+            fbxSkeleton->Destroy();
+            fbxNode->SetNodeAttribute(FbxNull::Create(mFbxScene, ""));
+        }
 
 		// Add the exact GFD bind transform.  Using EvaluateGlobalTransform here
 		// disagrees with the cluster matrices for some hierarchies and produces an
@@ -839,7 +851,16 @@ namespace GFDLibrary::Conversion::FbxSdk
 
 	FbxScene* FbxSdkModelPackExporter::ConvertToFbxScene(ModelPack^ modelPack)
 	{
-		mModelPack = modelPack;
+        if (mConfig != nullptr && mConfig->ConvertToUnrealRig)
+        {
+            auto converted = UnrealRigConverter::Convert(modelPack->Model, nullptr);
+            auto unrealPack = gcnew ModelPack(modelPack->Version);
+            unrealPack->Model = converted->Model;
+            unrealPack->Materials = modelPack->Materials;
+            unrealPack->Textures = modelPack->Textures;
+            modelPack = unrealPack;
+        }
+        mModelPack = modelPack;
 		mModel = modelPack->Model;
 		mModelNodes = gcnew List<Node^>(mModel->Nodes);
 
@@ -854,7 +875,7 @@ namespace GFDLibrary::Conversion::FbxSdk
 		// importers compensate differently (Blender ended up importing the model
 		// inverted). Keep the FBX metadata consistent with the transforms we write.
 		fbxGlobalSettings.SetAxisSystem(FbxAxisSystem::OpenGL);
-		fbxGlobalSettings.SetSystemUnit(FbxSystemUnit::m);
+		fbxGlobalSettings.SetSystemUnit(mConfig != nullptr && mConfig->ConvertToUnrealRig ? FbxSystemUnit::cm : FbxSystemUnit::m);
 
 		// Export textures as real PNG files instead of blindly renaming the
 		// game-native payload to .dds. P5D model packs commonly contain GNF
@@ -950,8 +971,14 @@ namespace GFDLibrary::Conversion::FbxSdk
 
 		// Now, recursively convert all the children of the root node.
 		// The root node itself is generated and is always identity, so omit that from the output.
-		for each (auto node in mModel->RootNode->Children)
-			ConvertNode(mFbxScene->GetRootNode(), node);
+        FbxNode* armature = nullptr;
+        if (mConfig != nullptr && mConfig->ConvertToUnrealRig) {
+            armature = FbxNode::Create(mFbxScene, "Armature");
+            armature->SetNodeAttribute(FbxNull::Create(mFbxScene, ""));
+            mFbxScene->GetRootNode()->AddChild(armature);
+        }
+        for each (auto node in mModel->RootNode->Children)
+            ConvertNode(armature != nullptr && node->Name == "root" ? armature : mFbxScene->GetRootNode(), node);
 
 		return mFbxScene;
 	}
@@ -1027,8 +1054,11 @@ namespace GFDLibrary::Conversion::FbxSdk
 		// Convert to Z up
 		//FbxAxisSystem::Max.DeepConvertScene(fbxScene);
 
-		// Export scene
-		fbxExporter->Export(fbxScene);
+        if (mConfig != nullptr && mConfig->ConvertToUnrealRig)
+            FbxAxisSystem::MayaZUp.DeepConvertScene(fbxScene);
+        // Export scene
+        if (!fbxExporter->Export(fbxScene))
+            throw gcnew FbxSdkModelPackExporterException("Failed to write FBX scene.");
 
 		// Destroy exporter
 		fbxExporter->Destroy();

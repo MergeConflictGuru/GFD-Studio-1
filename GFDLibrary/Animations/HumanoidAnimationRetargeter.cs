@@ -120,6 +120,43 @@ namespace GFDLibrary.Animations
                             Matrix4x4.Invert(parentWorld, out var inverseParent);
                             position = Vector3.Transform(worldPosition, inverseParent);
                         }
+                        if (target != motionRoot && AnimationSkeletonRoles.GetRole(target.Name) == "hips")
+                        {
+                            // Hips can carry authored locomotion below a stationary root.
+                            // Transfer their animated offset without copying bone lengths
+                            // or counting the parent's rotation/root travel a second time.
+                            var sourceParentBind = source.Parent == null ? Matrix4x4.Identity : sourceBind[source.Parent];
+                            Matrix4x4.Invert(sourceParentBind, out var inverseSourceParentBind);
+                            var bindOffset = (sourceBind[source] * inverseSourceParentBind).Translation;
+                            var sourceParentPose = source.Parent == null ? Matrix4x4.Identity : sourcePose[source.Parent];
+                            var animatedOffset = sourcePose[source].Translation - Vector3.Transform(bindOffset, sourceParentPose);
+                            Matrix4x4.Invert(parentWorld, out var inverseHipParent);
+                            position += Vector3.TransformNormal(animatedOffset * heightRatio, inverseHipParent);
+                        }
+                        // Royal thighs sit below the spine, although their Dance
+                        // counterparts branch from the hips. Keep their pivots
+                        // attached to that shared anatomical ancestor rather than
+                        // rotating the hip socket with the chest.
+                        if (target != motionRoot && !CanTransferLocalRotation(source, target, reverseMapping))
+                        {
+                            for (var ancestor = source.Parent; ancestor != null; ancestor = ancestor.Parent)
+                            {
+                                if (!reverseMapping.TryGetValue(ancestor, out var targetAncestor)) continue;
+                                var parent = target.Parent;
+                                while (parent != null && parent != targetAncestor) parent = parent.Parent;
+                                if (parent == null) continue;
+                                var bindOffset = targetBind[target].Translation - targetBind[targetAncestor].Translation;
+                                Matrix4x4.Invert(Rotation(targetBind[targetAncestor]), out var inverseAncestorBind);
+                                var worldPosition = targetPose[targetAncestor].Translation +
+                                    Vector3.TransformNormal(bindOffset, inverseAncestorBind * Rotation(targetPose[targetAncestor]));
+                                Matrix4x4.Invert(parentWorld, out var inverseParent);
+                                // Hips displacement was transferred above; this
+                                // compensation is only for the limb branches.
+                                if (AnimationSkeletonRoles.GetRole(target.Name) != "hips")
+                                    position = Vector3.Transform(worldPosition, inverseParent);
+                                break;
+                            }
+                        }
                         // Child offsets belong to the target skeleton. Copying
                         // source local translations changes bone lengths/axes.
                         local = Matrix4x4.CreateFromQuaternion(localRotation) * Matrix4x4.CreateScale(target.Scale);
@@ -168,7 +205,11 @@ namespace GFDLibrary.Animations
 
             void AddDriverTrack(string helperName, string driverName)
             {
-                if (!targets.TryGetValue(helperName, out var helper) ||
+                // Haru spells the skinning siblings LThighTwist/LForeTwist.
+                // Keep the actual node name when writing its controller.
+                if ((!targets.TryGetValue(helperName, out var helper) &&
+                     !targets.TryGetValue(helperName.Replace(" ThighTwist", "ThighTwist")
+                         .Replace(" ForeTwist", "ForeTwist"), out helper)) ||
                     !targets.TryGetValue(driverName, out var driver) ||
                     !output.TryGetValue(driver, out var driverController))
                     return;
@@ -190,7 +231,7 @@ namespace GFDLibrary.Animations
                         Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(key.Rotation));
                     helperLayer.Keys.Add(new PRSKey(KeyType.NodePRS) {
                         Time = key.Time,
-                        Position = helper.Translation,
+                        Position = helper.Translation + (helper.Parent == driver.Parent ? key.Position - driver.Translation : Vector3.Zero),
                         Rotation = Quaternion.Normalize(
                             Quaternion.CreateFromRotationMatrix(helperRotation)),
                         Scale = helper.Scale

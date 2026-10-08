@@ -40,6 +40,12 @@ namespace GFDLibrary::Conversion::FbxSdk
             if (animationPack->Animations == nullptr || animationPack->Animations->Count == 0)
                 return;
 
+            bool unreal = config != nullptr && config->ConvertToUnrealRig;
+            if (unreal) {
+                auto converted = UnrealRigConverter::Convert(model, animationPack);
+                model = converted->Model;
+                animationPack = converted->Animations;
+            }
             FbxManager* manager = FbxManager::Create();
             if (manager == nullptr)
                 throw gcnew InvalidOperationException("Failed to create FBX manager for animation export.");
@@ -70,10 +76,12 @@ namespace GFDLibrary::Conversion::FbxSdk
                 importer->Destroy();
                 importer = nullptr;
 
+                if (unreal) FbxAxisSystem::OpenGL.DeepConvertScene(scene);
                 scene->GetGlobalSettings().SetTimeMode(FbxTime::eFrames30);
                 AddAnimations(scene, model, animationPack,
                     config != nullptr && config->UseUnrealBoneNames);
 
+                if (unreal) FbxAxisSystem::MayaZUp.DeepConvertScene(scene);
                 exporter = FbxExporter::Create(manager, "");
                 if (!exporter->SetFileExportVersion(FBX_2014_00_COMPATIBLE))
                     throw gcnew InvalidOperationException("Failed to set FBX animation export version.");

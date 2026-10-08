@@ -216,6 +216,9 @@ namespace GFDLibrary.Animations
                 return null;
 
             var normalized = name.Trim();
+            // FBX namespaces (for example mixamorig:Hips) do not change a joint's role.
+            var namespaceEnd = normalized.LastIndexOf(':');
+            if (namespaceEnd >= 0) normalized = normalized.Substring(namespaceEnd + 1);
             // Names emitted by our Unreal FBX option must map back on import.
             if ( UnrealHumanoidRoles.TryGetValue( normalized, out var unrealRole ) )
                 return unrealRole;

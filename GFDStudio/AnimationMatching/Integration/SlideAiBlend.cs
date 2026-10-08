@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -15,18 +15,54 @@ namespace GFDStudio.AnimationMatching.Integration;
 
 public static class SlideAiBlend
 {
-    private static readonly Lazy<SlideNative> Generator = new(SlideNative.Open);
+    internal static float MatchGroundHeight(SkeletonDefinition skeleton, BoneTransform[] source,
+        BoneTransform[] before, BoneTransform[] candidate, float step)
+    {
+        if(skeleton.BoneNames.SequenceEqual(CanonicalSkeleton.Names))
+        {
+            // The search skeleton has anatomical joints only, with no toe helpers.
+            float Low(BoneTransform[] pose)=>pose.Skip(1).Min(p=>p.Position.Y);
+            float floor=MathF.Min(skeleton.BindPose[(int)CanonicalJoint.LeftFoot].Position.Y,
+                skeleton.BindPose[(int)CanonicalJoint.RightFoot].Position.Y);
+            float height=skeleton.BindPose[(int)CanonicalJoint.Head].Position.Y-floor;
+            return TransitionPlacementMath.GroundHeightOffset(Low(source),Low(before),Low(candidate),floor,height,step,true);
+        }
+        if(!File.Exists(Path.Combine(AppContext.BaseDirectory,"app_data","slide","point_rig.json"))) return 0;
+        var rig=new PointRig(skeleton);
+        return TransitionPlacementMath.GroundHeightOffset(TransitionPlacementMath.LowestBodyPoint(rig.Points(source)),
+            TransitionPlacementMath.LowestBodyPoint(rig.Points(before)),TransitionPlacementMath.LowestBodyPoint(rig.Points(candidate)),
+            0,rig.BodyHeight,step,true);
+    }
+    internal static float MatchMomentumYaw(SkeletonDefinition skeleton, BoneTransform[] a,
+        BoneTransform[] before, float aStep, BoneTransform[] b, BoneTransform[] after, float bStep, float duration)
+    {
+        if(skeleton.IsCanonical)
+        {
+            Vector3[] Points(BoneTransform[] pose) {
+                var points=new Vector3[43];
+                var map=new[]{(29,1),(20,2),(9,4),(6,5),(35,12),(22,15),(5,13),(12,16),
+                    (10,14),(3,17),(18,14),(42,17),(28,6),(17,9),(11,7),(25,10),(39,8),(1,11)};
+                foreach(var (p,j) in map)points[p]=pose[j].Position;
+                return points;
+            }
+            return MomentumPlacement.Yaw(Points(a),Points(before),aStep,Points(b),Points(after),bStep,duration,skeleton.ReferenceHeight);
+        }
+        var rig=new PointRig(skeleton);
+        return MomentumPlacement.Yaw(rig.Points(a),rig.Points(before),aStep,rig.Points(b),rig.Points(after),bStep,duration,rig.BodyHeight);
+    }
+    public static string[] StyleNames => SlideScriptNative.StyleNames;
+    private static readonly Lazy<SlideScriptNative> Generator = new(SlideScriptNative.Open);
+    private static SlideScriptNative GetGenerator() => Generator.Value;
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private static readonly Lazy<Task> Warmup = new(() => Task.Run(() =>
     {
-        var generator = Generator.Value;
         using var template = JsonDocument.Parse(File.ReadAllText(Path.Combine(
             AppContext.BaseDirectory, "app_data", "slide", "point_rig.json")));
         var rest = template.RootElement.GetProperty("warmup_rest").EnumerateArray().Select(p => p.GetSingle()).ToArray();
         if (rest.Length != 43 * 3) throw new InvalidDataException("AI warmup needs 43 rest points.");
         var positions = new float[4 * rest.Length];
         for (int k = 0; k < 4; ++k) rest.CopyTo(positions, k * rest.Length);
-        _ = generator.Generate(positions, rest);
+        _ = GetGenerator().Generate(positions, rest, 16);
     }));
 
     // The shared task belongs to the app; cancelling one blend must not cancel
@@ -34,14 +70,15 @@ public static class SlideAiBlend
     public static Task PreloadAsync() => Available ? Warmup.Value : Task.CompletedTask;
     public static bool Available => File.Exists(Path.Combine(AppContext.BaseDirectory, "SlideAi.dll")) &&
         File.Exists(Path.Combine(AppContext.BaseDirectory, "onnxruntime.dll")) &&
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "app_data", "slide", "pose_inbetweening.onnx")) &&
+        Enumerable.Range(0, 5).All(i => File.Exists(Path.Combine(AppContext.BaseDirectory, "app_data", "slide", "neural", $"block{i}.onnx"))) &&
         File.Exists(Path.Combine(AppContext.BaseDirectory, "app_data", "slide", "point_rig.json"));
 
     public static async Task<IAnimationClip> GenerateAsync(StitchedAnimation stitched, Model model, uint version,
-        float seconds, CancellationToken token)
+        float seconds, CancellationToken token, string styleHint = "Acrobatic")
     {
         if (!Available) throw new FileNotFoundException("The AI blend DLL or model is missing. Build with build-release.ps1.");
         if (!float.IsFinite(seconds) || seconds <= 0 || seconds > 10) throw new ArgumentOutOfRangeException(nameof(seconds));
+        int style = SlideScriptNative.StyleCode(styleHint);
         await PreloadAsync().WaitAsync(token);
         await Gate.WaitAsync(token);
         try
@@ -50,11 +87,16 @@ public static class SlideAiBlend
             {
                 token.ThrowIfCancellationRequested();
                 var full = (StitchedAnimation)GfdAnimationClipBaker.CreateTargetPreviewClip(stitched, model);
+                // Keep the editor's coordinate-origin normalization. Grounded height
+                // is corrected below using body points rather than the root pivot.
                 var parts = full.CreateExportParts();
                 var rig = new PointRig(full.Skeleton);
                 int steps = Math.Max(1, (int)MathF.Round(seconds * full.FramesPerSecond));
-                var generator = Generator.Value;
-                float context = steps / (float)(generator.FrameCount - 1);
+                int count = Math.Max(2, steps + 1);
+                parts = rig.PlaceCandidateWithTrajectory(parts.Source, parts.Candidate, steps/full.FramesPerSecond,
+                    full.AlignPositionAndYaw, full.MatchUp, stitched.TrajectoryPersistence, full.YawVariationRadians);
+                var generator = GetGenerator();
+                float context = steps / (float)(count - 1);
                 var a = Sample(parts.Source, parts.Source.FrameCount - 1);
                 var b = Sample(parts.Candidate, 0);
                 var keys = new[] { Sample(parts.Source, parts.Source.FrameCount - 1 - context), a,
@@ -63,17 +105,17 @@ public static class SlideAiBlend
                 for (int k = 0; k < 4; ++k) Flatten(rig.Points(keys[k]), positions, k * 43 * 3);
                 var rest = new float[43 * 3]; Flatten(rig.Points(full.Skeleton.BindPose.ToArray()), rest, 0);
                 token.ThrowIfCancellationRequested();
-                var generated = generator.Generate(positions, rest);
+                var generated = generator.Generate(positions, rest, count, style);
                 token.ThrowIfCancellationRequested();
                 var aPoints = rig.Points(a); var bPoints = rig.Points(b);
                 // Keep both supplied boundary poses, rather than round-off from inference.
-                Flatten(aPoints, generated, 0); Flatten(bPoints, generated, (generator.FrameCount - 1) * 43 * 3);
+                Flatten(aPoints, generated, 0); Flatten(bPoints, generated, (count - 1) * 43 * 3);
                 var middle = new BoneTransform[steps + 1][]; middle[0] = a; middle[steps] = b;
                 for (int f = 1; f < steps; ++f)
                 {
                     token.ThrowIfCancellationRequested();
-                    float u = f / (float)steps, time = u * (generator.FrameCount - 1);
-                    int first = (int)time, last = Math.Min(first + 1, generator.FrameCount - 1);
+                    float u = f / (float)steps, time = u * (count - 1);
+                    int first = (int)time, last = Math.Min(first + 1, count - 1);
                     var points = new Vector3[43];
                     for (int p = 0; p < 43; ++p)
                         points[p] = Vector3.Lerp(Read(generated, first * 129 + p * 3), Read(generated, last * 129 + p * 3), time - first);
@@ -129,6 +171,8 @@ public static class SlideAiBlend
     private sealed class PointRig
     {
         private readonly SkeletonDefinition skeleton;
+        private readonly float bodyHeight;
+        public float BodyHeight => bodyHeight;
         private readonly int[] owners = new int[43];
         private readonly Vector3[] offsets = new Vector3[43];
         private readonly Matrix4x4[] inverseBindRotations;
@@ -160,6 +204,7 @@ public static class SlideAiBlend
             var x = Unit(lateral - up * Vector3.Dot(up, lateral)); var z = Unit(Vector3.Cross(x, up));
             var body = Basis(x, up, z, Vector3.Zero);
             float height = Vector3.Distance(bind[Bone("head")].Position, feet);
+            bodyHeight = height;
             inverseBindRotations = bind.Select(p => Matrix4x4.Transpose(Matrix4x4.CreateFromQuaternion(p.Rotation))).ToArray();
             using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "app_data", "slide", "point_rig.json")));
             var names = new Dictionary<string, int>();
@@ -191,9 +236,8 @@ public static class SlideAiBlend
                 int driver = Array.FindIndex(skeleton.BoneNames.ToArray(), n => string.Equals(n, driverName, StringComparison.OrdinalIgnoreCase));
                 if (driver >= 0) limbFollowers.Add(i, driver);
             }
-            // Dancing rigs keep knee and elbow skinning helpers beside the main
-            // calf/forearm, not below them. Carry those helper branches with the
-            // fitted joint as well; otherwise one part of a boot stays behind.
+            // The dancing rig's knee/elbow helpers sit beside the calf/forearm.
+            // Move their entire skinning branches with the fitted joint.
             foreach (var side in new[] { (prefix: "L_", leg: "LeftLeg", arm: "LeftForeArm"),
                                          (prefix: "R_", leg: "RightLeg", arm: "RightForeArm") })
             foreach (var pair in new[] { (helper: side.prefix + "Knee_Roll_01", driver: side.leg),
@@ -216,6 +260,37 @@ public static class SlideAiBlend
                 points[i] = pose[owner].Position + Vector3.TransformNormal(offsets[i], delta);
             }
             return points;
+        }
+        public (IAnimationClip Source, IAnimationClip Candidate) PlaceCandidate(IAnimationClip source,
+            IAnimationClip candidate, float duration, bool matchXZ, bool matchHeight)
+            => PlaceCandidateWithTrajectory(source,candidate,duration,matchXZ,matchHeight,.5f);
+
+        public (IAnimationClip Source, IAnimationClip Candidate) PlaceCandidateWithTrajectory(IAnimationClip source,
+            IAnimationClip candidate, float duration, bool matchXZ, bool matchHeight, float persistence, float yawVariation = 0)
+        {
+            float step = 1/source.FramesPerSecond;
+            var history = new Vector3[9];
+            int last = source.FrameCount-1;
+            for (int i=0;i<history.Length;++i)
+                history[i] = MomentumPlacement.Center(Points(Sample(source,last-(8-i))));
+            var a = Points(Sample(source,last));
+            var before = Points(Sample(source,last-1));
+            var b = Points(Sample(candidate,0));
+            int aSpan=Math.Min(4,last),bSpan=Math.Min(4,candidate.FrameCount-1);
+            float yaw=matchXZ?MomentumPlacement.Yaw(a,Points(Sample(source,last-aSpan)),aSpan*step,
+                b,Points(Sample(candidate,bSpan)),bSpan/candidate.FramesPerSecond,duration,bodyHeight)+yawVariation:0;
+            var rotation=Quaternion.CreateFromAxisAngle(Vector3.UnitY,yaw);
+            var centerB=MomentumPlacement.Center(b);
+            var futureB = MomentumPlacement.Center(Points(Sample(candidate,duration*candidate.FramesPerSecond)));
+            var projected = TransitionPlacementMath.BlendTrajectory(history,step,duration,
+                Vector3.Transform(futureB-centerB,rotation),persistence);
+            var placedCenter=Vector3.Transform(centerB,rotation);
+            var shift = matchXZ ? new Vector3(projected.X-placedCenter.X,0,projected.Z-placedCenter.Z) : Vector3.Zero;
+            shift.Y = TransitionPlacementMath.GroundHeightOffset(TransitionPlacementMath.LowestBodyPoint(a),
+                TransitionPlacementMath.LowestBodyPoint(before),TransitionPlacementMath.LowestBodyPoint(b),
+                0,bodyHeight,step,matchHeight);
+            return (source,new StitchedAnimationPart(candidate,0,candidate.FrameCount,rotation,
+                shift,candidate.DisplayName));
         }
         public BoneTransform[] BlendLocal(BoneTransform[] a, BoneTransform[] b, float u)
         {

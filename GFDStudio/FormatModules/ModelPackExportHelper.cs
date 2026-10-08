@@ -20,7 +20,7 @@ namespace GFDStudio.FormatModules
                 FbxSdkModelPackExporter.ExportFile(
                     modelPack,
                     path,
-                    new FbxSdkModelPackExporterConfig { UseUnrealBoneNames = useUnrealBoneNames, BindDanceSkinToHumanoid = bindDanceSkinToHumanoid } );
+                    new FbxSdkModelPackExporterConfig { ConvertToUnrealRig = useUnrealBoneNames, BindDanceSkinToHumanoid = bindDanceSkinToHumanoid } );
             }
             else
             {
@@ -45,7 +45,7 @@ namespace GFDStudio.FormatModules
 
             var config = new FbxSdkModelPackExporterConfig
             {
-                UseUnrealBoneNames = useUnrealBoneNames,
+                ConvertToUnrealRig = useUnrealBoneNames,
                 BindDanceSkinToHumanoid = bindDanceSkinToHumanoid
             };
             FbxSdkModelPackExporter.ExportFile( modelPack, path, config );
