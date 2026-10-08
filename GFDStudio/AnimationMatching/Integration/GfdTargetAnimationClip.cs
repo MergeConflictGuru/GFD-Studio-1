@@ -51,6 +51,7 @@ public sealed class GfdTargetAnimationClip : IAnimationClip
         FramesPerSecond = MathF.Max(1f, framesPerSecond);
     }
 
+    internal Animation PreviewAnimation => _animation;
     public string Id { get; }
     public string DisplayName { get; }
     public SkeletonDefinition Skeleton => _skeleton;

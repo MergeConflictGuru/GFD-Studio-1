@@ -1,8 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 using GFDLibrary.Animations;
 using GFDLibrary.Common;
 using GFDLibrary.Materials;
@@ -17,22 +20,111 @@ namespace GFDLibrary.Rendering.OpenGL
     public class GLModel : IDisposable
     {
         public ModelPack ModelPack { get; }
+        public bool UseGpuSkinning {get;set;}=true;
+        private GLSkinningPalette _skinning;
+        public bool UseBufferedAnimation {get;set;}
+        private readonly Dictionary<Animation,GLAuthoredAnimation> _bufferedAnimations=new();
+        private readonly Dictionary<Animation,Task<AuthoredAnimationKeys>> _bufferPreparations=new();
+        private readonly CancellationTokenSource _bufferCancellation=new();
+        private GLAuthoredPoseRenderer _authoredPoseRenderer;
+        private long _bufferBytes,_bufferUse;
+        private const long BufferedCacheBudget=2L*1024*1024*1024;
+        public long BufferedUploads {get;private set;}
+        public long BufferedDraws {get;private set;}
+        public long BufferedCacheBytes => _bufferBytes;
+        public long BufferedEvictions {get;private set;}
+        private bool SelectBufferedAnimation(double time)
+        {
+            if(!_bufferedAnimations.TryGetValue(Animation,out var buffer))
+            {
+                if(!_bufferPreparations.TryGetValue(Animation,out var preparation))
+                {
+                    if(_bufferPreparations.Count>=2)return false;
+                    var animation=Animation;var token=_bufferCancellation.Token;
+                    preparation=Task.Run(()=>AuthoredAnimationKeys.Copy(ModelPack.Model,animation,token),token);
+                    _bufferPreparations.Add(animation,preparation);
+                }
+                if(!preparation.IsCompleted)return false;
+                UploadPreparedAnimation(Animation,preparation.GetAwaiter().GetResult());
+                buffer=_bufferedAnimations[Animation];
+            }
+            buffer.LastUse=++_bufferUse;
+            _authoredPoseRenderer ??=new GLAuthoredPoseRenderer(ModelPack.Model);
+            _authoredPoseRenderer.Draw(buffer,time);
+            for(int i=0;i<Nodes.Count;i++)
+                if(Nodes[i].IsVisible)foreach(var mesh in Nodes[i].Meshes)
+                    mesh.PrepareBufferedSkinning(_authoredPoseRenderer.Palette,ModelPack.Model.Bones.Count+i);
+            BufferedDraws++;return true;
+        }
+        public void FinishBufferedPreparations()
+        {
+            foreach(var item in _bufferPreparations.Where(item=>item.Value.IsCompleted).ToArray())
+                UploadPreparedAnimation(item.Key,item.Value.GetAwaiter().GetResult());
+        }
+        private void UploadPreparedAnimation(Animation animation,AuthoredAnimationKeys keys)
+        {
+            _bufferPreparations.Remove(animation);
+            while(_bufferBytes+keys.Bytes>BufferedCacheBudget && _bufferedAnimations.Count>0)
+            {
+                var oldest=_bufferedAnimations.OrderBy(item=>item.Value.LastUse).First();
+                _bufferBytes-=oldest.Value.Bytes;oldest.Value.Dispose();_bufferedAnimations.Remove(oldest.Key);BufferedEvictions++;
+            }
+            var buffer=new GLAuthoredAnimation(keys){LastUse=++_bufferUse};
+            _bufferedAnimations.Add(animation,buffer);_bufferBytes+=buffer.Bytes;BufferedUploads++;
+        }
 
         public List<GLNode> Nodes { get; }
 
         public Dictionary<string, GLBaseMaterial> Materials { get; }
 
+        private sealed class ControllerBindings
+        {
+            private readonly AnimationController[] _controllers;
+            private readonly string[] _names;
+            private readonly TargetKind[] _kinds;
+            public readonly Dictionary<string,AnimationController[]> ByNode;
+            public ControllerBindings(Animation animation)
+            {
+                _controllers=animation.Controllers.ToArray();_names=_controllers.Select(c=>c.TargetName).ToArray();_kinds=_controllers.Select(c=>c.TargetKind).ToArray();
+                ByNode=_controllers.Where(c=>c.TargetKind==TargetKind.Node && c.TargetName!=null).GroupBy(c=>c.TargetName,StringComparer.Ordinal).ToDictionary(g=>g.Key,g=>g.ToArray(),StringComparer.Ordinal);
+            }
+            public bool Matches(Animation animation)
+            {
+                if(animation.Controllers.Count!=_controllers.Length)return false;
+                for(int i=0;i<_controllers.Length;i++)
+                {
+                    var controller=animation.Controllers[i];
+                    if(!ReferenceEquals(controller,_controllers[i]) || controller.TargetKind!=_kinds[i] || controller.TargetName!=_names[i])return false;
+                }
+                return true;
+            }
+        }
+        private readonly ConditionalWeakTable<Animation,ControllerBindings> _controllerBindings=new();
+        private ControllerBindings Bindings(Animation animation)
+        {
+            if(_controllerBindings.TryGetValue(animation,out var bindings) && bindings.Matches(animation))return bindings;
+            _controllerBindings.Remove(animation);bindings=new ControllerBindings(animation);_controllerBindings.Add(animation,bindings);return bindings;
+        }
         public Animation Animation { get; private set; }
 
         public Animation BlendAnimation { get; private set; }
 
-        public GLModel( ModelPack modelPack, MaterialTextureCreator textureCreator )
+        public GLModel( ModelPack modelPack, MaterialTextureCreator textureCreator ) : this(modelPack,textureCreator,false) {}
+
+        private GLModel(ModelPack modelPack,MaterialTextureCreator textureCreator,bool cpuPoseOnly)
         {
             ModelPack = modelPack;
+            if(!cpuPoseOnly)_skinning=new GLSkinningPalette(modelPack.Model.Bones.Count);
 
             var nodes = modelPack.Model.Nodes.ToList();
             Nodes = nodes.Select( x => new GLNode( x ) ).ToList();
 
+            if(cpuPoseOnly)
+            {
+                Materials=new Dictionary<string,GLBaseMaterial>();
+                foreach(var node in Nodes)node.Parent=Nodes.FirstOrDefault(n=>n.Node==node.Node.Parent);
+                return;
+            }
             Materials = modelPack.Materials?.ToDictionary( x => x.Key, y => GLBaseMaterial.CreateGLMaterial( y.Value, textureCreator ) ) ??
                         new Dictionary<string, GLBaseMaterial>();
 
@@ -57,25 +149,25 @@ namespace GFDLibrary.Rendering.OpenGL
         {
             Animation = animation;
             BlendAnimation = null;
+            var bindings=Bindings(animation);
 
             foreach ( var glNode in Nodes )
             {
                 glNode.Controllers.Clear();
                 glNode.BlendControllers.Clear();
-                glNode.Controllers.AddRange( animation.Controllers.Where( x => x.TargetKind == TargetKind.Node &&
-                                                                               x.TargetName == glNode.Node.Name ) );
+                if(bindings.ByNode.TryGetValue(glNode.Node.Name,out var controllers))glNode.Controllers.AddRange(controllers);
             }
         }
 
         public void LoadBlendAnimation( Animation animation )
         {
             BlendAnimation = animation;
+            var bindings=Bindings(animation);
 
             foreach ( var glNode in Nodes )
             {
                 glNode.BlendControllers.Clear();
-                glNode.BlendControllers.AddRange( animation.Controllers.Where( x => x.TargetKind == TargetKind.Node &&
-                                                                                  x.TargetName == glNode.Node.Name ) );
+                if(bindings.ByNode.TryGetValue(glNode.Node.Name,out var controllers))glNode.BlendControllers.AddRange(controllers);
             }
         }
 
@@ -107,10 +199,12 @@ namespace GFDLibrary.Rendering.OpenGL
                     glNode.Parent == null ? glNode.CurrentTransform : glNode.CurrentTransform * glNode.Parent.WorldTransform;
             }
 
+            _skinning.Update(ModelPack.Model.Bones,Nodes);
             foreach ( var glNode in Nodes )
             {
                 foreach ( var glMesh in glNode.Meshes )
-                    glMesh.UpdateAnimatedVertices( ModelPack.Model.Bones, Nodes, glNode.WorldTransform );
+                    if(UseGpuSkinning)glMesh.PrepareGpuSkinning(_skinning,ModelPack.Model.Bones,Nodes,glNode.WorldTransform);
+                    else glMesh.UpdateAnimatedVertices(ModelPack.Model.Bones,Nodes,glNode.WorldTransform);
             }
         }
 
@@ -176,7 +270,8 @@ namespace GFDLibrary.Rendering.OpenGL
 
                 foreach ( var glMesh in glNode.Meshes )
                 {
-                    glMesh.UpdateAnimatedVertices( ModelPack.Model.Bones, Nodes, glNode.WorldTransform );
+                    if(UseGpuSkinning)glMesh.PrepareGpuSkinning(_skinning,ModelPack.Model.Bones,Nodes,glNode.WorldTransform);
+                    else glMesh.UpdateAnimatedVertices(ModelPack.Model.Bones,Nodes,glNode.WorldTransform);
                 }
             }
         }
@@ -204,9 +299,11 @@ namespace GFDLibrary.Rendering.OpenGL
 
         public void Draw( DrawContext context )
         {
-            if ( Animation != null )
+            if(!(UseBufferedAnimation && UseGpuSkinning && Animation!=null && BlendAnimation==null &&
+                 SelectBufferedAnimation(context.AnimationTime)))
             {
-                UpdateAnimationPose( context.AnimationTime );
+                if(Animation!=null)UpdateAnimationPose(context.AnimationTime);
+                if(UseGpuSkinning)_skinning.Update(ModelPack.Model.Bones,Nodes);
                 UpdateAnimatedMeshes();
             }
             context.ShaderRegistry.mDefaultShader.Use();
@@ -280,6 +377,49 @@ namespace GFDLibrary.Rendering.OpenGL
         }
 
 
+        public Func<CancellationToken,(Vector3 center,Vector3 minimum,Vector3 maximum)> CaptureMotionBounds(double currentTime,double futureSeconds,int samples,bool bboxCenter)
+        {
+            var pack=ModelPack;var animation=Animation;var overlay=BlendAnimation;
+            var meshes=Nodes.SelectMany((node,index)=>node.IsVisible?node.Meshes.Where(m=>m.IsVisible&&m.Mesh!=null).Select(m=>(mesh:m.Mesh,node:index)):Enumerable.Empty<(Mesh mesh,int node)>()).ToArray();
+            return cancellation=>
+            {
+                var pose=new GLModel(pack,null,true);
+                if(animation!=null)pose.LoadAnimation(animation);
+                if(overlay!=null)pose.LoadBlendAnimation(overlay);
+                var matrices=new Matrix4x4[pack.Model.Bones.Count];
+                var minimum=new Vector3(float.PositiveInfinity);var maximum=new Vector3(float.NegativeInfinity);
+                var average=Vector3.Zero;int count=0;
+                double speed=Math.Max(0,animation?.Speed.GetValueOrDefault(1f)??1);
+                if(!double.IsFinite(speed))speed=1;
+                for(int frame=0;frame<=samples;frame++)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    double time=currentTime+(samples>0?futureSeconds*speed*frame/samples:0);
+                    if(animation?.Duration>0){time%=animation.Duration;pose.AnimateNodes(time);}
+                    for(int bone=0;bone<matrices.Length;bone++)matrices[bone]=pack.Model.Bones[bone].InverseBindMatrix*pose.Nodes[pack.Model.Bones[bone].NodeIndex].WorldTransform;
+                    var low=new Vector3(float.PositiveInfinity);var high=new Vector3(float.NegativeInfinity);
+                    foreach(var item in meshes)
+                    {
+                        cancellation.ThrowIfCancellationRequested();var mesh=item.mesh;
+                        for(int v=0;v<mesh.VertexCount;v++)
+                        {
+                            Vector3 position;
+                            if(mesh.VertexWeights==null)position=Vector3.Transform(mesh.Vertices[v],pose.Nodes[item.node].WorldTransform);
+                            else
+                            {
+                                position=Vector3.Zero;var weights=mesh.VertexWeights[v];
+                                for(int j=0;j<weights.Weights.Length;j++)
+                                    if(weights.Weights[j]!=0)position+=Vector3.Transform(mesh.Vertices[v],matrices[weights.Indices[j]])*weights.Weights[j];
+                            }
+                            low=Vector3.Min(low,position);high=Vector3.Max(high,position);
+                        }
+                    }
+                    minimum=Vector3.Min(minimum,low);maximum=Vector3.Max(maximum,high);average+=(low+high)*.5f;count++;
+                }
+                return (bboxCenter?(minimum+maximum)*.5f:average/Math.Max(1,count),minimum,maximum);
+            };
+        }
+
         private void AnimateNodes( double animationTime )
         {
             foreach ( var glNode in Nodes )
@@ -297,7 +437,7 @@ namespace GFDLibrary.Rendering.OpenGL
                 }
 
                 // Calculate current transform
-                var transform = Matrix4x4.CreateFromQuaternion( rotation ) * Matrix4x4.CreateScale( scale );
+                var transform = Matrix4x4.CreateFromQuaternion( Quaternion.Normalize(rotation) ) * Matrix4x4.CreateScale( scale );
                 transform.Translation   = translation;
                 glNode.CurrentTransform = transform;
 
@@ -391,7 +531,7 @@ namespace GFDLibrary.Rendering.OpenGL
             var blend = GetInterpolationAmount( animationTime, animationDuration, prsKey, nextPrsKey );
 
             if ( prsKey.HasRotation )
-                rotation = Quaternion.Slerp( prsKey.Rotation, nextPrsKey.Rotation, blend );
+                rotation = Quaternion.Slerp( Quaternion.Normalize(prsKey.Rotation), Quaternion.Normalize(nextPrsKey.Rotation), blend );
 
             if ( prsKey.HasPosition )
             {
@@ -429,42 +569,20 @@ namespace GFDLibrary.Rendering.OpenGL
             return Math.Clamp( ( float ) ( ( sampleTime - currentTime ) / interval ), 0, 1 );
         }
 
-        private static (Key curKey, Key nextKey) GetCurrentAndNextKeys( AnimationLayer layer, double animationTime )
+        private static (Key curKey, Key nextKey) GetCurrentAndNextKeys(AnimationLayer layer,double animationTime)
         {
-            Key curKey = null;
-            Key nextKey = null;
-
-            // Find most recent key
-            foreach ( var key in layer.Keys )
+            if(layer.Keys.Count==0)return (null,null);
+            int low=0,high=layer.Keys.Count;
+            while(low<high)
             {
-                if ( key.Time <= animationTime )
-                    curKey = key;
+                int middle=low+(high-low)/2;
+                if(layer.Keys[middle].Time<=animationTime)low=middle+1;else high=middle;
             }
-
-            // Sampling just before the first key must still show the first
-            // authored pose. Otherwise a timeline seek to frame zero can leave
-            // the model in its bind pose until the clock advances past the key.
-            curKey ??= layer.Keys.FirstOrDefault();
-
-            // Find next key
-            if ( curKey != null )
-            {
-                foreach ( var key in layer.Keys )
-                {
-                    if ( key != curKey && key.Time != curKey.Time && key.Time >= animationTime )
-                    {
-                        nextKey = key;
-                        break;
-                    }
-                }
-
-                if ( nextKey == null )
-                {
-                    nextKey = layer.Keys.FirstOrDefault( x => x.Time != curKey.Time );
-                }
-            }
-
-            return ( curKey, nextKey );
+            var current=layer.Keys[Math.Max(0,low-1)];
+            var next=low<layer.Keys.Count?layer.Keys[low]:null;
+            if(ReferenceEquals(current,next))next=null;
+            // End keys hold their authored pose; the clock alone wraps playback.
+            return (current,next);
         }
 
         #region IDisposable Support
@@ -476,6 +594,12 @@ namespace GFDLibrary.Rendering.OpenGL
             {
                 if ( disposing )
                 {
+                    _bufferCancellation.Cancel();
+                    _bufferPreparations.Clear();
+                    foreach(var buffer in _bufferedAnimations.Values)buffer.Dispose();
+                    _bufferedAnimations.Clear();
+                    _authoredPoseRenderer?.Dispose();
+                    _skinning.Dispose();
                     GLVertexArray.UnbindAll();
                     GL.BindBuffer( BufferTarget.ArrayBuffer, 0 );
                     GL.BindBuffer( BufferTarget.ElementArrayBuffer, 0 );
@@ -512,3 +636,4 @@ namespace GFDLibrary.Rendering.OpenGL
         public Material SelectedMaterial { get; init; }
     }
 }
+

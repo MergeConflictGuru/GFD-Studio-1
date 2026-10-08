@@ -7,12 +7,78 @@ using GFDLibrary.Models;
 using OpenTK.Mathematics;
 using OpenTK.Graphics.OpenGL4;
 using Vector3 = System.Numerics.Vector3;
+using Vector2 = System.Numerics.Vector2;
 
 namespace GFDLibrary.Rendering.OpenGL
 {
     public class GLMesh : IDisposable
     {
         public Mesh Mesh { get; }
+        private GLSkinningPalette _palette;
+        private List<Bone> _bones;
+        private List<GLNode> _nodes;
+        private Matrix4x4 _modelMatrix, _modelInverse;
+        private GLVertexAttributeBuffer<Vector2> _skinRanges;
+        private int _influenceBuffer, _influenceTexture;
+        private int _bufferedNode=-1;
+        private bool _bufferedPose;
+        private bool _gpuSkinning, _gpuVertexData=true, _cpuPoseReady;
+        private readonly Dictionary<int,BoundingBox> _boneBounds=new();
+        private void CreateSkinData()
+        {
+            if(Mesh?.VertexWeights==null)return;
+            var ranges=new Vector2[Mesh.VertexCount];var influences=new List<Vector2>();
+            for(int v=0;v<Mesh.VertexCount;v++)
+            {
+                var weights=Mesh.VertexWeights[v];int start=influences.Count;
+                for(int j=0;j<weights.Weights.Length;j++)
+                {
+                    if(weights.Weights[j]==0)continue;
+                    int bone=weights.Indices[j];influences.Add(new Vector2(bone,weights.Weights[j]));
+                    var pos=Mesh.Vertices[v];
+                    _boneBounds[bone]=_boneBounds.TryGetValue(bone,out var b)?new BoundingBox(Vector3.Min(b.Min,pos),Vector3.Max(b.Max,pos)):new BoundingBox(pos,pos);
+                }
+                ranges[v]=new Vector2(start,influences.Count-start);
+            }
+            GL.BindVertexArray(VertexArray.Id);
+            _skinRanges=new GLVertexAttributeBuffer<Vector2>(ranges,3,2,VertexAttribPointerType.Float);
+            _influenceBuffer=GL.GenBuffer();_influenceTexture=GL.GenTexture();
+            GL.BindBuffer(BufferTarget.TextureBuffer,_influenceBuffer);
+            var data=influences.Count>0?influences.ToArray():new[]{Vector2.Zero};
+            GL.BufferData(BufferTarget.TextureBuffer,data.Length*8,data,BufferUsageHint.StaticDraw);
+            GL.BindTexture(TextureTarget.TextureBuffer,_influenceTexture);
+            GL.TexBuffer(TextureBufferTarget.TextureBuffer,SizedInternalFormat.Rg32f,_influenceBuffer);
+        }
+        public void PrepareGpuSkinning(GLSkinningPalette palette,List<Bone> bones,List<GLNode> nodes,Matrix4x4 modelMatrix,bool calculateBounds=true)
+        {
+            _bufferedNode=-1;_bufferedPose=false;
+            if(Mesh?.VertexWeights==null)return;
+            _palette=palette;_bones=bones;_nodes=nodes;_modelMatrix=modelMatrix;
+            Matrix4x4.Invert(modelMatrix,out _modelInverse);_gpuSkinning=true;_cpuPoseReady=false;
+            if(!_gpuVertexData){VertexArray.UpdatePositions(Mesh.Vertices);VertexArray.UpdateNormals(Mesh.Normals);_gpuVertexData=true;}
+            if(!calculateBounds)return;
+            var min=new Vector3(float.PositiveInfinity);var max=new Vector3(float.NegativeInfinity);
+            foreach(var item in _boneBounds)
+            {
+                var matrix=palette.Matrices[item.Key]*_modelInverse;var b=item.Value;
+                for(int x=0;x<2;x++)for(int y=0;y<2;y++)for(int z=0;z<2;z++)
+                {
+                    var p=Vector3.Transform(new Vector3(x==0?b.Min.X:b.Max.X,y==0?b.Min.Y:b.Max.Y,z==0?b.Min.Z:b.Max.Z),matrix);
+                    min=Vector3.Min(min,p);max=Vector3.Max(max,p);
+                }
+            }
+            VertexBounds=new BoundingBox(min,max);
+        }
+        public void PrepareBufferedSkinning(GLSkinningPalette palette,int node)
+        {
+            _bufferedPose=true;_bufferedNode=Mesh?.VertexWeights==null?node:-1;
+            _palette=palette;_gpuSkinning=Mesh?.VertexWeights!=null;_modelInverse=Matrix4x4.Identity;
+            if(!_gpuVertexData && Mesh!=null){VertexArray.UpdatePositions(Mesh.Vertices);VertexArray.UpdateNormals(Mesh.Normals);_gpuVertexData=true;}
+        }
+        public void PrepareCpuPicking()
+        {
+            if(_gpuSkinning && !_cpuPoseReady){UpdateAnimatedVertices(_bones,_nodes,_modelMatrix,false);_cpuPoseReady=true;}
+        }
 
         public GLVertexArray VertexArray { get; }
 
@@ -104,6 +170,7 @@ namespace GFDLibrary.Rendering.OpenGL
                 new[] { mesh.TexCoordsChannel0, mesh.TexCoordsChannel1, mesh.TexCoordsChannel2 }, 
                 new[] { mesh.ColorChannel0, mesh.ColorChannel1, mesh.ColorChannel2 },
                 indices, PrimitiveType.Triangles );
+            if(mesh.VertexWeights!=null){VertexArray.UpdatePositions(mesh.Vertices);VertexArray.UpdateNormals(mesh.Normals);CreateSkinData();}
 
             // material
             if ( mesh.MaterialName != null && materials != null )
@@ -185,15 +252,32 @@ namespace GFDLibrary.Rendering.OpenGL
         {
             //if ( Material.METAPHOR_DistortionMaterialTest )
             //    return;
-            shaderProgram.SetUniform( "uModel", modelMatrix);
+            shaderProgram.Use();
+            shaderProgram.SetUniform("uSkinning",_gpuSkinning);
+            shaderProgram.SetUniform("uSkinPalette",10);
+            shaderProgram.SetUniform("uSkinInfluences",11);
+            shaderProgram.SetUniform("uSkinRigidNode",_bufferedNode);
+            bool buffered=_bufferedNode>=0 || _gpuSkinning;
+            shaderProgram.SetUniform("uSkinFrame",buffered?_palette.FrameOffset:0);
+            shaderProgram.SetUniform("uSkinNextFrame",buffered?_palette.NextFrameOffset:0);
+            shaderProgram.SetUniform("uSkinFrameBlend",buffered?_palette.FrameBlend:0f);
+            shaderProgram.SetUniform("uSkinModelInverse",_modelInverse.ToOpenTK());
+            if(buffered)
+            {
+                GL.ActiveTexture(TextureUnit.Texture10);GL.BindTexture(TextureTarget.TextureBuffer,_palette.Texture);
+                GL.ActiveTexture(TextureUnit.Texture11);GL.BindTexture(TextureTarget.TextureBuffer,_influenceTexture);
+            }
+            GL.ActiveTexture(TextureUnit.Texture0);
+            shaderProgram.SetUniform( "uModel", _bufferedPose ? Matrix4.Identity : modelMatrix);
             Material.Bind( shaderProgram );
             shaderProgram.Check();
             VertexArray.Draw();
             Material.Unbind( shaderProgram );
         }
 
-        public void UpdateAnimatedVertices( List<Bone> bones, List<GLNode> nodes, Matrix4x4 modelMatrix )
+        public void UpdateAnimatedVertices( List<Bone> bones, List<GLNode> nodes, Matrix4x4 modelMatrix, bool upload = true )
         {
+            if(upload){_gpuSkinning=false;_bufferedNode=-1;_bufferedPose=false;}
             if ( Mesh == null || Mesh.VertexWeights == null )
                 return;
 
@@ -224,9 +308,10 @@ namespace GFDLibrary.Rendering.OpenGL
 
             VertexPositions = vertices;
             VertexBounds = BoundingBox.Calculate( vertices );
-            VertexArray.UpdatePositions( vertices );
-            if ( normals != null )
-                VertexArray.UpdateNormals( normals );
+            if(upload)
+            {
+                VertexArray.UpdatePositions(vertices);VertexArray.UpdateNormals(normals);_gpuVertexData=false;
+            }
         }
 
         #region IDisposable Support
@@ -238,6 +323,9 @@ namespace GFDLibrary.Rendering.OpenGL
             {
                 if ( disposing )
                 {
+                    _skinRanges?.Dispose();
+                    if(_influenceTexture!=0)GL.DeleteTexture(_influenceTexture);
+                    if(_influenceBuffer!=0)GL.DeleteBuffer(_influenceBuffer);
                     VertexArray.Dispose();
                 }
 
@@ -254,3 +342,4 @@ namespace GFDLibrary.Rendering.OpenGL
         #endregion
     }
 }
+

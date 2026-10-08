@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using GFDLibrary;
@@ -45,7 +47,7 @@ namespace GFDStudio.GUI.Controls
     {
         public AnimationThumbnailRenderBatch( Bitmap atlas, IReadOnlyList<Rectangle> sourceRectangles )
         {
-            Atlas = atlas ?? throw new ArgumentNullException( nameof( atlas ) );
+            Atlas = atlas;
             SourceRectangles = sourceRectangles ?? throw new ArgumentNullException( nameof( sourceRectangles ) );
         }
 
@@ -101,7 +103,10 @@ namespace GFDStudio.GUI.Controls
         // Animation
         private Stopwatch mTimeCounter;
         private double mLastTime;
-        private Timer mUpdateTimer;
+        private RenderFrameClock mUpdateTimer;
+        private CancellationTokenSource mFocusBoundsWork;
+        internal Task FocusBoundsTask {get;private set;}=Task.CompletedTask;
+        internal long RenderedFrameCount {get;private set;}
         private AnimationPlaybackState mAnimationPlayback = AnimationPlaybackState.Stopped;
         private double mAnimationTime;
         private double? mAnimationLoopStart;
@@ -113,7 +118,10 @@ namespace GFDStudio.GUI.Controls
         private int mThumbnailDepthBuffer;
         private int mThumbnailTargetWidth;
         private int mThumbnailTargetHeight;
+        internal bool BufferedPreviewEnabled {get;set;}=true;
+        internal bool PreviewSurface {get;set;}
         private readonly Dictionary<Animation, ThumbnailCameraState> mThumbnailCameraStates = new();
+        private readonly Dictionary<Animation,Task<(System.Numerics.Vector3 center,System.Numerics.Vector3 minimum,System.Numerics.Vector3 maximum)>> mThumbnailBoundsTasks=new();
 
         private readonly struct ThumbnailCameraState
         {
@@ -235,8 +243,8 @@ namespace GFDStudio.GUI.Controls
             Dock = DockStyle.Fill;
 
             // required to use GL in the context of this control
-            MakeCurrent();
-            Context.SwapInterval = 1;
+            MakeRenderContextCurrent();
+            Context.SwapInterval = 0;
             LogGLInfo();
 
             if ( !InitializeShaders() )
@@ -251,6 +259,19 @@ namespace GFDStudio.GUI.Controls
 
             CreateGrid();
             LoadPrimitives();
+        }
+
+        private void MakeRenderContextCurrent()
+        {
+            if(!PreviewSurface){base.MakeCurrent();return;}
+            // Worker rendering must never ask GLControl to create a Windows handle.
+            var context=Context ?? throw new InvalidOperationException("Preview surface has no UI-created OpenGL context.");
+            context.MakeCurrent();
+        }
+        private void SwapRenderBuffers()
+        {
+            if(!PreviewSurface){base.SwapBuffers();return;}
+            Context?.SwapBuffers();
         }
 
         private void CreateGrid()
@@ -502,7 +523,8 @@ namespace GFDStudio.GUI.Controls
             if ( !mCanRender || modelPack.Model == null )
                 return;
 
-            MakeCurrent();
+            mFocusBoundsWork?.Cancel();
+            MakeRenderContextCurrent();
 
             var preserveCamera = mCamera != null;
             var cameraTranslation = preserveCamera ? mCamera.Translation : Vector3.Zero;
@@ -517,6 +539,7 @@ namespace GFDStudio.GUI.Controls
             }
 
             mThumbnailCameraStates.Clear();
+            mThumbnailBoundsTasks.Clear();
 
             // Load model into optimized format
             mModel = new GLModel( modelPack, ( material, textureName ) =>
@@ -620,7 +643,7 @@ namespace GFDStudio.GUI.Controls
         /// GL contexts or duplicate the target model's GPU resources.
         /// </summary>
         internal AnimationThumbnailRenderBatch RenderAnimationThumbnailBatch(
-            IReadOnlyList<AnimationThumbnailRenderRequest> requests )
+            IReadOnlyList<AnimationThumbnailRenderRequest> requests, Rectangle[] destinations=null, Size surfaceSize=default, Func<bool> canPresent=null )
         {
             if ( requests == null )
                 throw new ArgumentNullException( nameof( requests ) );
@@ -629,7 +652,9 @@ namespace GFDStudio.GUI.Controls
             if ( !mCanRender || !mIsModelLoaded || mModel == null || mCamera == null )
                 throw new InvalidOperationException( "The thumbnail renderer is not ready." );
 
-            MakeCurrent();
+            MakeRenderContextCurrent();
+            mModel.UseBufferedAnimation=BufferedPreviewEnabled;
+            if(BufferedPreviewEnabled)mModel.FinishBufferedPreparations();
 
             var oldAnimation = Animation;
             var oldAnimationOverlay = AnimationOverlay;
@@ -706,9 +731,23 @@ namespace GFDStudio.GUI.Controls
                     if ( !mThumbnailCameraStates.TryGetValue( request.Animation, out var cameraState ) ||
                          cameraState.Width != request.Width || cameraState.Height != request.Height )
                     {
-                        FocusOnGuideArrow( ResolveGuideArrowAnchor(), tight: true );
-                        cameraState = new ThumbnailCameraState( request.Width, request.Height, mCamera );
-                        mThumbnailCameraStates[request.Animation] = cameraState;
+                        // Framing 90 poses per new card must not stop all playing cards.
+                        if(!mThumbnailBoundsTasks.TryGetValue(request.Animation,out var boundsTask) &&
+                           mThumbnailBoundsTasks.Values.Count(task=>!task.IsCompleted)<2)
+                        {
+                            var sample=mModel.CaptureMotionBounds(0,request.Animation.Duration,GuideArrowFutureSampleCount,true);
+                            boundsTask=Task.Run(()=>sample(CancellationToken.None));
+                            mThumbnailBoundsTasks.Add(request.Animation,boundsTask);
+                        }
+                        if(boundsTask is {IsCompletedSuccessfully:true})
+                        {
+                            var bounds=boundsTask.Result;
+                            FocusModelFromBounds(bounds.center.ToOpenTK(),bounds.minimum.ToOpenTK(),bounds.maximum.ToOpenTK(),true);
+                            cameraState = new ThumbnailCameraState( request.Width, request.Height, mCamera );
+                            mThumbnailCameraStates[request.Animation] = cameraState;
+                        }
+                        // Until framing is ready, draw with the neutral model camera.
+                        // Do not hold back a whole grid waiting for one new animation.
                     }
                     else
                     {
@@ -730,7 +769,25 @@ namespace GFDStudio.GUI.Controls
 
                 GL.Disable( EnableCap.ScissorTest );
                 GL.Flush();
-                atlas = ReadThumbnailPixels( atlasWidth, atlasHeight );
+                if(destinations!=null)
+                {
+                    if(canPresent==null || canPresent())
+                    {
+                        GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer,mThumbnailFramebuffer);
+                        GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer,0);
+                        GL.Viewport(0,0,surfaceSize.Width,surfaceSize.Height);
+                        GL.Clear(ClearBufferMask.ColorBufferBit|ClearBufferMask.DepthBufferBit);
+                        for(int i=0;i<destinations.Length;i++)
+                        {
+                            var source=sourceRectangles[i];var dest=destinations[i];
+                            GL.BlitFramebuffer(source.Left,atlasHeight-source.Bottom,source.Right,atlasHeight-source.Top,
+                                dest.Left,surfaceSize.Height-dest.Bottom,dest.Right,surfaceSize.Height-dest.Top,
+                                ClearBufferMask.ColorBufferBit,BlitFramebufferFilter.Nearest);
+                        }
+                        SwapRenderBuffers();
+                    }
+                }
+                else atlas = ReadThumbnailPixels( atlasWidth, atlasHeight );
                 return new AnimationThumbnailRenderBatch( atlas, sourceRectangles );
             }
             catch
@@ -838,8 +895,15 @@ namespace GFDStudio.GUI.Controls
             mThumbnailTargetHeight = 0;
         }
 
+        internal long ThumbnailReadbacks {get;private set;}
+        internal Bitmap CapturePreviewSurface(Size size)
+        {
+            MakeRenderContextCurrent();GL.BindFramebuffer(FramebufferTarget.Framebuffer,0);GL.ReadBuffer(ReadBufferMode.Front);
+            var bitmap=ReadThumbnailPixels(size.Width,size.Height);GL.ReadBuffer(ReadBufferMode.Back);return bitmap;
+        }
         private Bitmap ReadThumbnailPixels( int width, int height )
         {
+            ThumbnailReadbacks++;
             var pixels = new byte[width * height * 4];
             GL.ReadPixels( 0, 0, width, height, PixelFormat.Bgra, PixelType.UnsignedByte, pixels );
             var bitmap = new Bitmap( width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb );
@@ -882,15 +946,17 @@ namespace GFDStudio.GUI.Controls
         /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
         protected override void Dispose( bool disposing )
         {
-            if ( disposing )
+            if ( disposing && !IsDisposed )
             {
                 components?.Dispose();
+                mFocusBoundsWork?.Cancel();
+                mFocusBoundsWork?.Dispose();
                 mUpdateTimer?.Stop();
                 mUpdateTimer?.Dispose();
                 // A hidden thumbnail control can lose its handle before its parent is disposed.
                 if ( IsHandleCreated )
                 {
-                    MakeCurrent();
+                    MakeRenderContextCurrent();
                     mGuideArrow?.Dispose();
                     mShaderRegistry.mDefaultShader?.Dispose();
                     mShaderRegistry.mGuideArrowShader?.Dispose();
@@ -913,16 +979,11 @@ namespace GFDStudio.GUI.Controls
             mTimeCounter = new Stopwatch();
             mTimeCounter.Start();
             mLastTime = mTimeCounter.Elapsed.TotalSeconds;
-            mUpdateTimer = new Timer
+            mUpdateTimer?.Dispose();
+            mUpdateTimer=new RenderFrameClock(this,()=>
             {
-                Interval = 16
-            };
-            mUpdateTimer.Tick += ( sender, args ) =>
-            {
-                if ( mCanRender && AnimationPlayback == AnimationPlaybackState.Playing && !IsDisposed )
-                    Invalidate();
-            };
-            mUpdateTimer.Start();
+                if(mCanRender && AnimationPlayback==AnimationPlaybackState.Playing && !IsDisposed)Invalidate();
+            });
         }
 
         private void ExecuteTimedCallback( Action action )
@@ -958,6 +1019,7 @@ namespace GFDStudio.GUI.Controls
         /// <param name="e"></param>
         protected override void OnPaint( PaintEventArgs e )
         {
+            if(PreviewSurface)return;
             if ( !mCanRender || mCamera == null )
                 return;
 
@@ -966,7 +1028,7 @@ namespace GFDStudio.GUI.Controls
             // context, so never assume that this control is still current when WinForms
             // asks it to paint. Without this, the main surface can be cleared/swapped
             // through the hidden thumbnail context and appear as a solid gray viewport.
-            MakeCurrent();
+            MakeRenderContextCurrent();
             UpdateViewport();
 
             if ( mThumbnailMode )
@@ -989,11 +1051,12 @@ namespace GFDStudio.GUI.Controls
                     SelectedMesh = null
                 } );
             }
-            SwapBuffers();
+            SwapRenderBuffers();
         }
 
         private void RenderFrame()
         {
+            RenderedFrameCount++;
             ExecuteTimedCallback( () =>
             {
                 // clear the buffers
@@ -1031,7 +1094,7 @@ namespace GFDStudio.GUI.Controls
 
                 //DrawLine( mRaypickStart, mRaypickEnd, new Vector4( 1, 0, 0, 1 ) );
 
-                SwapBuffers();
+                SwapRenderBuffers();
             } );
         }
 
@@ -1577,7 +1640,8 @@ namespace GFDStudio.GUI.Controls
             // shared with double-click and thumbnail rendering. Keep the current camera
             // position, then look from it at the sampled motion center.
             _ = anchor;
-            FocusModelMotionFromCurrentCamera( tight );
+            if(mThumbnailMode)FocusModelMotionFromCurrentCamera(tight);
+            else FocusBoundsTask=FocusModelMotionAsync(tight);
         }
 
         private float CalculateGuideArrowFitDistance( Vector3 targetCenter, Vector3 targetMinimum,
@@ -1639,7 +1703,7 @@ namespace GFDStudio.GUI.Controls
             // still 0x0 until the user causes another layout pass.
             base.OnResize( e );
 
-            UpdateViewport();
+            if(!PreviewSurface)UpdateViewport();
         }
 
         private void UpdateViewport()
@@ -1714,6 +1778,14 @@ namespace GFDStudio.GUI.Controls
             mGuideArrowOpacity = 0.0f;
             mGuideArrowLastUpdateTime = -1.0;
             mModel.Dispose();
+        }
+
+        public void ResetCamera()
+        {
+            mFocusBoundsWork?.Cancel();
+            if (mModel?.ModelPack?.Model == null) return;
+            InitializeCamera();
+            Invalidate();
         }
 
         private void InitializeCamera()
@@ -1877,6 +1949,7 @@ namespace GFDStudio.GUI.Controls
                 foreach ( var glMesh in glNode.Meshes )
                 {
                     var mesh = glMesh.Mesh;
+                    glMesh.PrepareCpuPicking();
                     var positions = glMesh.VertexPositions;
                     var triangles = mesh?.Triangles;
                     if ( !glMesh.IsVisible || positions == null || triangles == null || triangles.Length == 0 )
@@ -1996,9 +2069,33 @@ namespace GFDStudio.GUI.Controls
             FocusModelMotionFromCurrentCamera();
         }
 
+        private async Task FocusModelMotionAsync(bool tight)
+        {
+            if(mModel==null)return;
+            mFocusBoundsWork?.Cancel();mFocusBoundsWork?.Dispose();
+            var work=mFocusBoundsWork=new CancellationTokenSource();
+            var model=mModel;
+            var sample=model.CaptureMotionBounds(mAnimationTime,GuideArrowFutureFrameSeconds,GuideArrowFutureSampleCount,tight);
+            try
+            {
+                var token=work.Token;
+                var bounds=await Task.Run(()=>sample(token),token);
+                if(IsDisposed||work.IsCancellationRequested||!ReferenceEquals(model,mModel))return;
+                FocusModelFromBounds(bounds.center.ToOpenTK(),bounds.minimum.ToOpenTK(),bounds.maximum.ToOpenTK(),tight);
+            }
+            catch(OperationCanceledException){}
+            catch(Exception ex){Trace.TraceWarning($"Could not frame animation: {ex.Message}");}
+        }
+
         private void FocusModelMotionFromCurrentCamera( bool tight = false )
         {
-            GetGuideArrowFramingBounds( out var target, out var targetMinimum, out var targetMaximum );
+            var sample=mModel.CaptureMotionBounds(mAnimationTime,GuideArrowFutureFrameSeconds,GuideArrowFutureSampleCount,tight);
+            var bounds=sample(CancellationToken.None);
+            FocusModelFromBounds(bounds.center.ToOpenTK(),bounds.minimum.ToOpenTK(),bounds.maximum.ToOpenTK(),tight);
+        }
+
+        private void FocusModelFromBounds(Vector3 target,Vector3 targetMinimum,Vector3 targetMaximum,bool tight)
+        {
             if ( !IsFinite( target ) || !IsFinite( targetMinimum ) || !IsFinite( targetMaximum ) )
                 return;
 
@@ -2040,7 +2137,7 @@ namespace GFDStudio.GUI.Controls
                 tight ? 1.0f : GuideArrowFocusMargin,
                 tight ? 0.0f : 0.15f );
             var distance = tight ? fitDistance : MathF.Max( currentDistance, fitDistance );
-            var focusedCameraPosition = distance > currentDistance
+            var focusedCameraPosition = tight || distance > currentDistance
                 ? target - forward * distance
                 : currentCameraPosition;
 
@@ -2098,6 +2195,7 @@ namespace GFDStudio.GUI.Controls
 
         protected override void OnMouseUp( System.Windows.Forms.MouseEventArgs e )
         {
+            if(PreviewSurface){base.OnMouseUp(e);return;}
             if ( e.Button == MouseButtons.Left )
             {
                 if ( TryHitGuideArrow( e.Location, out var anchor ) )
@@ -2111,6 +2209,8 @@ namespace GFDStudio.GUI.Controls
 
         protected override void OnMouseDown( System.Windows.Forms.MouseEventArgs e )
         {
+            if(PreviewSurface){base.OnMouseDown(e);return;}
+            mFocusBoundsWork?.Cancel();
             mLastMouseLocation = e.Location;
             mOrbitAroundModel = false;
             if ( e.Button == MouseButtons.Left && TryGetModelOrbitPivot( e.X, e.Y, out var pivot ) )
@@ -2133,6 +2233,7 @@ namespace GFDStudio.GUI.Controls
 
         protected override void OnMouseMove( System.Windows.Forms.MouseEventArgs e )
         {
+            if(PreviewSurface){base.OnMouseMove(e);return;}
             if ( !mIsModelLoaded )
                 return;
             bool left = e.Button.HasFlag( MouseButtons.Left );
@@ -2177,6 +2278,7 @@ namespace GFDStudio.GUI.Controls
 
         protected override void OnMouseWheel( System.Windows.Forms.MouseEventArgs e )
         {
+            if(PreviewSurface){base.OnMouseWheel(e);return;}
             if ( !mIsModelLoaded )
                 return;
 
@@ -2214,3 +2316,8 @@ namespace GFDStudio.GUI.Controls
         }
     }
 }
+
+
+
+
+

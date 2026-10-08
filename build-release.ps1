@@ -2,6 +2,11 @@
 param(
     [switch]$Run,
     [switch]$BuildRetargetProbe,
+    [switch]$RetargetProbeOnly,
+    [switch]$FbxExporterOnly,
+    [switch]$RendererOnly,
+    [string]$ProbeOutputDirectory,
+    [string]$BuildOutputDirectory,
     [ValidateScript({ -not [string]::IsNullOrWhiteSpace($_) })]
     [string]$FinalDirectory = 'GFDStudio-binary'
 )
@@ -22,7 +27,8 @@ if (-not (Test-Path -LiteralPath $slideJunction)) {
     if (-not (Test-Path -LiteralPath (Join-Path $slideSource 'cpp\SlideAi.vcxproj'))) { throw 'Set SLIDE_HOME to the shared SLIDE folder before building AI blend.' }
     New-Item -ItemType Junction -Path $slideJunction -Target (Resolve-Path $slideSource).Path | Out-Null
 }
-$buildDirectory = Join-Path $workspace 'GFDStudio\bin\x64\Release\net8.0-windows\win-x64'
+$buildDirectory = if ($BuildOutputDirectory) { [System.IO.Path]::GetFullPath($BuildOutputDirectory) }
+else { Join-Path $workspace 'GFDStudio\bin\x64\Release\net8.0-windows\win-x64' }
 
 $dotnetRootCandidates = @(
     'Q:\_coding\tools\unity\editor\6000.5.7f1\Editor\Data\DotNetSdk',
@@ -146,6 +152,15 @@ function Update-BinaryDirectory {
     New-Item -ItemType Directory -Force -Path $DestinationDirectory | Out-Null
     # Generated animation jobs and caches are not release files.
     Get-ChildItem -LiteralPath $SourceDirectory | Where-Object Name -ne 'tmp' | Copy-Item -Destination $DestinationDirectory -Recurse -Force
+    $slidePack = Join-Path $DestinationDirectory 'app_data\slide\variants.json'
+    $oldSlideModel = Join-Path $DestinationDirectory 'app_data\slide\pose_inbetweening.onnx'
+    if ((Test-Path -LiteralPath $slidePack) -and (Test-Path -LiteralPath $oldSlideModel)) { Remove-Item -LiteralPath $oldSlideModel }
+    if ((Test-Path -LiteralPath $slidePack) -and ((Get-Content -LiteralPath $slidePack -Raw) -match '"custom_library"\s*:\s*"SlideAi.dll"')) {
+        foreach ($slideCount in @(8,16,32,64)) {
+            $oldKernel = Join-Path $DestinationDirectory "app_data\slide\frames$slideCount.dll"
+            if (Test-Path -LiteralPath $oldKernel) { Remove-Item -LiteralPath $oldKernel }
+        }
+    }
     return $true
 }
 
@@ -154,6 +169,43 @@ $assembly = Join-Path $binaryDirectory 'GFDStudio.dll'
 $buildApplication = Join-Path $buildDirectory 'GFDStudio.exe'
 $buildAssembly = Join-Path $buildDirectory 'GFDStudio.dll'
 $binaryDirectoryUpdated = $false
+
+if ($RendererOnly) {
+    Invoke-MSBuild @(
+        (Join-Path $workspace 'GFDLibrary.Rendering.OpenGL\GFDLibrary.Rendering.OpenGL.csproj'),
+        '/restore', '/t:Build', '/p:Configuration=Release', '/p:Platform=x64',
+        '/p:RuntimeIdentifier=win-x64', '/p:SelfContained=true',
+        "/p:OutputPath=$buildDirectory", '/p:AppendTargetFrameworkToOutputPath=false',
+        '/p:AppendRuntimeIdentifierToOutputPath=false', '/verbosity:minimal'
+    )
+    return
+}
+
+if ($FbxExporterOnly) {
+    Invoke-MSBuild @(
+        (Join-Path $workspace 'GFDLibrary.Conversion.FbxSdk\GFDLibrary.Conversion.FbxSdk.vcxproj'),
+        '/restore', '/t:Build', '/p:Configuration=Release', '/p:Platform=x64',
+        '/p:RuntimeIdentifier=win-x64', '/p:SelfContained=true',
+        '/p:PreBuildEvent=', '/p:PostBuildEvent=', '/p:DebugType=None', '/p:DebugSymbols=false',
+        "/p:FBXSDKRoot=$fbxSdkRoot", "/p:OutDir=$buildDirectory\", '/verbosity:minimal'
+    )
+    return
+}
+
+if ($RetargetProbeOnly) {
+    $probeDirectory = if ($ProbeOutputDirectory) { [IO.Path]::GetFullPath($ProbeOutputDirectory) }
+    else { Join-Path $workspace 'tmp\RetargetProbe' }
+    New-Item -ItemType Directory -Force -Path $probeDirectory | Out-Null
+    Invoke-MSBuild @(
+        (Join-Path $workspace 'tools\RetargetProbe\RetargetProbe.csproj'),
+        '/restore', '/t:Build', '/p:Configuration=Release', '/p:Platform=x64',
+        '/p:RuntimeIdentifier=win-x64', '/p:SelfContained=true',
+        '/p:PreBuildEvent=', '/p:PostBuildEvent=',
+        "/p:OutputPath=$probeDirectory", '/p:AppendTargetFrameworkToOutputPath=false',
+        '/p:AppendRuntimeIdentifierToOutputPath=false', '/verbosity:minimal'
+    )
+    return
+}
 
 $buildSucceeded = $false
 
@@ -186,6 +238,7 @@ try {
         "/p:FBXSDKRoot=$fbxSdkRoot",
         '/p:DebugType=None',
         '/p:DebugSymbols=false',
+        "/p:OutDir=$buildDirectory\",
         '/verbosity:minimal'
     )
 
@@ -202,10 +255,20 @@ try {
     }
 
     if ($BuildRetargetProbe) {
-        $probeDirectory = Join-Path $workspace 'tmp\RetargetProbe'
+        $probeDirectory = if ($ProbeOutputDirectory) { [IO.Path]::GetFullPath($ProbeOutputDirectory) }
+        else { Join-Path $workspace 'tmp\RetargetProbe' }
         New-Item -ItemType Directory -Force -Path $probeDirectory | Out-Null
         Get-ChildItem -LiteralPath $buildDirectory -File | Copy-Item -Destination $probeDirectory -Force
-        if (-not (Test-Path (Join-Path $probeDirectory 'app_data'))) { New-Item -ItemType Junction -Path (Join-Path $probeDirectory 'app_data') -Target (Join-Path $buildDirectory 'app_data') | Out-Null }
+        $probeData = Join-Path $probeDirectory 'app_data'
+        $buildData = Join-Path $buildDirectory 'app_data'
+        if (Test-Path -LiteralPath $probeData) {
+            $probeDataItem = Get-Item -LiteralPath $probeData
+            if (($probeDataItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+                ([IO.Path]::GetFullPath($probeDataItem.Target[0]) -ne [IO.Path]::GetFullPath($buildData))) {
+                Remove-Item -LiteralPath $probeData -Force
+            }
+        }
+        if (-not (Test-Path -LiteralPath $probeData)) { New-Item -ItemType Junction -Path $probeData -Target $buildData | Out-Null }
         elseif (-not ((Get-Item (Join-Path $probeDirectory 'app_data')).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Copy-Item -Path (Join-Path $buildDirectory 'app_data\*') -Destination (Join-Path $probeDirectory 'app_data') -Recurse -Force }
         Invoke-MSBuild @(
             (Join-Path $workspace 'tools\RetargetProbe\RetargetProbe.csproj'),
@@ -222,3 +285,5 @@ finally {
         Write-Host "[release] Started GFD Studio (PID $($process.Id))."
     }
 }
+
+
