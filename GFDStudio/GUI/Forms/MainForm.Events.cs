@@ -71,8 +71,9 @@ namespace GFDStudio.GUI.Forms
             if ( !File.Exists( path ) )
                 return;
 
-            if (GetDroppedGap(e.Data) is string gap)
-                await LoadDroppedShowroomGapAsync(gap);
+            var gaps = GetDroppedGaps(e.Data);
+            if (gaps.Length > 0)
+                await LoadDroppedShowroomGapsAsync(gaps);
             else
                 OpenFile( path );
         }

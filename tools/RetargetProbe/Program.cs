@@ -18,6 +18,7 @@ var stdout = Console.Out;
 try
 {
 Console.SetOut(TextWriter.Null);
+if (args.Length == 2 && args[0] == "--multi-drop-audit") { Environment.ExitCode = MultiDropAudit.Run(args[1]); return; }
 if (args.Length == 2 && args[0] == "--shift-pair-audit") { Environment.ExitCode = ShiftPairAudit.Run(args[1]); return; }
 if (args.Length == 2 && args[0] == "--crew-audit") { Environment.ExitCode = CrewAudit.Run(args[1]); return; }
 if (args.Length == 2 && args[0] == "--ai-knee-audit") { Environment.ExitCode = AiKneeAudit.Run(args[1]); return; }

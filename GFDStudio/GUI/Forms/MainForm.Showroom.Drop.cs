@@ -52,7 +52,7 @@ public partial class MainForm
         RefreshCharacterBlendAnimationList();
     }
 
-    private async Task RegisterDroppedAnimationPackAsync(string file, CancellationToken token)
+    private async Task RegisterDroppedAnimationPackAsync(string file, CancellationToken token, bool refresh = true)
     {
         string fullName = Path.GetFullPath(file);
         if (!mDroppedAnimationPacks.ContainsKey(fullName))
@@ -83,8 +83,11 @@ public partial class MainForm
             if (IsDisposed) return;
             mDroppedAnimationPacks.TryAdd(fullName, entries);
         }
-        RefreshCharacterAnimationList();
-        RefreshCharacterBlendAnimationList();
+        if (refresh)
+        {
+            RefreshCharacterAnimationList();
+            RefreshCharacterBlendAnimationList();
+        }
     }
 
     private void SelectDroppedAnimationPack(string file)
@@ -118,11 +121,12 @@ public partial class MainForm
         foreach (Control child in control.Controls) EnableShowroomGapDrop(child);
     }
 
-    private static string GetDroppedGap(IDataObject data)
+    private static string[] GetDroppedGaps(IDataObject data)
         => data?.GetData(DataFormats.FileDrop) is string[] files
-            ? files.FirstOrDefault(file => File.Exists(file) &&
+            ? files.Where(file => File.Exists(file) &&
                 string.Equals(Path.GetExtension(file), ".GAP", StringComparison.OrdinalIgnoreCase))
-            : null;
+                .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : Array.Empty<string>();
 
     private void HandleShowroomGapDragEnter(object sender, DragEventArgs e)
     {
@@ -133,9 +137,79 @@ public partial class MainForm
 
     private async void HandleShowroomGapDrop(object sender, DragEventArgs e)
     {
-        var file = GetDroppedGap(e.Data);
-        if (file != null) await LoadDroppedShowroomGapAsync(file);
+        var files = GetDroppedGaps(e.Data);
+        if (files.Length > 0) await LoadDroppedShowroomGapsAsync(files);
         else HandleDragDrop(sender, e);
+    }
+
+    private async Task LoadDroppedShowroomGapsAsync(string[] files)
+    {
+        if (files.Length == 0) return;
+        if (files.Length == 1) { await LoadDroppedShowroomGapAsync(files[0]); return; }
+
+        var (generation, token) = BeginCharacterBrowserAnimationLoad();
+        HidePairedShowroom();
+        var firstClips = new List<CharacterAnimationEntry>();
+        var failures = new List<string>();
+        SetCharacterBrowserStatus($"Adding {files.Length} dropped GAP files…");
+        try
+        {
+            foreach (var file in files)
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    await RegisterDroppedAnimationPackAsync(file, token, refresh: false);
+                    var entry = mDroppedAnimationPacks[Path.GetFullPath(file)]
+                        .FirstOrDefault(item => item.Kind == CharacterAnimationListKind.Animation);
+                    if (entry != null) firstClips.Add(entry);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    failures.Add(Path.GetFileName(file));
+                    Logger.Debug($"Could not add dropped GAP {file}: {ex}");
+                }
+            }
+            if (IsDisposed || !IsCurrentCharacterBrowserAnimationLoad(generation, token)) return;
+            mCharacterBrowserRestoringSelection = true;
+            try
+            {
+                mCharacterAnimationListBox.ClearSelected();
+                mAnimationPickOrder.Clear();
+                // Show the files just dropped without pinning them across later filters.
+                mCharacterAnimationFilterTextBox.Clear();
+                RefreshCharacterAnimationList();
+                RefreshCharacterBlendAnimationList();
+                foreach (var entry in firstClips.Take(2))
+                {
+                    int index = mCharacterAnimationListBox.Items.IndexOf(entry);
+                    if (index < 0) continue;
+                    mCharacterAnimationListBox.SetSelected(index, true);
+                    mAnimationPickOrder.Add(GetCorrectedAnimationMatchClipId(entry));
+                }
+                if (firstClips.Count > 0)
+                    mCharacterAnimationListBox.TopIndex = Math.Max(0, mCharacterAnimationListBox.Items.IndexOf(firstClips[0]));
+            }
+            finally { mCharacterBrowserRestoringSelection = false; }
+
+            var model = GetAnimationMatchingTargetModelPack();
+            if (model?.Model == null)
+                SetCharacterBrowserStatus("Dropped files added. Choose a character to preview them.");
+            else if (firstClips.Count >= 2)
+            {
+                var pair = firstClips.Take(2).ToArray();
+                await LoadPairedShowroomAsync(pair, model, string.Join("|", pair.Select(GetCorrectedAnimationMatchClipId)));
+            }
+            else if (firstClips.Count == 1)
+                await LoadDroppedShowroomGapAsync(firstClips[0].PackPath);
+            else
+                SetCharacterBrowserStatus("Dropped files contain no playable normal animations.");
+
+            if (failures.Count > 0 && !IsDisposed)
+                SetCharacterBrowserStatus("Could not add: " + string.Join(", ", failures));
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task LoadDroppedShowroomGapAsync(string file)
