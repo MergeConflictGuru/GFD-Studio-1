@@ -64,6 +64,7 @@ public sealed class RangeTimelineControl : Control
     public int TransitionFrame { get => _transitionFrame; set { _transitionFrame = value; Invalidate(); } }
     public int BlendEndFrame { get => _blendEndFrame; set { _blendEndFrame = value; Invalidate(); } }
     public event EventHandler SelectionChanged;
+    public event EventHandler UserSelectionChanged;
 
     public void ClearSelection()
     {
@@ -96,6 +97,7 @@ public sealed class RangeTimelineControl : Control
         _selectionStart = _selectionEnd = _dragStart;
         Capture = true;
         Invalidate();
+        UserSelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -104,6 +106,7 @@ public sealed class RangeTimelineControl : Control
         if (!Capture || _dragStart < 0) return;
         _selectionEnd = XToFrame(e.X);
         Invalidate();
+        UserSelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -115,12 +118,17 @@ public sealed class RangeTimelineControl : Control
         // A click selects one explicit frame. Right click clears and restores implicit last-frame mode.
         Invalidate();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
+        UserSelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);
-        if (e.Button == MouseButtons.Right) ClearSelection();
+        if (e.Button == MouseButtons.Right)
+        {
+            ClearSelection();
+            UserSelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)

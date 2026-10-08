@@ -22,6 +22,7 @@ internal sealed class AnimationViewPane : UserControl
     private bool mUpdatingSeek;
     private const float FramesPerSecond = 30f;
     public event EventHandler RangeChanged;
+    public event EventHandler<double> UserSeeked;
 
     public AnimationViewPane()
     {
@@ -65,10 +66,12 @@ internal sealed class AnimationViewPane : UserControl
             Viewer.AnimationTime = mSeek.Value / 1000d;
             Viewer.Invalidate();
         };
+        mSeek.Scroll += (_, _) => UserSeeked?.Invoke(this, mSeek.Value / 1000d);
         mSeek.MouseDown += (_, e) =>
         {
             if (e.Button != MouseButtons.Left) return;
             mSeek.Value = (int)Math.Round(Math.Clamp(e.X / (double)Math.Max(1, mSeek.Width - 1), 0, 1) * mSeek.Maximum);
+            UserSeeked?.Invoke(this, mSeek.Value / 1000d);
         };
         Timeline.SelectionChanged += (_, _) =>
         {
@@ -86,6 +89,12 @@ internal sealed class AnimationViewPane : UserControl
         mCaption.Text = "2 · " + caption;
         Timeline.FrameCount = frameCount;
         Timeline.TransitionFrame = -1;
+    }
+
+    public void SeekSeconds(double seconds)
+    {
+        Viewer.AnimationTime = Math.Clamp(seconds, 0, mSeek.Maximum / 1000d);
+        Viewer.Invalidate();
     }
 
     public void SeekFrame(int frame) { Viewer.AnimationTime = frame / FramesPerSecond; Viewer.Invalidate(); }

@@ -213,6 +213,23 @@ namespace GFDStudio.GUI.Controls
         public event EventHandler<Animation> AnimationLoaded;
         public event EventHandler<AnimationPlaybackState> AnimationPlaybackStateChanged;
         public event EventHandler<double> AnimationTimeChanged;
+        internal event EventHandler<bool> MouseCameraChanged;
+
+        internal void CopyCameraFrom(ModelViewControl source)
+        {
+            if (mCamera == null || source.mCamera == null) return;
+            mFocusBoundsWork?.Cancel();
+            mOrbitAroundModel = false;
+            mCamera.Translation = source.mCamera.Translation;
+            mCamera.Offset = source.mCamera.Offset;
+            mCamera.ModelTranslation = source.mCamera.ModelTranslation;
+            mCamera.ModelRotation = source.mCamera.ModelRotation;
+            mCamera.FieldOfView = source.mCamera.FieldOfView;
+            Invalidate();
+        }
+
+        private void NotifyMouseCameraChanged() =>
+            MouseCameraChanged?.Invoke(this, (ModifierKeys & Keys.Shift) != 0);
 
         private ModelViewControl() : this( false )
         {
@@ -1634,14 +1651,14 @@ namespace GFDStudio.GUI.Controls
                    ( deltaY * deltaY ) / ( radiusY * radiusY ) <= 1.0f;
         }
 
-        internal void FocusOnGuideArrow( Vector3 anchor, bool tight = false )
+        internal void FocusOnGuideArrow( Vector3 anchor, bool tight = false, bool? mouseShift = null )
         {
             // The hit anchor identifies which arrow was clicked, but framing itself is
             // shared with double-click and thumbnail rendering. Keep the current camera
             // position, then look from it at the sampled motion center.
             _ = anchor;
             if(mThumbnailMode)FocusModelMotionFromCurrentCamera(tight);
-            else FocusBoundsTask=FocusModelMotionAsync(tight);
+            else FocusBoundsTask=FocusModelMotionAsync(tight, mouseShift);
         }
 
         private float CalculateGuideArrowFitDistance( Vector3 targetCenter, Vector3 targetMinimum,
@@ -2069,7 +2086,7 @@ namespace GFDStudio.GUI.Controls
             FocusModelMotionFromCurrentCamera();
         }
 
-        private async Task FocusModelMotionAsync(bool tight)
+        private async Task FocusModelMotionAsync(bool tight, bool? mouseShift = null)
         {
             if(mModel==null)return;
             mFocusBoundsWork?.Cancel();mFocusBoundsWork?.Dispose();
@@ -2082,6 +2099,7 @@ namespace GFDStudio.GUI.Controls
                 var bounds=await Task.Run(()=>sample(token),token);
                 if(IsDisposed||work.IsCancellationRequested||!ReferenceEquals(model,mModel))return;
                 FocusModelFromBounds(bounds.center.ToOpenTK(),bounds.minimum.ToOpenTK(),bounds.maximum.ToOpenTK(),tight);
+                if (mouseShift is bool shift) MouseCameraChanged?.Invoke(this, shift);
             }
             catch(OperationCanceledException){}
             catch(Exception ex){Trace.TraceWarning($"Could not frame animation: {ex.Message}");}
@@ -2199,7 +2217,7 @@ namespace GFDStudio.GUI.Controls
             if ( e.Button == MouseButtons.Left )
             {
                 if ( TryHitGuideArrow( e.Location, out var anchor ) )
-                    FocusOnGuideArrow( anchor );
+                    FocusOnGuideArrow( anchor, mouseShift: (ModifierKeys & Keys.Shift) != 0 );
                 else
                     Raypick( e.X, e.Y );
 
@@ -2223,6 +2241,7 @@ namespace GFDStudio.GUI.Controls
             if ( e.Button == MouseButtons.Left && TryGetModelOrbitPivot( e.X, e.Y, out _ ) )
             {
                 FocusModelFromDoubleClick();
+                NotifyMouseCameraChanged();
                 mOrbitAroundModel = false;
                 Invalidate();
                 return;
@@ -2270,6 +2289,7 @@ namespace GFDStudio.GUI.Controls
                     translation.Z -= locationDelta.Y * multiplier;
                     mCamera.ModelTranslation = translation;
                 }
+                NotifyMouseCameraChanged();
                 Invalidate();
             }
 
@@ -2287,6 +2307,7 @@ namespace GFDStudio.GUI.Controls
             var translation = mCamera.ModelTranslation;
             translation.Z += (float)e.Delta * multiplier;
             mCamera.ModelTranslation = translation;
+            NotifyMouseCameraChanged();
 
             Invalidate();
         }

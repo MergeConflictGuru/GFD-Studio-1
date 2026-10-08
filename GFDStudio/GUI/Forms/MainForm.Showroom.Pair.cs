@@ -204,6 +204,12 @@ public partial class MainForm
         mPairFirstPane.Controls.Add(mPairFirstCaption);
         mPairSecondPane = new AnimationViewPane { Margin = new Padding(3, 0, 0, 0) };
         mPairSecondPane.RangeChanged += (_, _) => InvalidatePairBlend();
+        mPairSecondPane.UserSeeked += (_, seconds) => SyncPairSeek(mPairSecondPane.Viewer, seconds);
+        mAnimationTrackBar.Scroll += (_, _) => SyncPairSeek(ModelViewControl.Instance, mAnimationTrackBar.Value / 1000d);
+        mAnimationMatchTimeline.UserSelectionChanged += (_, _) => SyncPairSelection(true);
+        mPairSecondPane.Timeline.UserSelectionChanged += (_, _) => SyncPairSelection(false);
+        ModelViewControl.Instance.MouseCameraChanged += (sender, shift) => SyncPairCamera((ModelViewControl)sender, shift);
+        mPairSecondPane.Viewer.MouseCameraChanged += (sender, shift) => SyncPairCamera((ModelViewControl)sender, shift);
         mPairedShowroom.Controls.Add(mPairFirstPane, 0, 0);
         mPairedShowroom.Controls.Add(mPairSecondPane, 1, 0);
         var actions = new TableLayoutPanel
@@ -222,6 +228,35 @@ public partial class MainForm
         mPairedShowroom.SetColumnSpan(actions, 2);
         splitContainer_Main.Panel1.Controls.Add(mPairedShowroom);
         EnableShowroomGapDrop(mPairedShowroom);
+    }
+
+    private void SyncPairSeek(ModelViewControl source, double seconds)
+    {
+        if (!IsPairedShowroom || (ModifierKeys & Keys.Shift) == 0) return;
+        var other = ReferenceEquals(source, ModelViewControl.Instance) ? mPairSecondPane.Viewer : ModelViewControl.Instance;
+        if (!other.IsAnimationLoaded) return;
+        if (ReferenceEquals(other, mPairSecondPane.Viewer))
+        {
+            mPairSecondPane.SeekSeconds(seconds);
+            return;
+        }
+        other.AnimationTime = Math.Clamp(seconds, 0, mAnimationTrackBar.Maximum / 1000d);
+        other.Invalidate();
+    }
+
+    private void SyncPairSelection(bool fromFirst)
+    {
+        if (!IsPairedShowroom || (ModifierKeys & Keys.Shift) == 0) return;
+        var source = fromFirst ? mAnimationMatchTimeline : mPairSecondPane.Timeline;
+        var other = fromFirst ? mPairSecondPane.Timeline : mAnimationMatchTimeline;
+        other.SetSelection(source.Selection);
+    }
+
+    private void SyncPairCamera(ModelViewControl source, bool shift)
+    {
+        if (!IsPairedShowroom || !shift) return;
+        var other = ReferenceEquals(source, ModelViewControl.Instance) ? mPairSecondPane.Viewer : ModelViewControl.Instance;
+        other.CopyCameraFrom(source);
     }
 
     private void ShowPairedShowroom()

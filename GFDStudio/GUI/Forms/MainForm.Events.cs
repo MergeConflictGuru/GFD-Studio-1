@@ -857,6 +857,7 @@ namespace GFDStudio.GUI.Forms
             // A click on the channel should jump directly to that point in the animation.
             mIgnoreNextTrackBarChange = false;
             trackBar.Value = targetValue;
+            SyncPairSeek(ModelViewControl.Instance, targetTime);
         }
 
         private void HandleAnimationTreeViewAfterSelect( object sender, TreeViewEventArgs e )
