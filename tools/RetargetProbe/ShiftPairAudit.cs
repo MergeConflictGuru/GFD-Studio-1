@@ -42,6 +42,8 @@ internal static class ShiftPairAudit
         var mainSeek=(TrackBar)Field(form,"mAnimationTrackBar");var secondSeek=(TrackBar)Field(pane,"mSeek");
         var keyboard=new byte[256];GetKeyboardState(keyboard);
         var checks=new List<string>();
+        if (!Equals(((Control)a).Font, ((Control)b).Font)) throw new Exception("Split timeline fonts differ");
+        checks.Add("Split timeline fonts match");
         void Shift(bool on){Application.DoEvents();var keys=(byte[])keyboard.Clone();keys[16]=keys[160]=keys[161]=(byte)(on?128:0);for(int attempt=0;attempt<5;attempt++){if(!SetKeyboardState(keys))throw new Exception("SetKeyboardState failed");if(((Control.ModifierKeys&Keys.Shift)!=0)==on)return;}throw new Exception("Thread Shift modifier was not set");}
         void Seek(TrackBar bar,int milliseconds){bar.Value=milliseconds;typeof(TrackBar).GetMethod("OnScroll",flags)!.Invoke(bar,new object[]{EventArgs.Empty});}
         void EqualTime(double seconds){if(Math.Abs((double)Get(first,"AnimationTime")!-seconds)>.001 || Math.Abs((double)Get(second,"AnimationTime")!-seconds)>.001)throw new Exception("Seek times differ");}

@@ -203,6 +203,8 @@ public partial class MainForm
         };
         mPairFirstPane.Controls.Add(mPairFirstCaption);
         mPairSecondPane = new AnimationViewPane { Margin = new Padding(3, 0, 0, 0) };
+        mPairSecondPane.Timeline.Font = mAnimationMatchTimeline.Font;
+        mAnimationMatchTimeline.FontChanged += (_, _) => mPairSecondPane.Timeline.Font = mAnimationMatchTimeline.Font;
         mPairSecondPane.RangeChanged += (_, _) => InvalidatePairBlend();
         mPairSecondPane.UserSeeked += (_, seconds) => SyncPairSeek(mPairSecondPane.Viewer, seconds);
         mAnimationTrackBar.Scroll += (_, _) => SyncPairSeek(ModelViewControl.Instance, mAnimationTrackBar.Value / 1000d);
